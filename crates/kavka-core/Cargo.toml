@@ -1,0 +1,23 @@
+[package]
+name = "kavka-core"
+description = "Kavka core: connection management, admin ops, consume/search engine, serdes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Enabled in Phase 0 once CMake + MSVC Build Tools are available (see docs/ARCHITECTURE.md D2).
+# rdkafka is compiled with cmake-build + vendored OpenSSL for reproducible cross-platform builds.
+kafka = ["dep:rdkafka"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+keyring = "3"
+
+rdkafka = { version = "0.37", features = ["cmake-build", "ssl-vendored", "gssapi"], optional = true }

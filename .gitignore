@@ -1,0 +1,23 @@
+# Rust (Cargo.lock is intentionally committed)
+target/
+
+# Node
+node_modules/
+dist/
+
+# Tauri
+apps/desktop/src-tauri/gen/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# Env / secrets — never commit
+.env
+.env.*
+*.pem
+*.p12
+*.jks
