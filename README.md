@@ -25,7 +25,7 @@ server/                 Team server (Phase 6 — placeholder)
 
 Prerequisites:
 
-1. **Rust** (not yet installed on this machine): `winget install Rustlang.Rustup` then `rustup default stable`
+1. **Rust** stable via rustup (`winget install Rustlang.Rustup`)
 2. **Node.js ≥ 20** (installed) and npm
 3. **CMake + Visual Studio Build Tools** (required later when the `kafka` feature flag is enabled — rust-rdkafka builds librdkafka via cmake)
 4. Tauri 2 prerequisites: WebView2 (preinstalled on Win 11); on macOS, Xcode CLT
@@ -38,7 +38,7 @@ npm run tauri dev     # runs the desktop app with hot reload
 
 The `kavka-core` crate currently compiles without librdkafka (`kafka` feature off by default) so the scaffold builds on a fresh toolchain. Phase 0 of the roadmap flips the feature on.
 
-App icons are not yet generated — run `npm run tauri icon <path-to-1024px-png>` once a logo exists.
+App icons are generated from `assets/icon-source.png` (a placeholder "K" mark) — when a real logo exists, replace that file and re-run `npm run tauri icon assets/icon-source.png` from `apps/desktop/`.
 
 ## Status
 
