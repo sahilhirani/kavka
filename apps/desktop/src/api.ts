@@ -68,6 +68,15 @@ export interface TopicInfo {
   internal: boolean;
 }
 
+/** What to do when an imported profile's id already exists in the store. */
+export type ImportStrategy = "skip" | "replace";
+
+export interface ImportReport {
+  imported: number;
+  skipped: number;
+  replaced: number;
+}
+
 // ---------------------------------------------------------------------------
 // UI-level connection state (not part of the IPC contract)
 // ---------------------------------------------------------------------------
@@ -94,6 +103,18 @@ export function profilesSave(profile: ConnectionProfile): Promise<void> {
 
 export function profilesDelete(profileId: string): Promise<void> {
   return invoke<void>("profiles_delete", { profileId });
+}
+
+/** Returns the export envelope as JSON. Secret-free: profiles carry refs. */
+export function profilesExport(): Promise<string> {
+  return invoke<string>("profiles_export");
+}
+
+export function profilesImport(
+  json: string,
+  strategy: ImportStrategy,
+): Promise<ImportReport> {
+  return invoke<ImportReport>("profiles_import", { json, strategy });
 }
 
 export function secretSet(entry: string, value: string): Promise<void> {

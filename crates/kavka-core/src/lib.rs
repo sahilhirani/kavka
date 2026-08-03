@@ -19,7 +19,7 @@ pub mod serdes;
 /// [`profiles::SecretRef`]s.
 pub mod secrets {
     use crate::profiles::SecretRef;
-    use crate::Result;
+    use crate::{Error, Result};
 
     const SERVICE: &str = "kavka";
 
@@ -28,8 +28,21 @@ pub mod secrets {
         Ok(())
     }
 
+    /// A missing entry is the normal state for an imported profile (exports
+    /// carry refs, never values), so it gets an actionable message rather than
+    /// a raw keychain error. Kind-neutral wording: the same call resolves
+    /// passwords, OIDC client secrets and TLS private keys, and "no password
+    /// stored" reads as a bug when the profile has no password field at all.
     pub fn resolve(secret: &SecretRef) -> Result<String> {
-        Ok(keyring::Entry::new(SERVICE, &secret.entry)?.get_password()?)
+        match keyring::Entry::new(SERVICE, &secret.entry)?.get_password() {
+            Ok(value) => Ok(value),
+            Err(keyring::Error::NoEntry) => Err(Error::Other(
+                "no stored secret for this connection on this machine — edit the profile to \
+                 enter it again"
+                    .into(),
+            )),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Idempotent: deleting a missing entry is not an error.

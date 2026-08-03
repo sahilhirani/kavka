@@ -8,22 +8,61 @@ repository.workspace = true
 
 [features]
 default = []
-# Base Kafka support (PLAINTEXT + SASL_PLAINTEXT). librdkafka is compiled via
-# cmake-build (see docs/ARCHITECTURE.md D2) — requires CMake + MSVC Build Tools.
-kafka = ["dep:rdkafka"]
+# Base Kafka support (PLAINTEXT + SASL_PLAINTEXT + OAUTHBEARER/OIDC).
+# librdkafka is compiled via cmake-build (see docs/ARCHITECTURE.md D2) —
+# requires CMake + MSVC Build Tools, and nothing more. Deliberately free of the
+# AWS SDK: `aws-config` drags in `aws-lc-sys`, whose build needs NASM, and this
+# tier is the one tooling and CI use on a bare toolchain.
+kafka = ["dep:rdkafka", "dep:ureq"]
+# AWS MSK IAM tokens (SigV4-presigned `kafka-cluster:Connect` URLs). Split out
+# of `kafka` because of the NASM/`aws-lc-sys` build requirement above. Without
+# it, `AuthConfig::AwsMskIam` refuses to connect instead of failing to build.
+# `base64`/`url` ride along: src/auth/msk.rs is their only user.
+msk-iam = [
+    "kafka",
+    "dep:aws-config",
+    "dep:aws-credential-types",
+    "dep:aws-sigv4",
+    "dep:aws-types",
+    "dep:base64",
+    "dep:url",
+]
 # TLS/SASL_SSL: vendored OpenSSL build. On Windows this additionally requires
-# Strawberry Perl + NASM. Kerberos/GSSAPI is added per-platform later (SSPI is
-# built into librdkafka's Windows cmake build; cyrus-sasl on unix via CI).
-kafka-ssl = ["kafka", "rdkafka/ssl-vendored"]
+# Strawberry Perl + NASM — so MSK IAM is folded in here (MSK is TLS-only, and
+# this is the tier the desktop app ships). Kerberos/GSSAPI is added per-platform
+# later (SSPI is built into librdkafka's Windows cmake build; cyrus-sasl on unix
+# via CI).
+kafka-ssl = ["kafka", "rdkafka/ssl-vendored", "msk-iam"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `net` + `time` on top of the workspace set: the AWS credential chain (SSO,
+# STS, IMDS) is async and needs tokio's IO and timer drivers.
+tokio = { workspace = true, features = ["net"] }
 tracing.workspace = true
 # One native backend per target OS — without these keyring silently uses an
 # in-memory mock store.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"], optional = true }
+
+# --- OAUTHBEARER token providers (src/auth) ---------------------------------
+# ureq + rustls, deliberately NOT reqwest/native-tls: the OIDC token fetch is
+# one blocking POST on librdkafka's poll thread, so an async client would buy
+# nothing, and rustls keeps this off the vendored-OpenSSL link that
+# `kafka-ssl` sets up for librdkafka. `platform-verifier` adds
+# rustls-platform-verifier so the OS trust store can be used instead of the
+# bundled webpki roots — enterprise IdPs are routinely behind an internal CA
+# (see src/auth/oidc.rs, which must also select it at request time).
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
+# `msk-iam` only. MSK IAM is hand-signed rather than via
+# `aws-msk-iam-sasl-signer`; see the dependency note at the top of
+# src/auth/msk.rs.
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-credential-types = { version = "1", optional = true }
+aws-sigv4 = { version = "1", optional = true }
+aws-types = { version = "1", optional = true }
+base64 = { version = "0.22", optional = true }
+url = { version = "2", optional = true }

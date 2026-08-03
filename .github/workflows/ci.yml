@@ -39,8 +39,10 @@ jobs:
       - name: Start local Kafka (KRaft)
         run: docker compose -f dev/docker-compose.yml up -d --wait
 
+      # kafka-ssl is what the desktop app ships; it also unlocks the
+      # ssl-asserting unit tests (vendored OpenSSL needs the runner's perl).
       - name: Unit + integration tests
-        run: cargo test -p kavka-core --features kafka
+        run: cargo test -p kavka-core --features kafka-ssl
         env:
           KAVKA_IT: "1"
 

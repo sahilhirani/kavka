@@ -5,7 +5,9 @@
 
 use kavka_core::admin::TopicInfo;
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
-use kavka_core::profiles::{ConnectionProfile, ProfileStore};
+use kavka_core::profiles::{
+    export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State};
@@ -57,6 +59,27 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
         // delete.
         let _ = kavka_core::secrets::delete(&format!("{profile_id}/password"));
         Ok(())
+    })
+    .await
+}
+
+/// Secret-free by construction — profiles hold keychain refs, not values.
+#[tauri::command]
+async fn profiles_export(state: State<'_, AppState>) -> CmdResult<String> {
+    let store = state.store.clone();
+    blocking(move || Ok(export_json(&store.list()?))).await
+}
+
+#[tauri::command]
+async fn profiles_import(
+    state: State<'_, AppState>,
+    json: String,
+    strategy: String,
+) -> CmdResult<ImportReport> {
+    let store = state.store.clone();
+    blocking(move || {
+        let strategy: ImportStrategy = strategy.parse()?;
+        store.import(import_json(&json)?, strategy)
     })
     .await
 }
@@ -137,6 +160,8 @@ pub fn run() {
             profiles_list,
             profiles_save,
             profiles_delete,
+            profiles_export,
+            profiles_import,
             secret_set,
             secret_delete,
             cluster_connect,
