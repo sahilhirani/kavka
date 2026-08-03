@@ -2,8 +2,9 @@
 #   docker compose -f dev/docker-compose.yml up -d --wait
 #   docker compose -f dev/docker-compose.yml down -v
 #
-# Brokers on localhost:9092. kafka-init creates the dev topics and seeds
-# a few JSON messages so the app has something to browse on first connect.
+# Brokers on localhost:9092. kafka-init creates the dev topics, seeds
+# a few JSON messages so the app has something to browse on first connect, and
+# turns on the share-group feature (see the comment in its command block).
 #
 # The broker runs StandardAuthorizer with User:ANONYMOUS as a superuser, so the
 # ACL APIs are reachable while nothing is actually denied — see the environment
@@ -81,6 +82,30 @@ services:
           echo "orders already seeded ($$SEEDED messages), skipping"
         fi
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$BS --list
+        # Share groups (KIP-932) are gated on a KRaft FEATURE, not on a broker
+        # config: `share.version` is finalized at 0 on a fresh 4.1 cluster, and
+        # a broker in that state still ADVERTISES ShareGroupDescribe (77) and
+        # DescribeShareGroupOffsets (90) in its ApiVersions table — it just
+        # answers UNSUPPORTED_VERSION to both, which is why Kavka reads the
+        # feature level rather than the version table (see src/protocol/share.rs).
+        # There is no KAFKA_* environment variable for it: the docker image
+        # formats storage before this file gets a say, so it is upgraded here.
+        #
+        # LAST, deliberately. `set -e` means anything that fails above stops the
+        # rest, and the dev topics are what every other integration test needs —
+        # so the one line that exists for the newest feature cannot be the reason
+        # the seeded cluster never appears.
+        #
+        # Idempotent: re-running it on a cluster already at 1 prints the same
+        # line and exits 0, so `up` on an existing volume is a no-op.
+        #
+        # It changes NOTHING else about the cluster. Enabling the feature creates
+        # no topics and starts no coordinator work — __share_group_state is
+        # created on demand by the first share group, and nothing here can create
+        # one, because librdkafka has no share consumer (see
+        # tests/share_local.rs). Verified by running the whole integration suite
+        # with the feature off and again with it on.
+        /opt/kafka/bin/kafka-features.sh --bootstrap-server $$BS upgrade --feature share.version=1
 
 volumes:
   kafka-data:

@@ -380,12 +380,27 @@ impl<'a> Decoder<'a> {
     /// of KIP-482 tagged fields, and a client that errors on a tag it has never
     /// heard of breaks the moment the cluster is upgraded.
     pub(crate) fn tagged_fields(&mut self) -> Result<()> {
+        self.tagged_fields_visit(|_tag, _payload| {})
+    }
+
+    /// The same walk, with each tag's payload handed to `visit`.
+    ///
+    /// One implementation rather than two, deliberately: the skipping form is
+    /// this one with an empty visitor, so a buffer that walks correctly for the
+    /// caller that reads a tag walks identically for the ninety-nine that do
+    /// not. The payload arrives as bytes because a tagged field's contents are
+    /// a whole encoded value whose type only its reader knows — see
+    /// [`super::conn`], whose only tag is ApiVersions' finalized-feature list.
+    pub(crate) fn tagged_fields_visit(
+        &mut self,
+        mut visit: impl FnMut(u32, &'a [u8]),
+    ) -> Result<()> {
         let count = self.uvarint()?;
         for _ in 0..count {
-            let _tag = self.uvarint()?;
+            let tag = self.uvarint()?;
             let size = self.uvarint()?;
             let size = self.bounded(size as usize, "tagged field")?;
-            self.take(size)?;
+            visit(tag, self.take(size)?);
         }
         Ok(())
     }
@@ -608,6 +623,27 @@ mod tests {
         dec.tagged_fields().expect("skip");
         assert_eq!(dec.remaining(), 1);
         assert_eq!(dec.take(1).unwrap(), [0x42]);
+    }
+
+    /// The reading form of the same walk: a caller that wants ONE tag gets its
+    /// bytes and the rest are still stepped over correctly.
+    #[test]
+    fn a_visited_tagged_field_buffer_hands_back_the_tag_it_was_asked_for() {
+        let frame = [
+            0x02, // two tagged fields
+            0x09, 0x03, 0xaa, 0xbb, 0xcc, // tag 9, len 3
+            0xa8, 0x02, 0x01, 0xdd, // tag 296, len 1
+            0x42, // the field after the buffer
+        ];
+        let mut seen = Vec::new();
+        let mut dec = Decoder::new(&frame);
+        dec.tagged_fields_visit(|tag, payload| seen.push((tag, payload.to_vec())))
+            .expect("walk");
+        assert_eq!(
+            seen,
+            vec![(9u32, vec![0xaa, 0xbb, 0xcc]), (296, vec![0xdd])]
+        );
+        assert_eq!(dec.remaining(), 1, "the walk must end where skipping does");
     }
 
     #[test]

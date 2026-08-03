@@ -74,6 +74,26 @@ export interface ConnectClusterConfig {
   password: SecretRef | null;
 }
 
+/**
+ * Where Kavka scrapes broker metrics for this cluster (Phase 4).
+ *
+ * Kafka's brokers do not serve their own metrics over the Kafka protocol —
+ * they publish JMX, and everyone puts a Prometheus exporter in front of it. So
+ * this is a plain HTTP address, independent of the brokers, of the registry and
+ * of Connect: a cluster can want mTLS on 9093 and answer metrics on an
+ * unauthenticated 7071.
+ *
+ * The password is a keychain reference like every other secret: never a value.
+ * Its entry name is `{profileId}/metrics_password` — see ProfileEditor, which
+ * is the only thing that mints one, and `kavka_core::secrets::SECRET_SUFFIXES`,
+ * which is what purges it.
+ */
+export interface MetricsEndpointConfig {
+  url: string;
+  username: string | null;
+  password: SecretRef | null;
+}
+
 export interface ConnectionProfile {
   id: string;
   name: string;
@@ -88,6 +108,27 @@ export interface ConnectionProfile {
    * alone, and every reader treats missing and empty as the same thing.
    */
   connect_clusters?: ConnectClusterConfig[];
+  /**
+   * Absent on every profile written before Phase 4 — serde-defaulted to None
+   * on the Rust side, so `?` here says the same thing the struct does. Null and
+   * missing both mean "this cluster has no metrics endpoint", and every reader
+   * treats them identically.
+   */
+  metrics_endpoint?: MetricsEndpointConfig | null;
+  /**
+   * How often the lag sampler takes a reading while this connection is up, in
+   * milliseconds. Absent means "the core's default" (SAMPLER_DEFAULT_MS), which
+   * is why this is `?` and not a number with a default baked in here: two
+   * defaults in two languages drift, and the one that matters is the sampler's.
+   *
+   * CONTRACT FRICTION — flagged, not resolved. The Phase 4 IPC contract names
+   * exactly one new profile field (`metrics_endpoint`) and gives the sampler no
+   * command of its own, but `sampler_status` reports an `interval_ms` the user
+   * has to be able to change somewhere. The profile is the only place that
+   * survives a restart, so the interval lives here; the core has to grow the
+   * field with a serde default, or every profile on disk fails to parse.
+   */
+  sampler_interval_ms?: number | null;
 }
 
 export interface BrokerInfo {
@@ -1470,4 +1511,501 @@ export function quotasAlter(
   ops: QuotaOp[],
 ): Promise<void> {
   return invoke<void>("quotas_alter", { profileId, entity, ops });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — lag history, broker metrics, alerts, share groups, Streams
+//
+// Same contract shape as every phase before it: snake_case struct fields, enums
+// tagged { "kind": … }, and camelCase ONLY in invoke()'s argument keys.
+//
+// ONE THING IS GENUINELY NEW HERE, and it is worth naming: everything below is
+// about time, and time is the one axis Kafka itself does not keep for us. A
+// broker will tell you the lag right now; it will not tell you what the lag was
+// an hour ago. So the history is Kavka's own — sampled while a connection is
+// up, written to a local redb file, pruned at 7 days — and every screen that
+// reads it has to say so, because a gap in a chart is a gap in Kavka's
+// attendance record, not an outage on the cluster.
+//
+// NOTHING HERE MUTATES THE CLUSTER. Alert rules, channels, the sampler and the
+// metrics scrape are all local observation, which is why they are the one
+// surface a read-only connection is NOT blocked from — see AlertsTab, which
+// says so on screen rather than leaving the divergence implicit.
+// ---------------------------------------------------------------------------
+
+// ── Lag history ────────────────────────────────────────────────────────────
+
+/**
+ * One partition's lag at one moment, as the sampler recorded it.
+ *
+ * `committed` and `lag` are null together and for the same reason as
+ * `GroupOffset`: a group that has never committed for this partition has
+ * nothing to subtract from. A null lag is NOT zero and must never be plotted
+ * as zero — it is a gap in the line.
+ */
+export interface LagSample {
+  ts_ms: number;
+  group_id: string;
+  topic: string;
+  partition: number;
+  committed: number | null;
+  end_offset: number;
+  lag: number | null;
+}
+
+/**
+ * Lag history for one group, between two timestamps.
+ *
+ * `topic: null` is every topic the group has samples for. The core downsamples
+ * to at most `maxPoints` PER PARTITION, and the point it keeps for each bucket
+ * is the one with the HIGHEST lag — not the mean, not the last. That is the
+ * whole reason this is safe to draw: a spike that lasted a single sample
+ * survives every zoom level, where an average would erase it exactly when it
+ * matters. Every chart drawn from this says so in its axis note.
+ */
+export function historyQuery(
+  profileId: string,
+  groupId: string,
+  topic: string | null,
+  fromMs: number,
+  toMs: number,
+  maxPoints: number,
+): Promise<LagSample[]> {
+  return invoke<LagSample[]>("history_query", {
+    profileId,
+    groupId,
+    topic,
+    fromMs,
+    toMs,
+    maxPoints,
+  });
+}
+
+/**
+ * Which groups this profile's store actually holds history for, and the window
+ * each one covers.
+ *
+ * The two timestamps are what make an honest empty state possible: a group with
+ * no samples in the last hour is a different fact from a group Kavka has never
+ * seen, and a picker that cannot tell them apart offers a range that can only
+ * come back empty.
+ */
+export interface HistoryGroup {
+  group_id: string;
+  first_ts_ms: number;
+  last_ts_ms: number;
+}
+
+export function historyGroups(profileId: string): Promise<HistoryGroup[]> {
+  return invoke<HistoryGroup[]>("history_groups", { profileId });
+}
+
+/**
+ * What the sampler is doing right now for this profile.
+ *
+ * `last_error` is the sampler's own last failure, kept rather than thrown: the
+ * sampler runs unattended, so an error nobody was watching for still has to be
+ * findable afterwards. `running: false` on a connected profile is a fact the
+ * Monitoring tab states plainly — a chart that simply stops is indistinguishable
+ * from a cluster that went quiet.
+ */
+export interface SamplerStatus {
+  running: boolean;
+  interval_ms: number;
+  last_sample_ms: number | null;
+  last_error: string | null;
+}
+
+export function samplerStatus(profileId: string): Promise<SamplerStatus> {
+  return invoke<SamplerStatus>("sampler_status", { profileId });
+}
+
+/** The core's floor and default for the sampler interval. Mirrored so the UI
+    can refuse a value the core would refuse, in the form rather than after it. */
+export const SAMPLER_MIN_MS = 5_000;
+export const SAMPLER_DEFAULT_MS = 15_000;
+
+/** How long the local store keeps history before pruning. Mirrored so the
+    charts can say what "no data before this" actually means. */
+export const HISTORY_RETENTION_DAYS = 7;
+
+// ── Broker metrics (Prometheus / jmx_exporter scrape) ──────────────────────
+
+/** One reading of one series. `value` is whatever the exporter published,
+    already in the series' own unit — bytes, messages, partitions. */
+export interface MetricPoint {
+  ts_ms: number;
+  value: number;
+}
+
+/**
+ * THE FIXED SERIES VOCABULARY.
+ *
+ * Six names, aggregated cluster-level in v1. An exporter publishes hundreds of
+ * metrics under names that differ between jmx_exporter configs, Redpanda and
+ * Confluent — so the core maps them onto these six, and the UI never learns a
+ * scrape's own spelling. A series the scrape did not expose is absent from
+ * `metrics_status.series_available`, which is a different fact from a series
+ * whose value is zero, and the two are rendered differently.
+ */
+export const METRIC_SERIES = [
+  "bytes_in_per_sec",
+  "bytes_out_per_sec",
+  "messages_in_per_sec",
+  "under_replicated_partitions",
+  "offline_partitions",
+  "log_size_bytes",
+] as const;
+
+export type MetricSeries = (typeof METRIC_SERIES)[number];
+
+/**
+ * The per-topic variant of a series, when the scrape exposes one:
+ * `bytes_in_per_sec:topic:orders.v2`.
+ *
+ * The topic goes last and is not escaped — a Kafka topic name cannot contain a
+ * colon, so nothing this scheme builds can be ambiguous, and `splitSeries`
+ * recovers the two halves by taking the FIRST two segments rather than by
+ * splitting the whole string.
+ */
+export function topicSeries(series: MetricSeries, topic: string): string {
+  return `${series}:topic:${topic}`;
+}
+
+/** The inverse. `topic` is null for a cluster-level series. */
+export function splitSeries(name: string): { base: string; topic: string | null } {
+  const marker = ":topic:";
+  const at = name.indexOf(marker);
+  if (at < 0) return { base: name, topic: null };
+  return { base: name.slice(0, at), topic: name.slice(at + marker.length) };
+}
+
+/**
+ * One series over a window, downsampled to at most `maxPoints`.
+ *
+ * Unlike lag, a throughput bucket keeps its own natural summary rather than a
+ * maximum — the core decides, and the UI does not pretend to know which. What
+ * the UI DOES say is the bucket width, so nobody reads a 24-hour chart as if it
+ * were a per-second one.
+ */
+export function metricsQuery(
+  profileId: string,
+  series: string,
+  fromMs: number,
+  toMs: number,
+  maxPoints: number,
+): Promise<MetricPoint[]> {
+  return invoke<MetricPoint[]>("metrics_query", {
+    profileId,
+    series,
+    fromMs,
+    toMs,
+    maxPoints,
+  });
+}
+
+/**
+ * Whether this profile has a metrics endpoint at all, whether it answered, and
+ * what it published.
+ *
+ * FOUR STATES, NOT TWO. `configured: false` is "you never told Kavka where to
+ * look" and gets a teaching screen; `configured: true, reachable: false` is a
+ * connection problem and gets the endpoint's own error; reachable with an empty
+ * `series_available` is an exporter that answered with nothing Kavka
+ * recognised, which is a config problem on the exporter and not on the cluster.
+ * Collapsing any of those into "no data" is how a user spends an afternoon
+ * debugging the wrong machine.
+ */
+export interface MetricsStatus {
+  configured: boolean;
+  reachable: boolean;
+  last_scrape_ms: number | null;
+  last_error: string | null;
+  series_available: string[];
+}
+
+export function metricsStatus(profileId: string): Promise<MetricsStatus> {
+  return invoke<MetricsStatus>("metrics_status", { profileId });
+}
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+
+/**
+ * One rule Kavka watches for, tagged by kind like every other enum on the wire.
+ *
+ * `for_ms` is a DWELL, not a delay: the condition has to hold continuously for
+ * that long before the rule fires. It is what separates "the lag crossed 10 000
+ * for one sample during a rebalance" from "this application has been falling
+ * behind for five minutes", and it is why `offline_partitions` has none — a
+ * partition with no leader is not a condition anyone wants smoothed.
+ */
+export type AlertRule =
+  | {
+      kind: "lag_threshold";
+      id: string;
+      name: string;
+      group_id: string;
+      /** null = any topic this group reads. */
+      topic: string | null;
+      threshold: number;
+      for_ms: number;
+    }
+  | { kind: "under_replicated"; id: string; name: string; for_ms: number }
+  | { kind: "offline_partitions"; id: string; name: string }
+  | {
+      kind: "throughput_floor";
+      id: string;
+      name: string;
+      /** One of METRIC_SERIES, or a per-topic variant. */
+      series: string;
+      below: number;
+      for_ms: number;
+    };
+
+export type AlertKind = AlertRule["kind"];
+
+/**
+ * One firing, and its resolution if it has had one.
+ *
+ * `resolved_ms: null` means still firing — not "we lost track". The same event
+ * arrives twice on the event channel, once on fire and once with `resolved_ms`
+ * set, so a UI that only listens for fires shows conditions that cleared hours
+ * ago as if they were live.
+ */
+export interface AlertEvent {
+  rule_id: string;
+  rule_name: string;
+  fired_ms: number;
+  resolved_ms: number | null;
+  /** The numbers that tripped it, in Kavka's words. Shown verbatim. */
+  detail: string;
+}
+
+export function alertsList(profileId: string): Promise<AlertRule[]> {
+  return invoke<AlertRule[]>("alerts_list", { profileId });
+}
+
+/** Upsert by `rule.id`. Local only — never touches the cluster. */
+export function alertsSave(profileId: string, rule: AlertRule): Promise<void> {
+  return invoke<void>("alerts_save", { profileId, rule });
+}
+
+export function alertsDelete(profileId: string, ruleId: string): Promise<void> {
+  return invoke<void>("alerts_delete", { profileId, ruleId });
+}
+
+/** Newest first. `limit` is a ceiling, not a promise of that many. */
+export function alertsHistory(
+  profileId: string,
+  limit: number,
+): Promise<AlertEvent[]> {
+  return invoke<AlertEvent[]>("alerts_history", { profileId, limit });
+}
+
+/**
+ * Where a firing goes. Stored per profile, because "notify me about prod" and
+ * "don't notify me about my laptop's dev cluster" is the normal want.
+ *
+ * `webhook_is_slack` picks the BODY SHAPE, not the destination: Slack wants
+ * `{"text": …}` and a generic endpoint wants Kavka's own JSON, and posting the
+ * wrong one to the right URL fails silently at the far end — which is exactly
+ * what the Test button exists to catch before an incident does.
+ */
+export interface AlertChannels {
+  os_notification: boolean;
+  webhook_url: string | null;
+  webhook_is_slack: boolean;
+}
+
+export function alertsChannelsGet(profileId: string): Promise<AlertChannels> {
+  return invoke<AlertChannels>("alerts_channels_get", { profileId });
+}
+
+export function alertsChannelsSet(
+  profileId: string,
+  channels: AlertChannels,
+): Promise<void> {
+  return invoke<void>("alerts_channels_set", { profileId, channels });
+}
+
+/**
+ * Send one test firing through the configured channels.
+ *
+ * NOT IN THE PHASE 4 CONTRACT — flagged, not smuggled. The UI is specified to
+ * carry a Test button beside the webhook, and there is no honest way to build
+ * one on this side: a `fetch` from the webview would bypass the Rust side that
+ * actually posts the alert, would be blocked by the app's CSP, and would prove
+ * nothing about the request Kavka will really send. So the button calls this,
+ * and until the core grows it the button surfaces the rejection like any other
+ * failure rather than pretending the test passed.
+ */
+export function alertsChannelsTest(profileId: string): Promise<void> {
+  return invoke<void>("alerts_channels_test", { profileId });
+}
+
+/** The event name a profile's alert firings and resolutions arrive on. */
+export function alertsEventName(profileId: string): string {
+  return `kavka://alerts/${profileId}`;
+}
+
+/**
+ * Subscribe to one profile's alerts. Fires AND resolutions arrive here — the
+ * same payload shape both times, with `resolved_ms` set on the second.
+ *
+ * The event is emitted to all windows, so the profile id in the name is what
+ * keeps two clusters' alerts apart. Resolves with the unlisten function; call
+ * it, always. Prefer `alertsSubscribe` from a component.
+ */
+export function alertsListen(
+  profileId: string,
+  cb: (event: AlertEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AlertEvent>(alertsEventName(profileId), (event) =>
+    cb(event.payload),
+  );
+}
+
+/**
+ * `alertsListen` with the unmount race closed — see `tailSubscribe`, which this
+ * mirrors deliberately. Returns a SYNCHRONOUS cancel that works whether or not
+ * the listener has finished registering.
+ *
+ * No `sessionReady` handshake here, and that is the one difference worth
+ * stating: alerts are not a session. There is no id that has to exist before
+ * the first event can be addressed, and no first three seconds to lose — the
+ * channel is named after the profile, which existed long before this listener
+ * did. A missed alert is a real cost, so the subscription is set up when the
+ * cluster workspace mounts rather than when the Alerts tab is opened.
+ */
+export function alertsSubscribe(
+  profileId: string,
+  cb: (event: AlertEvent) => void,
+  onError?: (message: string) => void,
+): () => void {
+  let cancelled = false;
+  let unlisten: UnlistenFn | null = null;
+  void alertsListen(profileId, (event) => {
+    if (!cancelled) cb(event);
+  })
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    })
+    .catch((err: unknown) => {
+      if (!cancelled) onError?.(errorMessage(err));
+    });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = null;
+  };
+}
+
+// ── Share groups (KIP-932) ─────────────────────────────────────────────────
+
+/**
+ * A share group, which is Kafka's queue-shaped consumer: members take
+ * individual records rather than whole partitions, so two members can read the
+ * same partition at once and each record is acknowledged on its own.
+ *
+ * A broker that does not have the feature refuses the call by name rather than
+ * answering with an empty list, and the core passes that refusal through — see
+ * ShareGroupsPanel, which turns it into a sentence about the broker's version
+ * instead of a protocol error about an unknown API key.
+ */
+export interface ShareGroupInfo {
+  group_id: string;
+  state: string;
+  member_count: number;
+}
+
+export function shareGroupsList(profileId: string): Promise<ShareGroupInfo[]> {
+  return invoke<ShareGroupInfo[]>("share_groups_list", { profileId });
+}
+
+/**
+ * One share group's members and where each partition's delivery starts.
+ *
+ * `start_offset` is NOT a committed offset and must not be labelled as one: a
+ * share group acknowledges records individually, so what the broker keeps is
+ * the point before which everything has been acknowledged. `null` means the
+ * broker did not report one for that partition, which is a gap in the answer
+ * rather than a zero.
+ */
+export interface ShareGroupMember {
+  member_id: string;
+  client_id: string;
+  assignments: TopicPartition[];
+}
+
+export interface ShareGroupOffset {
+  topic: string;
+  partition: number;
+  start_offset: number | null;
+}
+
+export interface ShareGroupDetail {
+  group_id: string;
+  state: string;
+  members: ShareGroupMember[];
+  offsets: ShareGroupOffset[];
+}
+
+export function shareGroupDetail(
+  profileId: string,
+  groupId: string,
+): Promise<ShareGroupDetail> {
+  return invoke<ShareGroupDetail>("share_group_detail", { profileId, groupId });
+}
+
+// ── Kafka Streams topology (INFERRED) ──────────────────────────────────────
+
+/**
+ * One box in the topology picture.
+ *
+ * `kind` is the only thing that makes a node readable — a repartition topic and
+ * a source topic are both "a topic" to Kafka and completely different things to
+ * whoever is debugging the application — so it drives shape and a word, never
+ * colour alone.
+ */
+export interface TopologyNode {
+  id: string;
+  /** source_topic · sub_topology · repartition · changelog · sink_topic. */
+  kind: string;
+  label: string;
+  /** The Kafka topics this node stands for. Literals, rendered mono. */
+  topics: string[];
+}
+
+export interface TopologyEdge {
+  from: string;
+  to: string;
+}
+
+/**
+ * What Kavka could work out about a Streams application's shape.
+ *
+ * `inferred` is literally `true` and is not negotiable, because the whole
+ * object is a guess: Kafka does not expose a Streams topology anywhere. The
+ * core reconstructs it from the group's subscriptions plus the internal-topic
+ * naming convention (`<app-id>-…-repartition`, `<app-id>-…-changelog`), which
+ * gets the boxes right and cannot get the processors inside them right.
+ *
+ * `caveats` names exactly what the inference cannot know, in Kavka's words, and
+ * the view renders every one of them as an always-visible note. A topology
+ * picture that looks authoritative and is a guess is worse than no picture.
+ */
+export interface StreamsTopology {
+  app_id: string;
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  inferred: true;
+  caveats: string[];
+}
+
+export function streamsTopology(
+  profileId: string,
+  groupId: string,
+): Promise<StreamsTopology> {
+  return invoke<StreamsTopology>("streams_topology", { profileId, groupId });
 }

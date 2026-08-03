@@ -74,6 +74,28 @@ pub(crate) const METADATA: Api = Api {
     max: 12,
     first_flexible: 9,
 };
+/// v4 is the first version whose reply is the `Coordinators` ARRAY rather than
+/// a single flat coordinator — a different shape, not a wider one. Only the
+/// share-group calls route through it, and those need Kafka 4.1 regardless, so
+/// the older shape is refused rather than implemented untested.
+pub(crate) const FIND_COORDINATOR: Api = Api {
+    key: 10,
+    name: "FindCoordinator",
+    min: 4,
+    max: 6,
+    first_flexible: 3,
+};
+/// v5 only: `TypesFilter` (KIP-848) is the whole reason this module lists
+/// groups at all — without it the broker answers with every group of every
+/// type and "which of these are share groups" is unanswerable. The classic
+/// list stays on librdkafka ([`crate::admin::groups_list`]).
+pub(crate) const LIST_GROUPS: Api = Api {
+    key: 16,
+    name: "ListGroups",
+    min: 5,
+    max: 5,
+    first_flexible: 3,
+};
 pub(crate) const SASL_HANDSHAKE: Api = Api {
     key: 17,
     name: "SaslHandshake",
@@ -139,6 +161,33 @@ pub(crate) const DESCRIBE_QUORUM: Api = Api {
     max: 1,
     first_flexible: 0,
 };
+/// v1 only, and that is Kafka's own window: v0 carried KIP-932's early access
+/// in Kafka 4.0 and was DELETED in 4.1 (`"validVersions": "1"`), so there is no
+/// older version to be compatible with.
+pub(crate) const SHARE_GROUP_DESCRIBE: Api = Api {
+    key: 77,
+    name: "ShareGroupDescribe",
+    min: 1,
+    max: 1,
+    first_flexible: 0,
+};
+pub(crate) const DESCRIBE_SHARE_GROUP_OFFSETS: Api = Api {
+    key: 90,
+    name: "DescribeShareGroupOffsets",
+    min: 0,
+    max: 0,
+    first_flexible: 0,
+};
+
+/// The KRaft feature flag that turns share groups on
+/// (`kafka-features.sh upgrade --feature share.version=1`).
+///
+/// It is read from the ApiVersions reply rather than inferred, because the
+/// broker advertises APIs 77 and 90 whether or not the feature is finalized —
+/// verified against apache/kafka:4.1.0, which lists both at `share.version=0`
+/// and then answers UNSUPPORTED_VERSION to every call. Without this the only
+/// honest answer to "are there share groups here" would be an empty list.
+pub(crate) const SHARE_VERSION_FEATURE: &str = "share.version";
 
 /// A TCP or TLS socket, so the rest of the module never branches on which.
 enum Stream {
@@ -174,12 +223,24 @@ impl Write for Stream {
 pub(crate) struct BrokerConnection {
     stream: Stream,
     address: String,
+    /// The address as `(host, port)`, so "is this the broker metadata just
+    /// named?" is answered by comparison rather than by string equality against
+    /// whatever the user typed — `SASL_SSL://broker:9093` and `broker:9093` are
+    /// the same endpoint, and dialling a second socket to find that out is the
+    /// cost this field avoids (see [`super::ProtocolClient::with_broker`]).
+    endpoint: (String, u16),
     /// Monotonic per connection. Kafka guarantees in-order replies on one
     /// connection, so this is a consistency check rather than a demultiplexer —
     /// but it is the check that catches a decoder that read one byte too few on
     /// the previous response, which otherwise corrupts everything after it.
     correlation: i32,
     versions: HashMap<i16, (i16, i16)>,
+    /// Cluster-wide FINALIZED feature levels, from the ApiVersions reply's
+    /// tagged fields. Empty when the broker sent none, when it sent them with
+    /// an unknown epoch, or when the trailer did not parse — see
+    /// [`decode_finalized_features`], and [`Self::feature_level`] for why that
+    /// is "unknown" rather than "zero".
+    features: HashMap<String, i16>,
     /// Cleared the moment a call fails at the TRANSPORT — see
     /// [`Self::is_healthy`]. One-way: nothing sets it back.
     healthy: bool,
@@ -221,8 +282,10 @@ impl BrokerConnection {
         let mut conn = Self {
             stream,
             address: address.to_string(),
+            endpoint: (host, port),
             correlation: 0,
             versions: HashMap::new(),
+            features: HashMap::new(),
             healthy: true,
         };
         conn.negotiate_api_versions()?;
@@ -231,6 +294,39 @@ impl BrokerConnection {
 
     pub(crate) fn address(&self) -> &str {
         &self.address
+    }
+
+    /// Whether this socket is already pointed at the endpoint given — the
+    /// host/port comparison, not a string one.
+    ///
+    /// Host names are compared case-insensitively (DNS is), and not resolved:
+    /// two names for one machine read as two endpoints here, which costs a
+    /// redundant connection and never a wrong one.
+    pub(crate) fn is_at(&self, host: &str, port: u16) -> bool {
+        self.endpoint.1 == port && self.endpoint.0.eq_ignore_ascii_case(host)
+    }
+
+    /// Whether the broker speaks this API AT ALL, at any version.
+    ///
+    /// Distinct from [`Self::negotiate`], which also fails when the windows do
+    /// not overlap: "your Kafka has never heard of share groups" and "your
+    /// Kafka speaks a version of them Kavka does not" are different sentences
+    /// to the person reading them.
+    pub(crate) fn supports(&self, api: Api) -> bool {
+        self.versions.contains_key(&api.key)
+    }
+
+    /// The cluster-wide finalized level of a KRaft feature, or `None` when the
+    /// broker did not say.
+    ///
+    /// `None` is NOT zero and must not be treated as "off": a broker that sends
+    /// no feature table (anything before Kafka 2.7, or a reply whose trailer
+    /// this build could not parse) has told us nothing, and refusing a feature
+    /// on the strength of silence would break clusters that support it. The
+    /// callers gate on `Some(level) if level < needed` and otherwise let the
+    /// broker's own error code answer.
+    pub(crate) fn feature_level(&self, name: &str) -> Option<i16> {
+        self.features.get(name).copied()
     }
 
     /// Whether this socket's framing can still be trusted.
@@ -351,7 +447,7 @@ impl BrokerConnection {
         let mut decoder = Decoder::new(&payload);
         let code = decoder.int16()?;
 
-        self.versions = if code == errors::UNSUPPORTED_VERSION {
+        let (versions, features) = if code == errors::UNSUPPORTED_VERSION {
             let payload = self.call(API_VERSIONS, 0, Vec::new())?;
             let mut decoder = Decoder::new(&payload);
             let code = decoder.int16()?;
@@ -369,6 +465,8 @@ impl BrokerConnection {
             )?;
             decode_api_versions(&mut decoder, API_VERSIONS.max)?
         };
+        self.versions = versions;
+        self.features = features;
         Ok(())
     }
 }
@@ -410,12 +508,15 @@ fn api_versions_body(software_name: &str, software_version: &str, version: i16) 
     enc.finish()
 }
 
+/// What a broker says about itself when a connection opens: the API version
+/// table (key -> min, max) and the cluster's finalized feature levels
+/// (name -> max level).
+type BrokerCapabilities = (HashMap<i16, (i16, i16)>, HashMap<String, i16>);
+
 /// The response body of ApiVersions, minus the leading error code the caller
-/// has already read.
-fn decode_api_versions(
-    decoder: &mut Decoder<'_>,
-    version: i16,
-) -> Result<HashMap<i16, (i16, i16)>> {
+/// has already read: the version table, and the finalized feature levels that
+/// ride in its tagged fields.
+fn decode_api_versions(decoder: &mut Decoder<'_>, version: i16) -> Result<BrokerCapabilities> {
     let flexible = API_VERSIONS.flexible(version);
     let count = if flexible {
         decoder.compact_array_len()?
@@ -437,11 +538,71 @@ fn decode_api_versions(
     if table.is_empty() {
         return Err(malformed("the broker listed no supported APIs"));
     }
-    // Throttle time and (v3) the top-level tag buffer carrying SupportedFeatures
-    // and finalized feature epochs follow. Kavka uses none of them, and reading
-    // past what it needs is how a decoder starts failing on brokers that add a
-    // field — so the rest of the frame is deliberately left unread.
-    Ok(table)
+    // The trailer — throttle time, then (v3) the tag buffer carrying
+    // SupportedFeatures, FinalizedFeaturesEpoch and FinalizedFeatures — used to
+    // be left deliberately unread, on the rule that a decoder which stops at
+    // what it needs cannot be broken by a field the broker adds. One thing in
+    // there is now needed: `share.version`, the KRaft feature level that
+    // decides whether share groups exist at all, and which no other reply
+    // carries (the broker advertises the share APIs either way).
+    //
+    // The rule is kept where it counts. This read is BEST EFFORT: anything it
+    // cannot parse leaves the feature map empty, which every caller already
+    // treats as "the broker did not say" rather than as "off". A tagged field
+    // this build has never seen is skipped by the walk itself. So the trailer
+    // can grow, shrink or arrive mangled and a connection still opens.
+    let features = decode_features_trailer(decoder, version).unwrap_or_default();
+    Ok((table, features))
+}
+
+/// Kafka's own tag numbers on ApiVersionsResponse v3+.
+const TAG_FINALIZED_FEATURES_EPOCH: u32 = 1;
+const TAG_FINALIZED_FEATURES: u32 = 2;
+
+/// The trailer of an ApiVersions v3+ reply, as a map of feature name to
+/// finalized MAX version level.
+///
+/// `FinalizedFeaturesEpoch` gates the whole answer — Kafka's own schema says
+/// "the information is valid only if FinalizedFeaturesEpoch >= 0", and -1 means
+/// the broker has not learned the cluster's feature state yet (it is still
+/// catching up on the metadata log). Reporting a stale or absent level as `0`
+/// there would tell a user their cluster has share groups turned off during
+/// exactly the window when it cannot say.
+fn decode_features_trailer(
+    decoder: &mut Decoder<'_>,
+    version: i16,
+) -> Result<HashMap<String, i16>> {
+    if !API_VERSIONS.flexible(version) {
+        return Ok(HashMap::new());
+    }
+    let _throttle_time_ms = decoder.int32()?;
+
+    let mut epoch: i64 = -1;
+    let mut finalized: Option<&[u8]> = None;
+    decoder.tagged_fields_visit(|tag, payload| match tag {
+        TAG_FINALIZED_FEATURES_EPOCH => {
+            if let Ok(value) = Decoder::new(payload).int64() {
+                epoch = value;
+            }
+        }
+        TAG_FINALIZED_FEATURES => finalized = Some(payload),
+        _ => {}
+    })?;
+
+    let (Some(payload), true) = (finalized, epoch >= 0) else {
+        return Ok(HashMap::new());
+    };
+    let mut features = Decoder::new(payload);
+    let count = features.compact_array_len()?.unwrap_or(0);
+    let mut out = HashMap::with_capacity(count);
+    for _ in 0..count {
+        let name = features.compact_string()?;
+        let max_version_level = features.int16()?;
+        let _min_version_level = features.int16()?;
+        features.tagged_fields()?;
+        out.insert(name, max_version_level);
+    }
+    Ok(out)
 }
 
 /// Request header + body, length-prefixed.
@@ -590,9 +751,12 @@ mod tests {
         ];
         let mut decoder = Decoder::new(&body);
         assert_eq!(decoder.int16().unwrap(), 0);
-        let table = decode_api_versions(&mut decoder, 0).expect("decode");
+        let (table, features) = decode_api_versions(&mut decoder, 0).expect("decode");
         assert_eq!(table.get(&18), Some(&(0, 3)));
         assert_eq!(table.get(&55), Some(&(0, 1)));
+        // v0 has no tagged fields at all, so there is nowhere for a feature
+        // table to be — and "no answer" must not read as "the feature is off".
+        assert!(features.is_empty());
     }
 
     /// The same table in the flexible (v3) encoding: compact array length
@@ -609,9 +773,108 @@ mod tests {
         ];
         let mut decoder = Decoder::new(&body);
         assert_eq!(decoder.int16().unwrap(), 0);
-        let table = decode_api_versions(&mut decoder, 3).expect("decode");
+        let (table, features) = decode_api_versions(&mut decoder, 3).expect("decode");
         assert_eq!(table.len(), 2);
         assert_eq!(table.get(&18), Some(&(0, 3)));
+        assert!(features.is_empty(), "this reply carries no tagged fields");
+    }
+
+    /// An ApiVersions v3 reply built the way a KRaft broker builds one: the
+    /// version table, then a tag buffer carrying the finalized feature epoch
+    /// (tag 1) and the finalized feature list (tag 2).
+    ///
+    /// `epoch` is a parameter because it is the field that decides whether the
+    /// list may be believed at all.
+    fn api_versions_v3_with_features(epoch: i64, features: &[(&str, i16, i16)]) -> Vec<u8> {
+        let mut list = Encoder::new();
+        list.compact_array_len(Some(features.len()));
+        for (name, max_level, min_level) in features {
+            list.compact_string(name)
+                .int16(*max_level)
+                .int16(*min_level)
+                .tagged_fields();
+        }
+        let list = list.finish();
+
+        let mut enc = Encoder::new();
+        enc.int16(0) // error code
+            .compact_array_len(Some(1))
+            .int16(SHARE_GROUP_DESCRIBE.key)
+            .int16(1)
+            .int16(1)
+            .tagged_fields()
+            .int32(0); // throttle_time_ms
+                       // Two tagged fields: FinalizedFeaturesEpoch (int64) and
+                       // FinalizedFeatures (a compact array, encoded as the tag's payload).
+        enc.uvarint(2)
+            .uvarint(TAG_FINALIZED_FEATURES_EPOCH)
+            .uvarint(8);
+        enc.int64(epoch);
+        enc.uvarint(TAG_FINALIZED_FEATURES)
+            .uvarint(list.len() as u32);
+        let mut body = enc.finish();
+        body.extend_from_slice(&list);
+        body
+    }
+
+    fn features_of(body: &[u8]) -> HashMap<String, i16> {
+        let mut decoder = Decoder::new(body);
+        assert_eq!(decoder.int16().unwrap(), 0, "error code");
+        decode_api_versions(&mut decoder, 3).expect("decode").1
+    }
+
+    /// The feature level share groups are gated on, read out of the reply every
+    /// connection already makes.
+    #[test]
+    fn finalized_feature_levels_are_read_from_the_api_versions_trailer() {
+        let features = features_of(&api_versions_v3_with_features(
+            72_247,
+            &[
+                (SHARE_VERSION_FEATURE, 1, 0),
+                ("metadata.version", 28, 7),
+                ("transaction.version", 2, 0),
+            ],
+        ));
+        assert_eq!(features.get(SHARE_VERSION_FEATURE), Some(&1));
+        // The MAX level is the finalized one; the min is read past, not kept.
+        assert_eq!(features.get("metadata.version"), Some(&28));
+        assert_eq!(features.len(), 3);
+
+        // The disabled cluster: present, and zero. That is a different answer
+        // from silence, and the whole reason this is read.
+        let off = features_of(&api_versions_v3_with_features(
+            72_247,
+            &[(SHARE_VERSION_FEATURE, 0, 0)],
+        ));
+        assert_eq!(off.get(SHARE_VERSION_FEATURE), Some(&0));
+    }
+
+    /// Kafka's schema says the finalized feature list is valid only when
+    /// `FinalizedFeaturesEpoch` is zero or more. A broker still catching up on
+    /// the metadata log sends -1, and believing its list would report every
+    /// feature as off for exactly as long as the broker cannot say.
+    #[test]
+    fn an_unknown_feature_epoch_discards_the_whole_feature_list() {
+        let features = features_of(&api_versions_v3_with_features(
+            -1,
+            &[(SHARE_VERSION_FEATURE, 1, 0)],
+        ));
+        assert!(features.is_empty(), "got {features:?}");
+    }
+
+    /// The trailer is BEST EFFORT: the version table is what a connection needs
+    /// to work, and a feature list that cannot be parsed must cost a feature
+    /// gate, never the connection.
+    #[test]
+    fn a_mangled_feature_trailer_still_yields_the_version_table() {
+        let full = api_versions_v3_with_features(1, &[(SHARE_VERSION_FEATURE, 1, 0)]);
+        // Cut inside the tagged-field buffer, past the version table.
+        let truncated = &full[..full.len() - 4];
+        let mut decoder = Decoder::new(truncated);
+        assert_eq!(decoder.int16().unwrap(), 0);
+        let (table, features) = decode_api_versions(&mut decoder, 3).expect("the table survives");
+        assert_eq!(table.get(&SHARE_GROUP_DESCRIBE.key), Some(&(1, 1)));
+        assert!(features.is_empty(), "unparseable is unknown, not zero");
     }
 
     fn negotiate_with(table: &[(i16, (i16, i16))], api: Api) -> Result<i16> {

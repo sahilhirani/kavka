@@ -6,6 +6,9 @@ import {
   secretDelete,
   secretExists,
   secretSet,
+  HISTORY_RETENTION_DAYS,
+  SAMPLER_DEFAULT_MS,
+  SAMPLER_MIN_MS,
   type AuthConfig,
   type ConnectClusterConfig,
   type ConnectionProfile,
@@ -15,6 +18,7 @@ import {
 } from "./api";
 import { classifyError } from "./errors";
 import { Term } from "./Glossary";
+import { formatSpan } from "./monitoring";
 
 /**
  * The three-layer error banner from DESIGN.md §5.8 / §7: plain title, then
@@ -84,7 +88,11 @@ type FieldKey =
   | "srUsername"
   | "srPassword"
   | "connectName"
-  | "connectUrl";
+  | "connectUrl"
+  | "metricsUrl"
+  | "metricsUsername"
+  | "metricsPassword"
+  | "samplerSeconds";
 
 interface FieldError {
   field: FieldKey;
@@ -162,6 +170,18 @@ interface FormState {
   srPassword: string;
   /** The Kafka Connect clusters this connection can drive. Empty is normal. */
   connect: ConnectRow[];
+  /** Prometheus-format metrics address. Empty = this cluster has no endpoint. */
+  metricsUrl: string;
+  /** Basic-auth user, if the exporter (or the Prometheus in front of it) wants one. */
+  metricsUsername: string;
+  /** Metrics password. NEVER stored in the profile; keychain only. */
+  metricsPassword: string;
+  /**
+   * The lag sampler's interval, in SECONDS — the unit the field is in, not the
+   * unit the wire is in. Kept as text so a half-typed value doesn't snap back
+   * to a number under the caret. Empty means "the default".
+   */
+  samplerSeconds: string;
   readOnly: boolean;
 }
 
@@ -187,6 +207,10 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     srUsername: "",
     srPassword: "",
     connect: [],
+    metricsUrl: "",
+    metricsUsername: "",
+    metricsPassword: "",
+    samplerSeconds: String(SAMPLER_DEFAULT_MS / 1000),
     readOnly: false,
   };
   if (!profile) return base;
@@ -210,6 +234,17 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     password: "",
     entry: cluster.password?.entry ?? null,
   }));
+  // Absent on every profile written before Phase 4 — serde-defaulted to None,
+  // so `?.` here is the same statement the Rust side makes. The password is
+  // never read back into the form, like every other secret.
+  base.metricsUrl = profile.metrics_endpoint?.url ?? "";
+  base.metricsUsername = profile.metrics_endpoint?.username ?? "";
+  // Missing means "the core's default", and the field shows that default rather
+  // than an empty box — an interval nobody can see is an interval nobody knows
+  // they can change.
+  base.samplerSeconds = String(
+    (profile.sampler_interval_ms ?? SAMPLER_DEFAULT_MS) / 1000,
+  );
   // The registry password lives in the keychain and is never read back into
   // the form: blank means "leave the stored one alone", like every other.
   const auth = profile.auth;
@@ -278,6 +313,7 @@ interface StoredSecrets {
   clientKey: boolean;
   clientSecret: boolean;
   srPassword: boolean;
+  metricsPassword: boolean;
 }
 
 /** Until the keychain answers, nothing is stored — so the form asks for it. */
@@ -286,6 +322,7 @@ const NOTHING_STORED: StoredSecrets = {
   clientKey: false,
   clientSecret: false,
   srPassword: false,
+  metricsPassword: false,
 };
 
 interface ProfileEditorProps {
@@ -430,6 +467,10 @@ export default function ProfileEditor({
   // Independent of the sign-in method: a cluster can want mTLS and a registry
   // behind basic auth, and neither knows about the other.
   const srPasswordEntry = profile?.schema_registry?.password?.entry ?? null;
+  // Independent of everything above it, for the same reason: the exporter is a
+  // separate HTTP service that has never heard of the brokers' auth.
+  const metricsPasswordEntry =
+    profile?.metrics_endpoint?.password?.entry ?? null;
 
   // Secrets this profile already has in the keychain, which a blank input
   // therefore means "leave alone" rather than "clear". Asked, never assumed.
@@ -451,19 +492,35 @@ export default function ProfileEditor({
       check(clientKeyEntry),
       check(clientSecretEntry),
       check(srPasswordEntry),
-    ]).then(([password, clientKey, clientSecret, srPassword]) => {
-      if (!cancelled)
-        setStored({ password, clientKey, clientSecret, srPassword });
-    });
+      check(metricsPasswordEntry),
+    ]).then(
+      ([password, clientKey, clientSecret, srPassword, metricsPassword]) => {
+        if (!cancelled)
+          setStored({
+            password,
+            clientKey,
+            clientSecret,
+            srPassword,
+            metricsPassword,
+          });
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [passwordEntry, clientKeyEntry, clientSecretEntry, srPasswordEntry]);
+  }, [
+    passwordEntry,
+    clientKeyEntry,
+    clientSecretEntry,
+    srPasswordEntry,
+    metricsPasswordEntry,
+  ]);
 
   const hasStoredPassword = stored.password;
   const hasStoredClientKey = stored.clientKey;
   const hasStoredClientSecret = stored.clientSecret;
   const hasStoredSrPassword = stored.srPassword;
+  const hasStoredMetricsPassword = stored.metricsPassword;
 
   // The Connect passwords, asked about the same way and for the same reason —
   // except there are N of them, so the answer is a map keyed by entry name
@@ -544,6 +601,39 @@ export default function ProfileEditor({
         field: "srUrl",
         message:
           "Add the registry's address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
+      };
+
+    // The metrics endpoint is independent of everything else here too — it is a
+    // plain HTTP address in front of JMX — so it is checked before the Kerberos
+    // early return, like the registry and Connect.
+    const metricsUrl = form.metricsUrl.trim();
+    if (metricsUrl.length > 0 && !isHttpUrl(metricsUrl))
+      return {
+        field: "metricsUrl",
+        message:
+          "Use the whole URL, starting with http:// or https:// — e.g. http://broker-1.internal:7071/metrics",
+      };
+    if (metricsUrl.length === 0 && form.metricsUsername.trim().length > 0)
+      return {
+        field: "metricsUrl",
+        message:
+          "Add the metrics address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
+      };
+
+    // The sampler interval has a floor in the core, so the form refuses the
+    // value here rather than letting the save come back with a refusal about a
+    // field the user can no longer see.
+    const seconds = Number(form.samplerSeconds.trim());
+    if (
+      form.samplerSeconds.trim().length === 0 ||
+      !Number.isFinite(seconds) ||
+      seconds * 1000 < SAMPLER_MIN_MS
+    )
+      return {
+        field: "samplerSeconds",
+        message: `Sample at least every ${
+          SAMPLER_MIN_MS / 1000
+        } seconds. Anything faster asks the brokers for offsets more often than they change.`,
       };
 
     // Connect is independent of the sign-in method too — the workers have their
@@ -696,11 +786,18 @@ export default function ProfileEditor({
     // purges: an entry this editor writes and that list doesn't know about is
     // a secret that outlives the connection it belongs to. That is exactly
     // what happened to `sr_password`. Adding one here is a two-file change.
+    //
+    // `metrics_password` IS THE PHASE 4 ADDITION, and the second file is not
+    // this one: the core's constant has to grow it too, or a deleted connection
+    // leaves its exporter credentials in the keychain forever. The Rust side
+    // carries a test that fails when the two lists disagree — that failure is
+    // the contract working, not a broken build.
     const entry = {
       password: `${id}/password`,
       clientKey: `${id}/client_key`,
       clientSecret: `${id}/client_secret`,
       srPassword: `${id}/sr_password`,
+      metricsPassword: `${id}/metrics_password`,
     };
 
     // Cleared certificate path = the client certificate is being removed, so
@@ -777,6 +874,30 @@ export default function ProfileEditor({
             password: keepsSrPassword ? { entry: entry.srPassword } : null,
           };
 
+    // The metrics endpoint, if there is one. Same rule as the registry: `null`
+    // and not an empty object when the URL is blank, so clearing the field
+    // genuinely removes it — and takes its stored password with it.
+    const metricsUrl = orNull(form.metricsUrl);
+    const metricsTypedPassword = form.metricsPassword.length > 0;
+    const keepsMetricsPassword =
+      metricsUrl !== null && (metricsTypedPassword || hasStoredMetricsPassword);
+    const metricsEndpoint =
+      metricsUrl === null
+        ? null
+        : {
+            url: metricsUrl,
+            username: orNull(form.metricsUsername),
+            password: keepsMetricsPassword
+              ? { entry: entry.metricsPassword }
+              : null,
+          };
+
+    // Seconds in the form, milliseconds on the wire. validate() has already
+    // refused anything below the core's floor.
+    const samplerIntervalMs = Math.round(
+      Number(form.samplerSeconds.trim()) * 1000,
+    );
+
     // The Connect clusters. A row with no name or no URL is dropped rather
     // than saved half-written — validate() has already refused any row that
     // has one and not the other, so what falls out here is only the empty row
@@ -819,6 +940,8 @@ export default function ProfileEditor({
       read_only: form.readOnly,
       schema_registry: schemaRegistry,
       connect_clusters: connectClusters,
+      metrics_endpoint: metricsEndpoint,
+      sampler_interval_ms: samplerIntervalMs,
     };
 
     // What this save puts into the keychain. A blank secret input always
@@ -839,6 +962,9 @@ export default function ProfileEditor({
     // how the cluster checks who you are.
     if (srUrl !== null && srTypedPassword)
       writes.push([entry.srPassword, form.srPassword]);
+    // And again for the metrics endpoint, which knows nothing about either.
+    if (metricsUrl !== null && metricsTypedPassword)
+      writes.push([entry.metricsPassword, form.metricsPassword]);
     // Same again for every Connect cluster that had a password typed into it.
     writes.push(...connectWrites);
 
@@ -861,6 +987,9 @@ export default function ProfileEditor({
     // the same rule the client key follows when its certificate path goes.
     if (hasStoredSrPassword && !keepsSrPassword)
       obsolete.push(entry.srPassword);
+    // Same rule once more for the exporter's password.
+    if (hasStoredMetricsPassword && !keepsMetricsPassword)
+      obsolete.push(entry.metricsPassword);
     // A Connect cluster that was removed — or that lost its password — takes
     // its keychain entry with it. Read off the SAVED profile, because that is
     // the only record of what this connection used to reference.
@@ -902,6 +1031,7 @@ export default function ProfileEditor({
         clientKey: settled(entry.clientKey, prev.clientKey),
         clientSecret: settled(entry.clientSecret, prev.clientSecret),
         srPassword: settled(entry.srPassword, prev.srPassword),
+        metricsPassword: settled(entry.metricsPassword, prev.metricsPassword),
       }));
       // The Connect passwords, recorded the same way: an entry this save wrote
       // is known present, and one it dropped counts as gone.
@@ -917,6 +1047,7 @@ export default function ProfileEditor({
         clientKey: "",
         clientSecret: "",
         srPassword: "",
+        metricsPassword: "",
         // Each row keeps the entry this save actually used, so the next one
         // reuses it rather than minting a second name for the same password.
         connect: prev.connect.map((row) => ({
@@ -943,6 +1074,7 @@ export default function ProfileEditor({
     hasStoredClientKey,
     hasStoredClientSecret,
     hasStoredSrPassword,
+    hasStoredMetricsPassword,
     connectStored,
   ]);
 
@@ -1778,6 +1910,145 @@ export default function ProfileEditor({
         <button type="button" className="btn" onClick={addConnect}>
           Add a Connect cluster
         </button>
+      </fieldset>
+
+      {/* Monitoring — optional, and independent of everything above it. The
+          metrics endpoint is a plain HTTP address in front of JMX, and the
+          sampler is Kavka's own clock. Neither has anything to do with how the
+          cluster checks who you are. */}
+      <fieldset className="fieldset">
+        <legend className="eyebrow">Monitoring (optional)</legend>
+
+        <span className="field-hint">
+          Kafka's brokers don't serve throughput, storage or replication figures
+          over the Kafka protocol — they publish them as JMX, and almost everyone
+          puts a Prometheus exporter in front of that. Point Kavka at the
+          exporter and the Monitoring tab fills in. Lag history needs none of
+          this: Kavka reads that from the brokers itself.
+        </span>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-metrics-url">
+            Metrics address
+          </label>
+          <input
+            id="pe-metrics-url"
+            ref={bind("metricsUrl")}
+            type="text"
+            className={cls("metricsUrl", "input-mono")}
+            value={form.metricsUrl}
+            placeholder="http://broker-1.internal:7071/metrics"
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={invalid("metricsUrl")}
+            aria-describedby={describe("metricsUrl", "pe-metrics-url-hint")}
+            onChange={(e) => edit("metricsUrl", { metricsUrl: e.target.value })}
+          />
+          {fieldMessage("metricsUrl")}
+          <span className="field-hint" id="pe-metrics-url-hint">
+            The whole URL, including the path. If you run the brokers, this is
+            usually the <code>jmx_exporter</code> Java agent on one of them (
+            <code>-javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml</code>).
+            A Prometheus server that already scrapes those brokers works too —
+            give Kavka its address instead. Leave it empty if this cluster has
+            no exporter.
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-metrics-user">
+            Metrics username
+          </label>
+          <input
+            id="pe-metrics-user"
+            ref={bind("metricsUsername")}
+            type="text"
+            className={cls("metricsUsername", "input-mono")}
+            value={form.metricsUsername}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={invalid("metricsUsername")}
+            aria-describedby={describe(
+              "metricsUsername",
+              "pe-metrics-user-hint",
+            )}
+            onChange={(e) =>
+              edit("metricsUsername", { metricsUsername: e.target.value })
+            }
+          />
+          {fieldMessage("metricsUsername")}
+          <span className="field-hint" id="pe-metrics-user-hint">
+            Only if the endpoint sits behind basic auth. A jmx_exporter usually
+            doesn't; a shared Prometheus usually does.
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-metrics-password">
+            Metrics password
+          </label>
+          <input
+            id="pe-metrics-password"
+            ref={bind("metricsPassword")}
+            type="password"
+            className={cls("metricsPassword")}
+            value={form.metricsPassword}
+            autoComplete="new-password"
+            placeholder={
+              hasStoredMetricsPassword ? "••••••••  (unchanged)" : "Password"
+            }
+            aria-invalid={invalid("metricsPassword")}
+            aria-describedby={describe(
+              "metricsPassword",
+              "pe-metrics-password-hint",
+            )}
+            onChange={(e) =>
+              edit("metricsPassword", { metricsPassword: e.target.value })
+            }
+          />
+          {fieldMessage("metricsPassword")}
+          <span className="field-hint" id="pe-metrics-password-hint">
+            Goes to your operating system's keychain — never into the connection
+            file, and never off this machine.
+            {hasStoredMetricsPassword
+              ? " Leave it empty to keep the stored one; clearing the address above removes it."
+              : ""}
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-sampler">
+            Take a lag reading every
+          </label>
+          <input
+            id="pe-sampler"
+            ref={bind("samplerSeconds")}
+            type="number"
+            min={SAMPLER_MIN_MS / 1000}
+            step={1}
+            className={cls("samplerSeconds")}
+            value={form.samplerSeconds}
+            aria-invalid={invalid("samplerSeconds")}
+            aria-describedby={describe("samplerSeconds", "pe-sampler-hint")}
+            onChange={(e) =>
+              edit("samplerSeconds", { samplerSeconds: e.target.value })
+            }
+          />
+          {fieldMessage("samplerSeconds")}
+          <span className="field-hint" id="pe-sampler-hint">
+            Seconds. Kafka doesn't remember lag, so Kavka takes its own reading
+            on this interval and keeps {HISTORY_RETENTION_DAYS} days of it in a
+            file on this machine.{" "}
+            <strong>
+              Readings only happen while this connection is up — nothing is
+              collected while Kavka is closed or this cluster is disconnected,
+              and a gap in the chart means exactly that.
+            </strong>{" "}
+            The floor is {formatSpan(SAMPLER_MIN_MS)}; the default is{" "}
+            {formatSpan(SAMPLER_DEFAULT_MS)}, which costs one small request per
+            group per reading.
+          </span>
+        </div>
       </fieldset>
 
       <div className="check-field">

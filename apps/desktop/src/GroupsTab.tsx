@@ -13,6 +13,7 @@ import { groupDigits } from "./format";
 import { Term } from "./Glossary";
 import { ErrorBanner } from "./ProfileEditor";
 import ResetOffsetsModal from "./ResetOffsetsModal";
+import ShareGroupsPanel from "./ShareGroupsPanel";
 
 const READ_ONLY_WHY =
   "This connection is read-only. Turn that off in the connection's settings to produce or edit.";
@@ -520,6 +521,13 @@ export default function GroupsTab({
           </div>
         )}
       </section>
+
+      {/* Share groups sit UNDER the consumer groups and not beside them, because
+          they are a different model rather than a different flavour: one hands
+          out partitions, the other hands out records. Most clusters can't answer
+          this call at all, and the panel says why in one sentence instead of
+          surfacing a protocol version number. */}
+      <ShareGroupsPanel profile={profile} onDanger={onDanger} />
     </>
   );
 }

@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AclsTab from "./AclsTab";
-import type { ClusterOverview, ConnectionProfile } from "./api";
+import AlertsTab from "./AlertsTab";
+import {
+  alertsSubscribe,
+  type AlertEvent,
+  type ClusterOverview,
+  type ConnectionProfile,
+} from "./api";
 import BrokersTab from "./BrokersTab";
 import ConnectTab from "./ConnectTab";
 import type { DangerReport } from "./danger";
 import GroupsTab from "./GroupsTab";
 import { Term } from "./Glossary";
+import MonitoringTab from "./MonitoringTab";
+import { formatDuration } from "./monitoring";
 import QuorumPanel from "./QuorumPanel";
 import { EnvChip } from "./Sidebar";
+import StreamsTab from "./StreamsTab";
 import { lsGet, lsSet } from "./storage";
+import { ToastStack, useToasts } from "./Toast";
 import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
 
 /**
@@ -32,7 +42,10 @@ type TabKey =
   | "groups"
   | "acls"
   | "brokers"
-  | "connect";
+  | "connect"
+  | "monitoring"
+  | "alerts"
+  | "streams";
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "overview", label: "Overview" },
@@ -41,6 +54,9 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "acls", label: "ACLs" },
   { key: "brokers", label: "Brokers" },
   { key: "connect", label: "Connect" },
+  { key: "monitoring", label: "Monitoring" },
+  { key: "alerts", label: "Alerts" },
+  { key: "streams", label: "Streams" },
 ];
 
 interface Placement {
@@ -53,6 +69,13 @@ interface Placement {
   /** Which Connect cluster is selected, and which connector inside it. */
   connect: string | null;
   connector: string | null;
+  /**
+   * Which group the Streams tab is drawing. Separate from `group`, which is the
+   * consumer-groups tab's selection: the two views ask different questions
+   * about a group id, and coming back to Groups on the app the Streams tab
+   * happened to be showing would move you somewhere you never went.
+   */
+  streamsGroup: string | null;
 }
 
 const EMPTY_PLACEMENT: Placement = {
@@ -63,6 +86,7 @@ const EMPTY_PLACEMENT: Placement = {
   broker: null,
   connect: null,
   connector: null,
+  streamsGroup: null,
 };
 
 const PANES: readonly TopicPane[] = ["detail", "messages", "search", "schemas"];
@@ -104,6 +128,10 @@ function readPlacement(profileId: string): Placement {
       broker: typeof value.broker === "number" ? value.broker : null,
       connect: typeof value.connect === "string" ? value.connect : null,
       connector: typeof value.connector === "string" ? value.connector : null,
+      // Phase 4, same rule again: a placement written by an older build has no
+      // such key, which is the same as "nothing selected".
+      streamsGroup:
+        typeof value.streamsGroup === "string" ? value.streamsGroup : null,
     };
   } catch {
     return EMPTY_PLACEMENT;
@@ -142,6 +170,58 @@ export default function ClusterView({
   useEffect(() => {
     lsSet(placementKey(profile.id), JSON.stringify(place));
   }, [profile.id, place]);
+
+  // ── Alerts ──────────────────────────────────────────────────────────────
+  //
+  // THE SUBSCRIPTION LIVES HERE, NOT IN THE ALERTS TAB. An alert that only
+  // arrives while you happen to have the Alerts tab open is not an alert, it is
+  // a page. This component is mounted for exactly as long as the cluster is
+  // connected, which is exactly as long as the core is watching — so the two
+  // start and stop together, and the toast reaches whichever view is on screen.
+  const alertToaster = useToasts();
+  const pushAlert = alertToaster.push;
+  const [firing, setFiring] = useState<Set<string>>(new Set());
+  // Bumped on every fire and resolve, so the Alerts tab's history reloads
+  // without polling and without this component knowing what it renders.
+  const [alertNonce, setAlertNonce] = useState(0);
+
+  const onAlert = useCallback(
+    (event: AlertEvent) => {
+      setAlertNonce((n) => n + 1);
+      setFiring((prev) => {
+        const next = new Set(prev);
+        if (event.resolved_ms === null) next.add(event.rule_id);
+        else next.delete(event.rule_id);
+        return next;
+      });
+      if (event.resolved_ms === null) {
+        // §5.8: an error the user must act on is never a toast — but a firing
+        // is not an error, it is something that just happened, and it also has
+        // a permanent home in the alert log. It gets `danger` so it does not
+        // auto-dismiss: a condition that appeared and vanished while nobody was
+        // looking is the failure mode alerting exists to prevent.
+        pushAlert({
+          kind: "danger",
+          title: event.rule_name,
+          detail: event.detail,
+        });
+      } else {
+        pushAlert({
+          kind: "ok",
+          title: `Resolved — ${event.rule_name}`,
+          detail: `It lasted ${formatDuration(
+            event.resolved_ms - event.fired_ms,
+          )}.`,
+        });
+      }
+    },
+    [pushAlert],
+  );
+
+  useEffect(
+    () => alertsSubscribe(profile.id, onAlert),
+    [profile.id, onAlert],
+  );
 
   // The danger collector. A count, not a boolean — see danger.ts: child
   // effects run before parent effects, so an outer component reporting "no
@@ -199,6 +279,10 @@ export default function ClusterView({
 
   const selectConnector = useCallback((connector: string | null) => {
     setPlace((prev) => ({ ...prev, connector }));
+  }, []);
+
+  const selectStreamsGroup = useCallback((streamsGroup: string | null) => {
+    setPlace((prev) => ({ ...prev, streamsGroup }));
   }, []);
 
   /**
@@ -288,6 +372,21 @@ export default function ClusterView({
             onKeyDown={(e) => onTabKeyDown(e, index)}
           >
             {tab.label}
+            {/* The alert counter §5.1 asks for. It carries a word in its title
+                and a number in the badge, never a bare coloured dot — and it
+                is on the tab rather than the status bar because the status bar
+                belongs to the app shell, not to one cluster. */}
+            {tab.key === "alerts" && firing.size > 0 && (
+              <span
+                className="tab-badge"
+                title={`${firing.size} alert rule${
+                  firing.size === 1 ? " is" : "s are"
+                } firing right now`}
+              >
+                {firing.size}
+                <span className="sr-only"> firing</span>
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -354,7 +453,36 @@ export default function ClusterView({
             onEditConnection={editConnection}
           />
         )}
+
+        {place.tab === "monitoring" && (
+          <MonitoringTab
+            profile={profile}
+            onDanger={reportDanger}
+            onEditConnection={editConnection}
+          />
+        )}
+
+        {place.tab === "alerts" && (
+          <AlertsTab
+            profile={profile}
+            onDanger={reportDanger}
+            eventNonce={alertNonce}
+          />
+        )}
+
+        {place.tab === "streams" && (
+          <StreamsTab
+            profile={profile}
+            group={place.streamsGroup}
+            onSelectGroup={selectStreamsGroup}
+            onDanger={reportDanger}
+          />
+        )}
       </div>
+
+      {/* Alert toasts belong to the whole workspace, not to the Alerts tab —
+          see the subscription above. */}
+      <ToastStack {...alertToaster} />
     </div>
   );
 }

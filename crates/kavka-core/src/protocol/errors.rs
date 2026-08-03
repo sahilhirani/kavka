@@ -27,13 +27,17 @@
 pub(crate) const BENIGN: &[i16] = &[ELECTION_NOT_NEEDED, NO_REASSIGNMENT_IN_PROGRESS];
 
 pub(crate) const NONE: i16 = 0;
+pub(crate) const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
+pub(crate) const COORDINATOR_NOT_AVAILABLE: i16 = 15;
+pub(crate) const NOT_COORDINATOR: i16 = 16;
 pub(crate) const UNSUPPORTED_VERSION: i16 = 35;
 pub(crate) const NOT_CONTROLLER: i16 = 41;
 pub(crate) const NOT_LEADER_OR_FOLLOWER: i16 = 6;
+pub(crate) const GROUP_ID_NOT_FOUND: i16 = 69;
 pub(crate) const ELECTION_NOT_NEEDED: i16 = 84;
 pub(crate) const NO_REASSIGNMENT_IN_PROGRESS: i16 = 85;
 
-/// The codes these six APIs (and the handshake in front of them) can actually
+/// The codes these APIs (and the handshake in front of them) can actually
 /// produce, plus the handful every API shares. Anything outside the table is
 /// still reported — by number — rather than swallowed.
 const NAMES: &[(i16, &str)] = &[
@@ -46,8 +50,13 @@ const NAMES: &[(i16, &str)] = &[
     (8, "BROKER_NOT_AVAILABLE"),
     (9, "REPLICA_NOT_AVAILABLE"),
     (13, "NETWORK_EXCEPTION"),
+    (14, "COORDINATOR_LOAD_IN_PROGRESS"),
+    (15, "COORDINATOR_NOT_AVAILABLE"),
+    (16, "NOT_COORDINATOR"),
     (17, "INVALID_TOPIC_EXCEPTION"),
+    (24, "INVALID_GROUP_ID"),
     (29, "TOPIC_AUTHORIZATION_FAILED"),
+    (30, "GROUP_AUTHORIZATION_FAILED"),
     (31, "CLUSTER_AUTHORIZATION_FAILED"),
     (33, "UNSUPPORTED_SASL_MECHANISM"),
     (34, "ILLEGAL_SASL_STATE"),
@@ -63,6 +72,7 @@ const NAMES: &[(i16, &str)] = &[
     (56, "KAFKA_STORAGE_ERROR"),
     (58, "SASL_AUTHENTICATION_FAILED"),
     (60, "REASSIGNMENT_IN_PROGRESS"),
+    (69, "GROUP_ID_NOT_FOUND"),
     (72, "LISTENER_NOT_FOUND"),
     (80, "PREFERRED_LEADER_NOT_AVAILABLE"),
     (83, "ELIGIBLE_LEADERS_NOT_AVAILABLE"),
@@ -203,6 +213,10 @@ mod tests {
             (NOT_CONTROLLER, "NOT_CONTROLLER"),
             (ELECTION_NOT_NEEDED, "ELECTION_NOT_NEEDED"),
             (NO_REASSIGNMENT_IN_PROGRESS, "NO_REASSIGNMENT_IN_PROGRESS"),
+            (COORDINATOR_LOAD_IN_PROGRESS, "COORDINATOR_LOAD_IN_PROGRESS"),
+            (COORDINATOR_NOT_AVAILABLE, "COORDINATOR_NOT_AVAILABLE"),
+            (NOT_COORDINATOR, "NOT_COORDINATOR"),
+            (GROUP_ID_NOT_FOUND, "GROUP_ID_NOT_FOUND"),
         ] {
             assert_eq!(name(constant), expected);
         }

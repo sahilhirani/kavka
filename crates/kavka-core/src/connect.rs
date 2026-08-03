@@ -1462,6 +1462,8 @@ mod tests {
                 username: None,
                 password: None,
             }],
+            metrics_endpoint: None,
+            sampler_interval_ms: None,
         })
         .expect("connect")
     }

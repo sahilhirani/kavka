@@ -8,10 +8,15 @@ use kavka_core::admin::{
     self, ConfigEntry, GroupDetail, GroupInfo, GroupOffset, OffsetResetSpec, TopicConfig,
     TopicDetail, TopicInfo,
 };
+use kavka_core::alerts::{
+    self, AlertChannels, AlertEvent, AlertRule, AlertState, AlertStore, Observation,
+};
 use kavka_core::cancel::CancelToken;
 use kavka_core::connect::{ConfigValidation, ConnectorSummary};
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
 use kavka_core::consume::{self, FetchSpec, TailSession};
+use kavka_core::history::{self, GroupWindow, HistoryStore, LagSample, SamplerStatus};
+use kavka_core::metrics::{MetricPoint, MetricsCollector, MetricsStatus};
 use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
 use kavka_core::profiles::{
     export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
@@ -21,19 +26,22 @@ use kavka_core::profiles::{
 // through `admin::` everywhere rather than imported alongside this.
 use kavka_core::protocol::{
     PartitionResult, ProtocolClient, QuorumInfo, QuotaEntity, QuotaEntityPart, QuotaOp,
-    ReassignmentSpec, ReassignmentState, TopicPartition,
+    ReassignmentSpec, ReassignmentState, ShareGroupDetail, ShareGroupInfo, TopicPartition,
 };
 use kavka_core::search::{SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
 use kavka_core::sr::{CompatibilityCheck, CompatibilityInForce, RegisteredId, SubjectVersion};
+use kavka_core::streams::StreamsTopology;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
 /// How long a tail's reader waits for records before looking at the world
 /// again. Also the worst-case latency of `tail_stop` and of the `ended`
@@ -101,6 +109,17 @@ struct AppState {
     /// One kept-alive wire-protocol connection per profile — see
     /// [`ProtocolSlot`] and [`AppState::protocol_slot`].
     protocol: Mutex<HashMap<String, ProtocolSlot>>,
+    /// Alert rules, channels and incident history — `alerts.json`, beside
+    /// `profiles.json`. Local throughout: nothing here is read from or written
+    /// to a cluster, which is why the alert commands are the one surface a
+    /// read-only connection is not blocked from.
+    alerts: Arc<AlertStore>,
+    /// The lag-history files, one per profile — see [`HistoryStores`].
+    histories: Arc<HistoryStores>,
+    /// The background sampler/scraper/alert loop of each connected profile,
+    /// keyed by profile id because there is exactly one per connection — see
+    /// [`Monitor`].
+    monitors: Mutex<HashMap<String, Arc<Monitor>>>,
 }
 
 /// One profile's cached [`ProtocolClient`], or `None` when there isn't a live
@@ -273,6 +292,543 @@ impl ProfileSessions {
     }
 }
 
+// ── Monitoring: the lag sampler, the metrics scrape, and the alert loop ────
+//
+// Phase 4 adds the one thing Kafka itself does not keep: time. A broker will
+// say what the lag is now and has no idea what it was an hour ago, so the
+// history is Kavka's own — sampled while a connection is up, written to a local
+// redb file, pruned at 7 days. Everything in this section exists to make that
+// sentence true, and to make the *gaps* in it legible: a hole in a chart is a
+// hole in Kavka's attendance record, not an outage on the cluster, and
+// `sampler_status` is how a screen can tell the two apart.
+//
+// NOTHING HERE MUTATES A CLUSTER. Sampling is `ListGroups` + `OffsetFetch` +
+// `ListOffsets`, the metrics scrape is an HTTP GET at an address the user gave
+// us, and alert rules are a local file. That is why none of it is gated on
+// `ensure_writable`: a read-only connection is exactly the kind of connection
+// somebody wants to watch.
+
+/// How long a monitor waits for its first tick after the connection opens.
+///
+/// Zero, deliberately: a freshly connected cluster with an empty chart and a
+/// "next sample in 15s" is the state this whole feature exists to avoid, and
+/// the first tick is also what gives the alert evaluator something to evaluate.
+const FIRST_TICK: Duration = Duration::ZERO;
+
+/// How far the sampler's retry interval is allowed to stretch after repeated
+/// dead ticks, as a shift: `interval << 3` is eight intervals, two minutes at
+/// the default cadence.
+///
+/// **Why back off at all.** A cluster that has gone away does not fail fast —
+/// each `groups_list` spends the core's metadata timeout before it gives up, so
+/// a fixed cadence turns an outage into a thread that is permanently inside a
+/// timeout, adding load to a broker that is already in trouble and writing the
+/// same sentence into the log every fifteen seconds.
+///
+/// **Why the cap is this low.** The sampler has to notice recovery on a human
+/// timescale: every tick it skips is a gap in a chart somebody will read as
+/// "the cluster was quiet". Two minutes is the longest hole worth trading for
+/// the quiet, and a recovered cluster is sampled again within one.
+const BACKOFF_SHIFT_MAX: u32 = 3;
+
+/// The lag-history files, one redb database per profile, opened on first use.
+///
+/// **One handle per profile, process-wide.** redb takes an exclusive lock on
+/// its file, so the sampler writing and a `history_query` reading have to be the
+/// same handle — opening it twice fails, and failing on the *read* would be an
+/// empty chart for a cluster that is being sampled perfectly well.
+///
+/// **Opened lazily rather than on connect, and not closed on disconnect.**
+/// History outlives the connection that produced it: it is on disk and pruned at
+/// seven days, so the Monitoring tab can show last week for a profile nobody is
+/// connected to. The handle is only taken back when the profile is deleted,
+/// where the file has to be removable.
+struct HistoryStores {
+    dir: PathBuf,
+    open: Mutex<HashMap<String, Arc<HistoryStore>>>,
+}
+
+impl HistoryStores {
+    fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            open: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// This profile's store, opening it — and the history directory — if this
+    /// is the first use.
+    ///
+    /// Blocking: creates a directory and opens a file, so every caller is on the
+    /// blocking pool or on the monitor's own thread.
+    fn get(&self, profile_id: &str) -> kavka_core::Result<Arc<HistoryStore>> {
+        // Poison-tolerant, like the protocol slot: what this guards is a map of
+        // file handles, which a panic elsewhere cannot corrupt, and a poisoned
+        // lock would turn one failed command into a profile whose history can
+        // never be read again.
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(store) = open.get(profile_id) {
+            return Ok(Arc::clone(store));
+        }
+        std::fs::create_dir_all(&self.dir).map_err(|e| {
+            kavka_core::Error::Other(format!(
+                "Kavka couldn't create {} to keep this connection's lag history in: {e}",
+                self.dir.display()
+            ))
+        })?;
+        let store = Arc::new(HistoryStore::open(self.path_of(profile_id))?);
+        open.insert(profile_id.to_string(), Arc::clone(&store));
+        Ok(store)
+    }
+
+    /// Takes one profile's handle off the books, so the file can be removed —
+    /// an open redb database cannot be deleted on Windows.
+    fn take(&self, profile_id: &str) -> Option<Arc<HistoryStore>> {
+        self.open
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(profile_id)
+    }
+
+    fn path_of(&self, profile_id: &str) -> PathBuf {
+        history::store_path(&self.dir, profile_id)
+    }
+}
+
+/// One connected profile's background loop: sample lag, scrape metrics,
+/// evaluate the alert rules, deliver whatever fired.
+///
+/// One per connection, started by `cluster_connect` and stopped by
+/// `cluster_disconnect`, `profiles_delete` and app exit — the same lifecycle
+/// discipline as a tail, and for the same reason: a loop that outlives its
+/// connection is a client working a cluster the user has walked away from.
+struct Monitor {
+    profile_id: String,
+    interval: Duration,
+    interval_ms: u32,
+    /// `None` when the profile has no `metrics_endpoint`, which is a fully
+    /// functional connection — lag history needs no broker cooperation at all,
+    /// and the throughput charts are the only thing missing.
+    ///
+    /// The collector's 24-hour ring lives here and nowhere else: it is a window
+    /// of readings Kavka took while it was watching, not a record of the
+    /// cluster, so it goes when the connection does.
+    metrics: Option<Arc<MetricsCollector>>,
+    inner: Mutex<MonitorState>,
+    /// What makes `stop` prompt. The loop waits out its interval on this
+    /// condvar rather than sleeping, so disconnecting costs milliseconds
+    /// instead of up to a full sampling interval.
+    wake: Condvar,
+}
+
+#[derive(Default)]
+struct MonitorState {
+    running: bool,
+    stopped: bool,
+    /// The last tick whose readings actually reached the history file.
+    ///
+    /// A tick that failed does not move it, and neither does one that read the
+    /// cluster perfectly and then could not write what it read — "last sample"
+    /// has to mean a sample somebody can now go and look at, or a chart that
+    /// has stopped growing still claims to be current. A tick that found
+    /// nothing to write *does* move it: a cluster with no consumer groups, or
+    /// none that has ever committed, is a working sampler and an empty chart,
+    /// and calling that "behind" would send somebody to debug a sampler that is
+    /// doing its job.
+    last_sample_ms: Option<i64>,
+    last_error: Option<String>,
+}
+
+impl Monitor {
+    /// Builds a profile's monitor. Blocking: [`MetricsCollector::new`] resolves
+    /// the endpoint's password from the keychain, so this is only ever called
+    /// from the blocking pool (see `cluster_connect`).
+    fn for_profile(profile: &ConnectionProfile) -> Self {
+        let interval_ms = history::clamp_interval_ms(
+            profile
+                .sampler_interval_ms
+                .unwrap_or(history::DEFAULT_INTERVAL_MS),
+        );
+        Self {
+            profile_id: profile.id.clone(),
+            interval: Duration::from_millis(u64::from(interval_ms)),
+            interval_ms,
+            metrics: profile
+                .metrics_endpoint
+                .as_ref()
+                .map(|config| Arc::new(MetricsCollector::new(config))),
+            inner: Mutex::new(MonitorState::default()),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, MonitorState> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn status(&self) -> SamplerStatus {
+        let state = self.state();
+        SamplerStatus {
+            running: state.running,
+            interval_ms: self.interval_ms,
+            last_sample_ms: state.last_sample_ms,
+            last_error: state.last_error.clone(),
+        }
+    }
+
+    /// What one tick learned, for the status bar.
+    fn record(&self, sampled_ms: Option<i64>, trouble: Option<String>) {
+        let mut state = self.state();
+        if let Some(ts_ms) = sampled_ms {
+            state.last_sample_ms = Some(ts_ms);
+        }
+        state.last_error = trouble;
+    }
+
+    /// Waits out one interval, returning early the moment [`Monitor::stop`] is
+    /// called. `false` means the loop is over.
+    fn wait(&self, delay: Duration) -> bool {
+        let state = self.state();
+        let (state, _) = self
+            .wake
+            .wait_timeout_while(state, delay, |state| !state.stopped)
+            .unwrap_or_else(|e| e.into_inner());
+        !state.stopped
+    }
+
+    /// Idempotent, and safe from any thread — including one that is not the
+    /// loop's.
+    fn stop(&self) {
+        self.state().stopped = true;
+        self.wake.notify_all();
+    }
+
+    fn began(&self) {
+        self.state().running = true;
+    }
+
+    /// The loop saying it has ended. `running: false` on a connected profile is
+    /// a fact the Monitoring tab states plainly rather than a chart that simply
+    /// stops.
+    fn ended(&self) {
+        self.state().running = false;
+    }
+}
+
+/// The event name one profile's alert firings and resolutions are addressed to.
+/// Emitted to every window, so the profile id in the name is what keeps two
+/// clusters' alerts apart.
+fn alerts_event(profile_id: &str) -> String {
+    format!("kavka://alerts/{profile_id}")
+}
+
+/// One monitor's loop. Runs on its own thread — see [`spawn_emitter`], and the
+/// same argument applies twice over here: this thread is alive for as long as
+/// the connection is, so a blocking-pool slot would be a slot every keychain
+/// read and metadata fetch queues behind for hours.
+///
+/// **Nothing in here is fatal.** A tick that cannot reach the cluster, an
+/// endpoint that stopped answering, a rules file that will not parse, a webhook
+/// that refuses — each is recorded and the loop goes round again. The only way
+/// out is [`Monitor::stop`]. A sampler that dies on the first bad tick is a
+/// sampler that is not running when the incident happens, which is the only time
+/// anybody looks.
+fn run_monitor(
+    app: AppHandle,
+    monitor: Arc<Monitor>,
+    conn: Arc<ClusterConnection>,
+    histories: Arc<HistoryStores>,
+    alerts: Arc<AlertStore>,
+) {
+    let mut alert_state = AlertState::default();
+    let mut consecutive_failures: u32 = 0;
+
+    if !monitor.wait(FIRST_TICK) {
+        // Nothing can be firing yet — the first tick has not happened — but the
+        // rule is that no way out of this function leaves an incident open, and
+        // an invariant with an exception in it is one nobody can rely on.
+        close_open_incidents(&app, &alerts, &monitor.profile_id, &alert_state);
+        monitor.ended();
+        return;
+    }
+
+    loop {
+        let now_ms = history::now_ms();
+        let mut trouble: Vec<String> = Vec::new();
+        let mut samples: Vec<LagSample> = Vec::new();
+        // Whether this tick learned anything. A cluster with no consumer groups
+        // is a perfectly good tick with nothing to record; a cluster that
+        // refused every describe is not, and only the second one backs off.
+        let mut measured = false;
+        // Whether what it learned reached the disk, which is a different
+        // question with a different answer: a broker that answered and a store
+        // that refused the write are separate failures. Only the first is a
+        // reason to back off — retrying more slowly does not fix a full disk —
+        // and only this one may move `last_sample_ms`.
+        let mut recorded = false;
+
+        match histories.get(&monitor.profile_id) {
+            Ok(store) => {
+                let tick = history::sample_groups(&conn, &store);
+                if let Some(summary) = tick.run.error_summary() {
+                    trouble.push(summary);
+                }
+                measured = tick.run.groups > 0 || tick.run.errors.is_empty();
+                recorded = reached_the_disk(&tick);
+                samples = tick.samples;
+            }
+            Err(e) => trouble.push(e.to_string()),
+        }
+
+        let readings = match &monitor.metrics {
+            Some(collector) => {
+                if let Err(e) = collector.scrape(now_ms) {
+                    // Deliberately NOT `sampler_status.last_error`: the scrape
+                    // and the sampler fail independently, `metrics_status`
+                    // carries this one in the endpoint's own words, and saying
+                    // "the sampler is broken" because an exporter is down would
+                    // send somebody to debug the wrong machine.
+                    tracing::debug!("metrics scrape for {}: {e}", monitor.profile_id);
+                }
+                collector.latest(now_ms)
+            }
+            None => Vec::new(),
+        };
+
+        // The rules are re-read every tick rather than held: saving a rule has
+        // to take effect on the next sample, and the alternative is a rules
+        // editor whose changes need a reconnect to mean anything.
+        match alerts.rules(&monitor.profile_id) {
+            Ok(rules) => {
+                // Raw measurements on both sides — `SampleTick::samples` and
+                // `MetricsCollector::latest`, never the downsampled query paths
+                // — so no alert ever fires, or fails to, because of how a chart
+                // was compressed.
+                let observation = Observation {
+                    samples,
+                    metrics: readings,
+                };
+                let (next, events) = alerts::evaluate(&rules, &observation, &alert_state, now_ms);
+                alert_state = next;
+                if !events.is_empty() {
+                    let channels = alerts.channels(&monitor.profile_id).unwrap_or_default();
+                    for event in &events {
+                        raise(&app, &alerts, &monitor.profile_id, &channels, event);
+                    }
+                }
+            }
+            Err(e) => trouble.push(format!("couldn't read this connection's alert rules: {e}")),
+        }
+
+        consecutive_failures = if measured {
+            0
+        } else {
+            consecutive_failures.saturating_add(1)
+        };
+        let delay = retry_delay(monitor.interval, consecutive_failures);
+        let reported = (!trouble.is_empty()).then(|| {
+            let mut line = trouble.join(" · ");
+            if !measured {
+                // Why the chart has stopped moving, and when it will start
+                // again — the second half is the part a user can act on
+                // (docs/DESIGN.md §7).
+                line.push_str(&format!(" — trying again in {}", spoken(delay)));
+            }
+            line
+        });
+        monitor.record(recorded.then_some(now_ms), reported);
+
+        if !monitor.wait(delay) {
+            break;
+        }
+    }
+    close_open_incidents(&app, &alerts, &monitor.profile_id, &alert_state);
+    monitor.ended();
+}
+
+/// Closes out whatever was still firing when a monitor stopped.
+///
+/// An incident is a fire and a resolve carrying the same `fired_ms`. A loop
+/// that ends while a rule is firing leaves the fire on its own — and the fire
+/// on its own is not "an alert nobody resolved", it is a row the history will
+/// show as still happening forever, on a connection nobody is watching. Worse,
+/// the next connect starts from a fresh [`AlertState`], so the same rule fires
+/// again and opens a *second* one beside it. One disconnect a day is a week of
+/// them, and the count of how many times something actually happened — the
+/// question the history exists to answer — becomes unanswerable.
+///
+/// **The detail says monitoring stopped. It does not say the condition
+/// cleared,** because Kavka does not know: it stopped looking. Writing "back
+/// under the threshold" here would invent the one fact this whole feature is
+/// for, and a week later nobody could tell the invented resolve from a measured
+/// one.
+///
+/// Recorded and emitted, and deliberately nothing further. An OS notification
+/// and a webhook announce something that happened on the cluster; this happened
+/// to Kavka. Waking somebody at 3am to tell them a laptop went to sleep is how
+/// a person learns to ignore the channel that matters.
+fn close_open_incidents(app: &AppHandle, store: &AlertStore, profile_id: &str, state: &AlertState) {
+    if state.firing().is_empty() {
+        return;
+    }
+    // One read for the names. A rule deleted since it fired cannot appear here
+    // — `evaluate` drops the state along with the rule — but the file can still
+    // refuse to be read, and an incident closed under its own id is worth more
+    // than one left open because its name was unavailable.
+    let rules = store.rules(profile_id).unwrap_or_default();
+    for event in closing_events(&rules, state, history::now_ms()) {
+        if let Err(e) = store.record_event(profile_id, &event) {
+            tracing::warn!("closing alert {} for {profile_id}: {e}", event.rule_id);
+        }
+        if let Err(e) = app.emit(&alerts_event(profile_id), event.clone()) {
+            tracing::warn!(
+                "emitting the close of alert {} for {profile_id}: {e}",
+                event.rule_id
+            );
+        }
+    }
+}
+
+/// The resolves a stopped monitor owes its history: one per firing rule,
+/// quoting the `fired_ms` of the incident it closes.
+///
+/// The arithmetic half of [`close_open_incidents`], with neither the store nor
+/// the app in it — so what a synthesised resolve actually says is testable
+/// without a running desktop.
+fn closing_events(rules: &[AlertRule], state: &AlertState, now_ms: i64) -> Vec<AlertEvent> {
+    state
+        .firing()
+        .into_iter()
+        .map(|(rule_id, fired_ms)| AlertEvent {
+            rule_id: rule_id.to_string(),
+            // A rule with no name in the file is a rule the file could not be
+            // read for; its id is a worse label than its name and a far better
+            // one than nothing.
+            rule_name: rules
+                .iter()
+                .find(|rule| rule.id() == rule_id)
+                .map_or_else(|| rule_id.to_string(), |rule| rule.name().to_string()),
+            fired_ms,
+            resolved_ms: Some(now_ms),
+            detail: "Kavka stopped monitoring this connection while this rule was firing, so \
+                     the incident ends here. Whether the condition itself cleared is not \
+                     something Kavka can say — it stopped watching."
+                .to_string(),
+        })
+        .collect()
+}
+
+/// Whether one tick's readings actually reached the history file — the whole
+/// of what [`MonitorState::last_sample_ms`] is allowed to move on.
+///
+/// Three cases, and the middle one is the bug this exists to keep out:
+///
+/// - **Samples were committed** (`written > 0`): a reading somebody can now go
+///   and look at. Yes.
+/// - **Nothing failed and there was nothing to write**: also yes. A cluster
+///   with no consumer groups, or none that has ever committed an offset, is a
+///   working sampler and an empty chart, and calling that "behind" sends
+///   somebody to debug a sampler that is doing its job.
+/// - **Anything else** — a describe that failed, an append the store refused, a
+///   store that would not open: no. A tick that read the cluster perfectly and
+///   then lost what it read has not taken a sample, whatever the brokers did,
+///   and `written` staying at zero is exactly how [`history::SampleRun`] says
+///   so. The failure itself reaches the user through `last_error`, which the
+///   caller fills from the same run's `error_summary`.
+fn reached_the_disk(tick: &history::SampleTick) -> bool {
+    tick.run.written > 0 || (tick.samples.is_empty() && tick.run.errors.is_empty())
+}
+
+/// How long to wait before the next tick, after `consecutive_failures` dead
+/// ones in a row (`0` while everything is working).
+///
+/// The FIRST failure retries at the normal cadence — a single dead tick is a
+/// rebalance or a blip, and slowing down for it would put a hole in the chart
+/// for something that was over before the next sample would have been. It is
+/// the second and later ones that double, up to [`BACKOFF_SHIFT_MAX`].
+fn retry_delay(interval: Duration, consecutive_failures: u32) -> Duration {
+    interval
+        * (1 << consecutive_failures
+            .saturating_sub(1)
+            .min(BACKOFF_SHIFT_MAX))
+}
+
+/// A retry delay as a person would say it. Whole units only: "in 1 min 45 s"
+/// is precision about something nobody is timing.
+fn spoken(delay: Duration) -> String {
+    let seconds = delay.as_secs();
+    if seconds < 90 {
+        format!("{seconds}s")
+    } else {
+        format!("{} min", (seconds + 30) / 60)
+    }
+}
+
+/// One alert event on its way to every channel the profile has.
+///
+/// **Ordered by what must not be lost.** The incident is recorded first, so a
+/// panel that refetches its history when the event arrives finds it there; the
+/// in-app event goes second; the OS toast third; the webhook last, because it is
+/// the only step that can block for seconds and it must not delay the three
+/// that cannot.
+///
+/// Every step is best-effort and none of them can cost the loop. A webhook that
+/// does not answer is a thing to notice in the log, not a reason for the alert
+/// to stop existing — it is already recorded, already on screen and already on
+/// the desktop.
+fn raise(
+    app: &AppHandle,
+    store: &AlertStore,
+    profile_id: &str,
+    channels: &AlertChannels,
+    event: &AlertEvent,
+) {
+    if let Err(e) = store.record_event(profile_id, event) {
+        tracing::warn!("recording alert {} for {profile_id}: {e}", event.rule_id);
+    }
+    if let Err(e) = app.emit(&alerts_event(profile_id), event.clone()) {
+        tracing::warn!("emitting alert {} for {profile_id}: {e}", event.rule_id);
+    }
+    if channels.os_notification {
+        notify(app, event);
+    }
+    // The URL never reaches this line: the core's message names the host and
+    // nothing else, deliberately — a Slack incoming webhook is a bearer
+    // credential in path form, and a log line ends up in a screenshot.
+    if let Some(refused) = alerts::deliver(channels, event) {
+        tracing::warn!("alert webhook for {profile_id}: {refused}");
+    }
+}
+
+/// The desktop notification for one event.
+///
+/// Title and body rather than one sentence, because that is the native shape —
+/// and the rule's own name goes in the title because it is what the user wrote
+/// and what they will recognise at 3am (docs/DESIGN.md §7). A resolve says so in
+/// the title for the same reason: the two have to be tellable apart from a
+/// glance at a corner of the screen.
+///
+/// A refusal is logged and not retried. The OS is entitled to say no — the
+/// notification centre is off, permission was withdrawn, the session is not
+/// interactive — and none of that is a reason to lose an alert that is already
+/// recorded and already at the webhook.
+fn notify(app: &AppHandle, event: &AlertEvent) {
+    let title = if event.is_resolved() {
+        format!("{} cleared", event.rule_name)
+    } else {
+        event.rule_name.clone()
+    };
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(event.detail.clone())
+        .show()
+    {
+        tracing::warn!("OS notification for alert {}: {e}", event.rule_id);
+    }
+}
+
 impl AppState {
     fn connection(&self, profile_id: &str) -> CmdResult<Arc<ClusterConnection>> {
         self.connections
@@ -303,10 +859,73 @@ impl AppState {
     /// same reason, and it is holding a blocking-pool slot besides.
     fn take_sessions_of(&self, profile_id: &str) -> ProfileSessions {
         self.cancel_fetch(profile_id);
+        // The monitor goes with them. It is not carried back for an off-loop
+        // drop like the others because dropping this handle joins nothing: the
+        // loop runs on a detached thread that holds its own reference, and
+        // `stop` is what ends it.
+        drop(self.take_monitor(profile_id));
         ProfileSessions {
             tails: self.tails.take_of(profile_id),
             searches: self.searches.take_of(profile_id),
             bulks: self.bulks.take_of(profile_id),
+        }
+    }
+
+    /// This profile's monitor, if it is connected.
+    fn monitor(&self, profile_id: &str) -> Option<Arc<Monitor>> {
+        self.monitors.lock().unwrap().get(profile_id).cloned()
+    }
+
+    /// Takes one profile's monitor off the books and asks it to finish.
+    fn take_monitor(&self, profile_id: &str) -> Option<Arc<Monitor>> {
+        let monitor = self.monitors.lock().unwrap().remove(profile_id)?;
+        monitor.stop();
+        Some(monitor)
+    }
+
+    /// Puts a freshly built monitor on the books and starts its loop.
+    ///
+    /// A reconnect replaces whatever was there and stops it first: the old loop
+    /// is sampling over a connection authenticated with the profile as it was
+    /// before the edit, and two loops writing one history file would double
+    /// every series.
+    fn start_monitor(
+        &self,
+        app: &AppHandle,
+        monitor: &Arc<Monitor>,
+        conn: &Arc<ClusterConnection>,
+    ) {
+        let replaced = self
+            .monitors
+            .lock()
+            .unwrap()
+            .insert(monitor.profile_id.clone(), Arc::clone(monitor));
+        if let Some(previous) = replaced {
+            previous.stop();
+        }
+        monitor.began();
+        let started = spawn_emitter("kavka-monitor", {
+            let app = app.clone();
+            let monitor = Arc::clone(monitor);
+            let conn = Arc::clone(conn);
+            let histories = Arc::clone(&self.histories);
+            let alerts = Arc::clone(&self.alerts);
+            move || run_monitor(app, monitor, conn, histories, alerts)
+        });
+        if let Err(e) = started {
+            // The connection is fine and the cluster screens all work; the only
+            // thing missing is the history, and `sampler_status` is where a
+            // screen goes to find that out. Nothing to close out here: the loop
+            // never ran, so no rule of this profile's has fired yet and
+            // `close_open_incidents` would have nothing to close.
+            monitor.ended();
+            monitor.record(
+                None,
+                Some(format!(
+                    "Kavka couldn't start the sampler for this connection: {e}. Disconnect and \
+                     connect again to retry."
+                )),
+            );
         }
     }
 
@@ -402,6 +1021,12 @@ impl AppState {
         self.tails.stop_all();
         self.searches.stop_all();
         self.bulks.stop_all();
+        // The monitors too: each is a thread holding a librdkafka client and a
+        // redb write handle, and each is woken by this rather than joined —
+        // quitting must never wait on a broker.
+        for monitor in self.monitors.lock().unwrap().values() {
+            monitor.stop();
+        }
     }
 }
 
@@ -611,14 +1236,21 @@ async fn profiles_save(state: State<'_, AppState>, profile: ConnectionProfile) -
 async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdResult<()> {
     // A session that outlives the profile it belongs to is a client working a
     // cluster the user just deleted, feeding a view that can never be reopened.
+    // `take_sessions_of` stops the monitor too, so nothing is still sampling
+    // into a history file that is about to be removed.
     let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
     let protocol = state.take_protocol(&profile_id);
+    let history = state.histories.take(&profile_id);
+    let history_path = state.histories.path_of(&profile_id);
+    let histories = Arc::clone(&state.histories);
+    let alerts = Arc::clone(&state.alerts);
     let store = state.store.clone();
     blocking(move || {
         drop(sessions); // joins each worker thread, off the event loop
         drop(conn); // librdkafka client destroy, off the event loop
         drop(protocol); // and the kept-alive wire-protocol socket
+        drop(history); // and the redb handle, so the file can be removed
 
         // Read the profile BEFORE it is deleted, for the secrets no constant
         // can name. A Connect cluster's password entry is
@@ -650,6 +1282,19 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
         for entry in connect_entries {
             let _ = kavka_core::secrets::delete(&entry);
         }
+        // And the same argument a third time, for the two local files that are
+        // not secrets but are just as much about a cluster the user can no
+        // longer see: this profile's alert rules, channels and incident
+        // history, and its week of lag samples.
+        let _ = alerts.forget_profile(&profile_id);
+        // Taken a second time on purpose. Stopping the monitor does not join
+        // its thread, so a tick that was already in flight can have reopened
+        // the handle between the two lines above and this one. If the file is
+        // still locked the removal fails and is left alone: an orphaned history
+        // file is local, unreachable (its name is derived from a profile id
+        // that no longer exists) and never written to again.
+        drop(histories.take(&profile_id));
+        let _ = std::fs::remove_file(&history_path);
         Ok(())
     })
     .await
@@ -696,12 +1341,17 @@ async fn secret_exists(entry: String) -> CmdResult<bool> {
 
 #[tauri::command]
 async fn cluster_connect(
+    app: AppHandle,
     state: State<'_, AppState>,
     profile_id: String,
 ) -> CmdResult<ClusterOverview> {
     let store = state.store.clone();
     let id = profile_id.clone();
-    let (conn, overview) = blocking(move || {
+    // The monitor is built here, on the same blocking task, because building it
+    // reads the metrics endpoint's password out of the keychain — and a
+    // keychain read on the event loop is the one thing this file's header
+    // forbids.
+    let (conn, overview, monitor) = blocking(move || {
         let profile = store
             .list()?
             .into_iter()
@@ -709,9 +1359,15 @@ async fn cluster_connect(
             .ok_or_else(|| kavka_core::Error::Other(format!("unknown profile: {id}")))?;
         let conn = ClusterConnection::connect(profile)?;
         let overview = conn.overview()?;
-        Ok((Arc::new(conn), overview))
+        let monitor = Arc::new(Monitor::for_profile(conn.profile()));
+        Ok((Arc::new(conn), overview, monitor))
     })
     .await?;
+
+    // Sampling starts with the connection and stops with it: history is only
+    // ever collected while somebody has this cluster open, which is the fact
+    // every gap in every chart has to be read against.
+    state.start_monitor(&app, &monitor, &conn);
 
     // The cached protocol socket belongs to the connection being replaced: it
     // was authenticated with the profile as it was when it opened, so a
@@ -733,7 +1389,14 @@ async fn cluster_disconnect(state: State<'_, AppState>, profile_id: String) -> C
     // Sessions first: each owns its own client, so disconnecting without them
     // leaves tails emitting into a UI that thinks it is offline, searches
     // fetching, and bulk runs still writing. The same argument applies to a
-    // fetch that is still polling.
+    // fetch that is still polling — and to the monitor, which `take_sessions_of`
+    // stops with them. Sampling is a thing Kavka does *while you are watching a
+    // cluster*, and a sampler that outlived the disconnect would keep a broker
+    // answering `ListGroups` for a window nobody has open.
+    //
+    // The history file itself stays open and stays put: it is on disk, pruned at
+    // seven days, and the Monitoring tab can read last week for a profile nobody
+    // is connected to. Only deleting the profile takes it away.
     let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
     // The kept-alive protocol socket goes with them, for the same reason: it is
@@ -1590,6 +2253,323 @@ async fn sr_set_compat(
     blocking(move || kavka_core::sr::set_compatibility(&conn, subject.as_deref(), &level)).await
 }
 
+// ── Lag history ────────────────────────────────────────────────────────────
+//
+// Read straight off the disk store rather than through the connection, and that
+// is the whole point: the samples are Kavka's, not the cluster's, so a profile
+// nobody is connected to still has last week to show. Neither command asks
+// `AppState::connection` for anything, and neither one can fail because a
+// broker is down.
+
+/// One group's lag over a window, downsampled in core to at most `max_points`
+/// **per partition** — keeping the highest-lag point in each bucket, so a spike
+/// that lasted one sample survives every zoom level.
+#[tauri::command]
+async fn history_query(
+    state: State<'_, AppState>,
+    profile_id: String,
+    group_id: String,
+    topic: Option<String>,
+    from_ms: i64,
+    to_ms: i64,
+    max_points: u32,
+) -> CmdResult<Vec<LagSample>> {
+    let histories = Arc::clone(&state.histories);
+    blocking(move || {
+        histories
+            .get(&profile_id)?
+            .query(&group_id, topic.as_deref(), from_ms, to_ms, max_points)
+    })
+    .await
+}
+
+/// Which groups this profile has history for, and the window each one covers.
+#[tauri::command]
+async fn history_groups(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<Vec<GroupWindow>> {
+    let histories = Arc::clone(&state.histories);
+    blocking(move || histories.get(&profile_id)?.groups()).await
+}
+
+/// What the sampler is doing for this profile right now.
+///
+/// A profile with no monitor is not an error — it is a profile nobody is
+/// connected to, and `running: false` is the honest answer. The interval still
+/// comes off the profile so a screen can say how often sampling *would* happen
+/// without being wrong about a cluster configured to sample every minute.
+#[tauri::command]
+async fn sampler_status(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<SamplerStatus> {
+    if let Some(monitor) = state.monitor(&profile_id) {
+        return Ok(monitor.status());
+    }
+    let store = state.store.clone();
+    blocking(move || {
+        let interval_ms = store
+            .list()?
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+            .and_then(|profile| profile.sampler_interval_ms)
+            .map_or(history::DEFAULT_INTERVAL_MS, history::clamp_interval_ms);
+        Ok(SamplerStatus {
+            running: false,
+            interval_ms,
+            last_sample_ms: None,
+            last_error: None,
+        })
+    })
+    .await
+}
+
+// ── Broker metrics ─────────────────────────────────────────────────────────
+//
+// In memory only, and only while the connection is open — the collector's
+// 24-hour ring belongs to the monitor. A profile with no monitor therefore has
+// no readings, which is a state to describe rather than an error to raise: the
+// panel has four states to tell apart (never configured / configured but not
+// scraping / unreachable / answering with nothing Kavka recognises) and
+// collapsing any of them into "no data" sends somebody to debug the wrong
+// machine.
+
+/// One series over a window. An unknown series — or a profile that is not
+/// being scraped — is empty rather than an error, for the same reason the core
+/// answers an unknown series with no points: a saved chart naming a series a
+/// rebuilt exporter no longer exposes should go blank, not break the screen.
+#[tauri::command]
+async fn metrics_query(
+    state: State<'_, AppState>,
+    profile_id: String,
+    series: String,
+    from_ms: i64,
+    to_ms: i64,
+    max_points: u32,
+) -> CmdResult<Vec<MetricPoint>> {
+    let Some(collector) = state
+        .monitor(&profile_id)
+        .and_then(|monitor| monitor.metrics.clone())
+    else {
+        return Ok(Vec::new());
+    };
+    // On the blocking pool rather than inline: the collector's window is behind
+    // a lock the monitor thread holds while it folds a scrape.
+    blocking(move || Ok(collector.query(&series, from_ms, to_ms, max_points))).await
+}
+
+#[tauri::command]
+async fn metrics_status(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<MetricsStatus> {
+    if let Some(monitor) = state.monitor(&profile_id) {
+        return match monitor.metrics.clone() {
+            Some(collector) => blocking(move || Ok(collector.status())).await,
+            // Connected, and this cluster simply has no endpoint. Lag history
+            // works without one.
+            None => Ok(MetricsStatus::unconfigured()),
+        };
+    }
+    let store = state.store.clone();
+    blocking(move || {
+        let configured = store
+            .list()?
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+            .and_then(|profile| profile.metrics_endpoint)
+            .is_some();
+        if !configured {
+            return Ok(MetricsStatus::unconfigured());
+        }
+        Ok(MetricsStatus {
+            configured: true,
+            reachable: false,
+            last_scrape_ms: None,
+            last_error: Some(
+                "Kavka scrapes this endpoint only while the connection is open. Connect to this \
+                 cluster to start collecting."
+                    .into(),
+            ),
+            series_available: Vec::new(),
+        })
+    })
+    .await
+}
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+//
+// Local throughout: rules, channels and incident history live in `alerts.json`
+// beside `profiles.json`, and none of these commands touches a cluster. That is
+// why none of them asks for a connection and none of them is read-only-gated —
+// watching a cluster you are not allowed to write to is the ordinary case.
+
+#[tauri::command]
+async fn alerts_list(state: State<'_, AppState>, profile_id: String) -> CmdResult<Vec<AlertRule>> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.rules(&profile_id)).await
+}
+
+/// Upsert by `rule.id` — the editor's "save" is one call whether the rule is
+/// new or not. The running monitor re-reads the rules every tick, so a saved
+/// rule is in force at the next sample without a reconnect.
+#[tauri::command]
+async fn alerts_save(
+    state: State<'_, AppState>,
+    profile_id: String,
+    rule: AlertRule,
+) -> CmdResult<()> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.save_rule(&profile_id, rule)).await
+}
+
+#[tauri::command]
+async fn alerts_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    rule_id: String,
+) -> CmdResult<()> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.delete_rule(&profile_id, &rule_id)).await
+}
+
+/// The most recent incidents, newest first. A fire and its resolution are one
+/// row, not two — `resolved_ms` is what tells them apart.
+#[tauri::command]
+async fn alerts_history(
+    state: State<'_, AppState>,
+    profile_id: String,
+    limit: u32,
+) -> CmdResult<Vec<AlertEvent>> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.history(&profile_id, limit)).await
+}
+
+#[tauri::command]
+async fn alerts_channels_get(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<AlertChannels> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.channels(&profile_id)).await
+}
+
+#[tauri::command]
+async fn alerts_channels_set(
+    state: State<'_, AppState>,
+    profile_id: String,
+    channels: AlertChannels,
+) -> CmdResult<()> {
+    let alerts = Arc::clone(&state.alerts);
+    blocking(move || alerts.set_channels(&profile_id, channels)).await
+}
+
+/// Sends one test firing through whatever channels this profile has.
+///
+/// **Not in the Phase 4 IPC contract — added deliberately rather than
+/// smuggled.** A webhook is the one part of alerting that cannot be verified
+/// after the fact: the wrong body shape at the right URL fails silently at the
+/// far end, and the failure surfaces during the incident the alert was for. The
+/// only honest test is the request Kavka will really send, from the process that
+/// will really send it, which is this one.
+///
+/// The test event is delivered and **not recorded**: it is not an incident, and
+/// a history that lists it is a history somebody has to learn to discount. The
+/// webhook's refusal is returned rather than logged, because here — unlike in
+/// the loop — somebody is standing in front of it waiting to be told.
+#[tauri::command]
+async fn alerts_channels_test(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<()> {
+    let alerts = Arc::clone(&state.alerts);
+    let id = profile_id.clone();
+    let channels = blocking(move || alerts.channels(&id)).await?;
+
+    let has_webhook = channels
+        .webhook_url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty());
+    if !channels.os_notification && !has_webhook {
+        return Err(
+            "There's nowhere to send a test yet. Turn on the desktop notification, or \
+                    add a webhook address, then test again."
+                .into(),
+        );
+    }
+
+    let event = AlertEvent {
+        rule_id: "kavka-test".into(),
+        rule_name: "Test alert".into(),
+        fired_ms: history::now_ms(),
+        resolved_ms: None,
+        detail: "Kavka sent this from the alert settings. No rule fired.".into(),
+    };
+    if channels.os_notification {
+        notify(&app, &event);
+    }
+    if !has_webhook {
+        return Ok(());
+    }
+    // Off the event loop: a webhook that does not answer holds this for the
+    // core's five-second timeout.
+    let refused = tauri::async_runtime::spawn_blocking(move || alerts::deliver(&channels, &event))
+        .await
+        .map_err(|e| e.to_string())?;
+    match refused {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
+// ── Share groups (KIP-932) ─────────────────────────────────────────────────
+//
+// Wire protocol, not librdkafka: these three APIs have no client-library
+// binding, and the core's negotiation refuses by naming the broker feature
+// (`share.version`) rather than reporting an unknown API key.
+
+#[tauri::command]
+async fn share_groups_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<Vec<ShareGroupInfo>> {
+    protocol_call(&state, &profile_id, ProtocolClient::share_groups_list).await
+}
+
+#[tauri::command]
+async fn share_group_detail(
+    state: State<'_, AppState>,
+    profile_id: String,
+    group_id: String,
+) -> CmdResult<ShareGroupDetail> {
+    protocol_call(&state, &profile_id, move |client| {
+        client.share_group_detail(&group_id)
+    })
+    .await
+}
+
+// ── Kafka Streams topology (inferred) ──────────────────────────────────────
+
+/// The shape of the Streams application behind one consumer group, as far as it
+/// can be worked out.
+///
+/// Two ordinary reads — the group's members and the cluster's topic list — and
+/// then arithmetic on Kafka's internal-topic naming convention. Nothing about a
+/// Streams topology is published by a broker, so the answer carries `inferred:
+/// true` and its own list of what the inference cannot know, and the view is
+/// required to show every caveat.
+#[tauri::command]
+async fn streams_topology(
+    state: State<'_, AppState>,
+    profile_id: String,
+    group_id: String,
+) -> CmdResult<StreamsTopology> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::streams::topology(&conn, &group_id)).await
+}
+
 // ── Export ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -1747,8 +2727,21 @@ pub fn run() {
         // granted (capabilities/default.json): the shell writes files the user
         // named, and nothing in Kavka opens one.
         .plugin(tauri_plugin_dialog::init())
+        // The Rust half of the notification plugin, for one job: an alert that
+        // fires while Kavka is behind another window still has to reach the
+        // person. Granted `notification:default` in capabilities/default.json,
+        // and every toast is sent from Rust — the webview never asks for one.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
+            // Alert rules sit beside profiles.json in the config dir; the
+            // history databases go in the DATA dir, because a week of samples
+            // is data the app produced rather than configuration the user
+            // wrote, and it is the one thing here that can reach a gigabyte.
+            let alerts = Arc::new(AlertStore::new(dir.clone()));
+            let histories = Arc::new(HistoryStores::new(
+                app.path().app_data_dir()?.join("history"),
+            ));
             app.manage(AppState {
                 store: Arc::new(ProfileStore::new(dir)),
                 connections: Mutex::new(HashMap::new()),
@@ -1758,6 +2751,9 @@ pub fn run() {
                 ready: Mutex::new(HashMap::new()),
                 fetches: Mutex::new(HashMap::new()),
                 protocol: Mutex::new(HashMap::new()),
+                alerts,
+                histories,
+                monitors: Mutex::new(HashMap::new()),
                 id_seq: AtomicU64::new(0),
                 id_epoch: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1818,6 +2814,21 @@ pub fn run() {
             sr_register,
             sr_get_compat,
             sr_set_compat,
+            history_query,
+            history_groups,
+            sampler_status,
+            metrics_query,
+            metrics_status,
+            alerts_list,
+            alerts_save,
+            alerts_delete,
+            alerts_history,
+            alerts_channels_get,
+            alerts_channels_set,
+            alerts_channels_test,
+            share_groups_list,
+            share_group_detail,
+            streams_topology,
             export_records,
         ])
         .build(tauri::generate_context!())
@@ -1836,13 +2847,17 @@ pub fn run() {
 }
 
 /// The shell is a bridge, so there is almost nothing here to test — every
-/// command hands its arguments to the core and its answer back. The exception
-/// is the export writer, which is the one place the shell decides what bytes a
-/// user ends up with, and a quoting bug there is a corrupted file rather than a
-/// visible error.
+/// command hands its arguments to the core and its answer back. There are two
+/// exceptions, and they are the two places the shell decides something rather
+/// than forwarding it: the export writer, where a quoting bug is a corrupted
+/// file rather than a visible error, and the monitor loop's own arithmetic —
+/// how long it waits after a failure, what it calls a failure, and what it
+/// publishes while it is doing so. Everything the loop *does* (sampling,
+/// scraping, evaluating) belongs to the core and is tested there.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kavka_core::profiles::{AuthConfig, Environment, MetricsEndpointConfig};
     use kavka_core::serdes::{DecodedPayload, Encoding, HeaderEntry};
 
     fn payload(text: &str) -> DecodedPayload {
@@ -2013,5 +3028,351 @@ mod tests {
         assert!(message.contains("export.csv"), "{message}");
         // What to do next, not just what failed (docs/DESIGN.md §7).
         assert!(message.contains("Pick another location"), "{message}");
+    }
+
+    // ── The monitor ────────────────────────────────────────────────────────
+
+    fn profile(id: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.into(),
+            name: "Orders".into(),
+            environment: Environment::Dev,
+            bootstrap_servers: vec!["localhost:9092".into()],
+            auth: AuthConfig::Plaintext,
+            read_only: false,
+            schema_registry: None,
+            connect_clusters: Vec::new(),
+            // No endpoint on purpose: building a collector for one would read
+            // the keychain, and a unit test must not touch the machine's.
+            metrics_endpoint: None,
+            sampler_interval_ms: None,
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kavka-shell-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The contract's event name, letter for letter — the UI builds the same
+    /// string in `alertsEventName`, and a mismatch is alerts that fire into
+    /// nothing.
+    #[test]
+    fn alerts_are_addressed_to_the_profile() {
+        assert_eq!(alerts_event("p-1"), "kavka://alerts/p-1");
+    }
+
+    /// A working sampler, and a single blip, both wait one interval. The point
+    /// of the second row is the point of the whole function: backing off after
+    /// one dead tick would put a hole in the chart for a rebalance.
+    #[test]
+    fn one_dead_tick_does_not_slow_the_sampler_down() {
+        let interval = Duration::from_secs(15);
+        assert_eq!(retry_delay(interval, 0), interval);
+        assert_eq!(retry_delay(interval, 1), interval);
+    }
+
+    #[test]
+    fn repeated_failures_double_the_wait_and_then_stop_doubling() {
+        let interval = Duration::from_secs(15);
+        assert_eq!(retry_delay(interval, 2), Duration::from_secs(30));
+        assert_eq!(retry_delay(interval, 3), Duration::from_secs(60));
+        assert_eq!(retry_delay(interval, 4), Duration::from_secs(120));
+        // The cap: a sampler that waited longer than this would leave a gap
+        // somebody reads as "the cluster was quiet".
+        assert_eq!(retry_delay(interval, 50), Duration::from_secs(120));
+        assert_eq!(retry_delay(interval, u32::MAX), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn a_retry_is_spoken_in_whole_units() {
+        assert_eq!(spoken(Duration::from_secs(15)), "15s");
+        assert_eq!(spoken(Duration::from_secs(60)), "60s");
+        assert_eq!(spoken(Duration::from_secs(120)), "2 min");
+        assert_eq!(spoken(Duration::from_secs(300)), "5 min");
+    }
+
+    /// An absent interval is the core's default, and a too-fast one is clamped
+    /// rather than refused — a profile hand-edited to 1ms should sample a
+    /// little less often than asked, not stop sampling.
+    #[test]
+    fn the_sampler_interval_comes_off_the_profile_and_is_clamped() {
+        let mut fixture = profile("p-1");
+        assert_eq!(
+            Monitor::for_profile(&fixture).interval_ms,
+            kavka_core::history::DEFAULT_INTERVAL_MS
+        );
+
+        fixture.sampler_interval_ms = Some(60_000);
+        let monitor = Monitor::for_profile(&fixture);
+        assert_eq!(monitor.interval_ms, 60_000);
+        assert_eq!(monitor.interval, Duration::from_secs(60));
+
+        fixture.sampler_interval_ms = Some(1);
+        assert_eq!(
+            Monitor::for_profile(&fixture).interval_ms,
+            kavka_core::history::MIN_INTERVAL_MS
+        );
+    }
+
+    /// A profile with no endpoint has no collector, which is what makes
+    /// `metrics_status` answer `unconfigured` rather than "unreachable" — a
+    /// cluster nobody has given Kavka an exporter for is not a broken one.
+    #[test]
+    fn no_metrics_endpoint_means_no_collector() {
+        assert!(Monitor::for_profile(&profile("p-1")).metrics.is_none());
+        let mut configured = profile("p-2");
+        configured.metrics_endpoint = Some(MetricsEndpointConfig {
+            url: "http://broker-1:9404/metrics".into(),
+            // Anonymous, so building this cannot reach the keychain.
+            username: None,
+            password: None,
+        });
+        assert!(Monitor::for_profile(&configured).metrics.is_some());
+    }
+
+    /// Before the loop starts and after it ends, the status says so. The
+    /// Monitoring tab states `running: false` on a connected profile plainly,
+    /// because a chart that simply stops is indistinguishable from a cluster
+    /// that went quiet.
+    #[test]
+    fn a_monitor_publishes_whether_it_is_running() {
+        let monitor = Monitor::for_profile(&profile("p-1"));
+        let idle = monitor.status();
+        assert!(!idle.running);
+        assert_eq!(idle.interval_ms, kavka_core::history::DEFAULT_INTERVAL_MS);
+        assert!(idle.last_sample_ms.is_none());
+        assert!(idle.last_error.is_none());
+
+        monitor.began();
+        assert!(monitor.status().running);
+        monitor.ended();
+        assert!(!monitor.status().running);
+    }
+
+    /// A failed tick must not move `last_sample_ms` — "last sample" has to mean
+    /// the last sample, or a chart that stopped updating still claims to be
+    /// current — and a tick that works clears the error rather than leaving
+    /// yesterday's failure on screen.
+    #[test]
+    fn a_failed_tick_reports_itself_without_claiming_a_sample() {
+        let monitor = Monitor::for_profile(&profile("p-1"));
+        monitor.record(Some(1_000), None);
+        monitor.record(None, Some("couldn't list consumer groups".into()));
+        let after = monitor.status();
+        assert_eq!(after.last_sample_ms, Some(1_000));
+        assert_eq!(
+            after.last_error.as_deref(),
+            Some("couldn't list consumer groups")
+        );
+
+        monitor.record(Some(2_000), None);
+        let recovered = monitor.status();
+        assert_eq!(recovered.last_sample_ms, Some(2_000));
+        assert!(recovered.last_error.is_none());
+    }
+
+    /// `last_sample_ms` means "when Kavka last got a reading onto disk", and
+    /// the case that matters is the middle one: the brokers answered, the store
+    /// refused the write, and a status line reading "last reading 5s ago" beside
+    /// a chart that has not grown since yesterday is the lie this prevents.
+    #[test]
+    fn a_tick_claims_a_sample_only_when_one_reached_the_disk() {
+        fn tick(written: usize, samples: usize, errors: &[&str]) -> history::SampleTick {
+            let sample = LagSample {
+                ts_ms: 1_000,
+                group_id: "checkout".into(),
+                topic: "orders.v2".into(),
+                partition: 0,
+                committed: Some(10),
+                end_offset: 12,
+                lag: Some(2),
+            };
+            history::SampleTick {
+                run: history::SampleRun {
+                    ts_ms: 1_000,
+                    groups: 1,
+                    written,
+                    errors: errors.iter().map(|e| (*e).to_string()).collect(),
+                },
+                samples: vec![sample; samples],
+            }
+        }
+
+        // Samples on disk, with or without a group that could not be described
+        // alongside them.
+        assert!(reached_the_disk(&tick(40, 40, &[])));
+        assert!(reached_the_disk(&tick(
+            40,
+            40,
+            &["orders: authorization failed"]
+        )));
+
+        // The whole point: the cluster answered and the write did not.
+        assert!(
+            !reached_the_disk(&tick(0, 40, &["couldn't commit the samples: disk full"])),
+            "a tick that lost what it read has not taken a sample"
+        );
+
+        // A cluster with nothing to record is a working sampler...
+        assert!(reached_the_disk(&tick(0, 0, &[])));
+        // ...and one that refused every describe is not.
+        assert!(!reached_the_disk(&tick(
+            0,
+            0,
+            &["couldn't list consumer groups: timed out"]
+        )));
+    }
+
+    /// A rule that is firing when the loop stops gets a resolve, and that
+    /// resolve belongs to the incident that is open — same `fired_ms`, which is
+    /// what makes `record_event` close the row rather than write a second one.
+    /// Without it the history shows an incident that never ended, and every
+    /// reconnect opens another beside it.
+    #[test]
+    fn a_stopped_monitor_closes_the_incidents_it_leaves_firing() {
+        let rules = vec![
+            AlertRule::UnderReplicated {
+                id: "r1".into(),
+                name: "Replicas falling behind".into(),
+                for_ms: 0,
+            },
+            AlertRule::OfflinePartitions {
+                id: "r2".into(),
+                name: "Partitions with no leader".into(),
+            },
+        ];
+        // Only the first rule's condition holds, so only the first fires.
+        let observation = Observation {
+            samples: Vec::new(),
+            metrics: vec![
+                ("under_replicated_partitions".to_string(), 3.0),
+                ("offline_partitions".to_string(), 0.0),
+            ],
+        };
+        let (state, fired) = alerts::evaluate(&rules, &observation, &AlertState::default(), 1_000);
+        assert_eq!(fired.len(), 1, "{fired:#?}");
+
+        let closing = closing_events(&rules, &state, 9_000);
+        assert_eq!(
+            closing.len(),
+            1,
+            "one resolve per FIRING rule: {closing:#?}"
+        );
+        let event = &closing[0];
+        assert_eq!(event.rule_id, "r1");
+        assert_eq!(event.rule_name, "Replicas falling behind");
+        assert_eq!(
+            event.fired_ms, 1_000,
+            "the resolve carries the fire's own instant, or it opens a second \
+             incident instead of closing this one"
+        );
+        assert_eq!(event.resolved_ms, Some(9_000));
+        assert!(event.is_resolved());
+        // Honesty: monitoring stopped is what happened. Whether the condition
+        // cleared is the one thing Kavka cannot say here.
+        assert!(
+            event.detail.contains("stopped monitoring"),
+            "{}",
+            event.detail
+        );
+
+        // Nothing firing, nothing to close — the ordinary case, on every
+        // disconnect of a healthy cluster.
+        assert!(closing_events(&rules, &AlertState::default(), 9_000).is_empty());
+    }
+
+    /// The rules file is read for a name, not for permission to close the
+    /// incident: a file that will not parse must not leave the history with an
+    /// incident that never ends.
+    #[test]
+    fn an_incident_is_closed_even_when_its_rule_cannot_be_named() {
+        let rules = vec![AlertRule::UnderReplicated {
+            id: "r1".into(),
+            name: "Replicas falling behind".into(),
+            for_ms: 0,
+        }];
+        let observation = Observation {
+            samples: Vec::new(),
+            metrics: vec![("under_replicated_partitions".to_string(), 1.0)],
+        };
+        let (state, _) = alerts::evaluate(&rules, &observation, &AlertState::default(), 1_000);
+
+        let closing = closing_events(&[], &state, 9_000);
+        assert_eq!(closing.len(), 1);
+        assert_eq!(closing[0].rule_id, "r1");
+        assert_eq!(closing[0].rule_name, "r1", "the id, rather than nothing");
+    }
+
+    /// `stop` is what makes a disconnect prompt: the loop is waiting out its
+    /// interval on the condvar, and this has to cut through it rather than
+    /// costing up to a full sampling interval.
+    #[test]
+    fn stopping_a_monitor_cuts_its_wait_short() {
+        let monitor = Arc::new(Monitor::for_profile(&profile("p-1")));
+        monitor.stop();
+        let began = Instant::now();
+        // A minute's wait, already stopped: returns now, and says the loop is
+        // over.
+        assert!(!monitor.wait(Duration::from_secs(60)));
+        assert!(
+            began.elapsed() < Duration::from_secs(5),
+            "returned promptly"
+        );
+
+        // Idempotent, and callable from a thread that is not the loop's.
+        let other = Arc::clone(&monitor);
+        std::thread::spawn(move || other.stop())
+            .join()
+            .expect("the stopping thread finished");
+        assert!(!monitor.wait(Duration::ZERO));
+    }
+
+    /// One handle per profile, process-wide: redb locks its file, so the
+    /// sampler writing and a `history_query` reading have to be the same
+    /// object. Two profiles get two files.
+    #[test]
+    fn a_history_store_is_opened_once_per_profile() {
+        let dir = scratch("stores");
+        let stores = HistoryStores::new(dir.clone());
+        let first = stores.get("p-1").expect("the temp dir is writable");
+        let again = stores.get("p-1").expect("already open");
+        assert!(Arc::ptr_eq(&first, &again), "the same handle comes back");
+
+        let other = stores.get("p-2").expect("a second profile, a second file");
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_ne!(first.path(), other.path());
+        // The directory is created on first use rather than at startup — a
+        // Kavka that has never connected to anything leaves nothing behind.
+        assert!(dir.exists());
+
+        // Taking it back is what lets `profiles_delete` remove the file.
+        assert!(stores.take("p-1").is_some());
+        assert!(stores.take("p-1").is_none());
+        drop(first);
+        drop(again);
+        drop(other);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The store path is the core's, so a profile id that arrived in an import
+    /// carrying `../` cannot become a write outside the history directory.
+    #[test]
+    fn a_store_path_stays_inside_the_history_directory() {
+        let dir = scratch("paths");
+        let stores = HistoryStores::new(dir.clone());
+        let escaped = stores.path_of("../../evil");
+        assert_eq!(escaped.parent(), Some(dir.as_path()));
+        // The dots survive — they are legal in a file name — but the
+        // separators do not, which is what makes the name one component of the
+        // directory above rather than a route out of it.
+        let name = escaped
+            .file_name()
+            .expect("a file name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!name.contains('/') && !name.contains('\\'), "{name}");
+        assert!(name.ends_with(".redb"), "{name}");
     }
 }

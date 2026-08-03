@@ -37,6 +37,38 @@ pub struct ConnectionProfile {
     /// later: every profile on disk today has no such key.
     #[serde(default)]
     pub connect_clusters: Vec<ConnectClusterConfig>,
+    /// Where to scrape broker metrics from, if this cluster has a
+    /// JMX-exporter/Prometheus endpoint (Phase 4).
+    ///
+    /// An `Option` rather than a list, unlike `connect_clusters`: the charts
+    /// this feeds are cluster-level, and a cluster has one aggregation point
+    /// for them — a Prometheus that already scrapes every broker, or one
+    /// broker's exporter. Nothing here is required for monitoring to work at
+    /// all; lag history needs no broker cooperation whatsoever
+    /// (docs/ARCHITECTURE.md D6), so `None` is a fully functional Phase 4
+    /// connection with throughput charts missing and said so.
+    ///
+    /// `#[serde(default)]` for the third time and the same reason: every
+    /// profile on disk today has no such key, and they are read on every
+    /// launch.
+    #[serde(default)]
+    pub metrics_endpoint: Option<MetricsEndpointConfig>,
+    /// How often the lag sampler takes a reading while this connection is open,
+    /// in milliseconds. `None` is [`crate::history::DEFAULT_INTERVAL_MS`].
+    ///
+    /// The profile is where this lives because it is the only per-cluster thing
+    /// that survives a restart, and the interval is a per-cluster judgement: a
+    /// laptop dev cluster can be read every five seconds, and somebody's
+    /// production coordinator should not be. Stored unclamped and clamped on
+    /// use ([`crate::history::clamp_interval_ms`]) so a value written by an
+    /// older build — or by hand — samples a little less often rather than not
+    /// at all.
+    ///
+    /// `#[serde(default)]` for the fourth time and the same reason as the three
+    /// fields above it: every profile on disk today has no such key, and they
+    /// are read on every launch.
+    #[serde(default)]
+    pub sampler_interval_ms: Option<u32>,
 }
 
 impl ConnectionProfile {
@@ -105,6 +137,25 @@ pub fn connect_password_suffix(cluster: &str) -> String {
 /// the OS keychain and never touches disk (docs/ARCHITECTURE.md D5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaRegistryConfig {
+    pub url: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<SecretRef>,
+}
+
+/// A Prometheus-format metrics endpoint — a JMX exporter on a broker, or a
+/// Prometheus that already scrapes them all (docs/ARCHITECTURE.md D6).
+///
+/// Credentials follow [`SchemaRegistryConfig`]'s rule exactly, for the third
+/// time: the username is an identifier and lives in the profile, the password
+/// is a [`SecretRef`] into the OS keychain and never touches disk (D5). Its
+/// keychain suffix is the fixed word `metrics_password` — unlike a Connect
+/// cluster's, there is only ever one of these per profile — so
+/// [`crate::secrets::SECRET_SUFFIXES`] *can* name it, and does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsEndpointConfig {
+    /// The scrape URL, e.g. `http://broker-1.internal:9404/metrics`.
     pub url: String,
     #[serde(default)]
     pub username: Option<String>,
@@ -485,6 +536,14 @@ mod tests {
                     password: None,
                 },
             ],
+            metrics_endpoint: Some(MetricsEndpointConfig {
+                url: "https://prometheus.example/federate".into(),
+                username: Some("scrape".into()),
+                password: Some(SecretRef {
+                    entry: crate::secrets::entry_name(id, "metrics_password"),
+                }),
+            }),
+            sampler_interval_ms: Some(30_000),
         }
     }
 
@@ -702,6 +761,114 @@ mod tests {
         nested["profiles"][0]["connect_clusters"][1]["password"] =
             serde_json::json!({"entry": "e", "value": "s3"});
         assert_eq!(leaked_secret_field(&nested).as_deref(), Some("password"));
+    }
+
+    /// The field arrived in Phase 4; every profile written before it has no
+    /// such key. Third verse, same as the first — and the reason this test
+    /// exists a third time is that the failure it guards is not "the new
+    /// feature is missing", it is "the sidebar is empty and every connection
+    /// is gone".
+    #[test]
+    fn profiles_written_before_the_metrics_field_still_load() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "dev",
+                "bootstrap_servers": ["localhost:9092"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false,
+                "schema_registry": {"url": "https://registry.example"},
+                "connect_clusters": [{"name": "sources", "url": "http://connect:8083"}]
+            }]
+        }"#;
+        let profiles = import_json(legacy).expect("a Phase 3 profile still parses");
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].metrics_endpoint.is_none());
+        // Both Phase 4 additions default, not just the one the contract named:
+        // an absent interval is "whatever the sampler's default is", which is
+        // the only answer that does not need a second default written down.
+        assert!(profiles[0].sampler_interval_ms.is_none());
+        // The rest of the profile is untouched by the addition.
+        assert_eq!(profiles[0].connect_clusters.len(), 1);
+        assert!(profiles[0].schema_registry.is_some());
+    }
+
+    /// The interval survives a round trip through the store, which is the whole
+    /// point of putting it on the profile: an editor that writes a value the
+    /// file drops silently is worse than an editor with no field at all, since
+    /// the user believes they changed something.
+    #[test]
+    fn a_sampler_interval_survives_export_and_import() {
+        let mut profile = profile("p1", "Orders");
+        profile.sampler_interval_ms = Some(45_000);
+        let round_tripped = import_json(&export_json(&[profile])).expect("its own export parses");
+        assert_eq!(round_tripped[0].sampler_interval_ms, Some(45_000));
+    }
+
+    /// An unauthenticated exporter — the common on-prem shape, and the one that
+    /// would hide a `None`-handling bug — parses as anonymous rather than as an
+    /// empty credential.
+    #[test]
+    fn a_metrics_endpoint_may_be_anonymous() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "dev",
+                "bootstrap_servers": ["localhost:9092"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false,
+                "metrics_endpoint": {"url": "http://broker-1:9404/metrics"}
+            }]
+        }"#;
+        let profiles = import_json(legacy).expect("an anonymous exporter parses");
+        let endpoint = profiles[0].metrics_endpoint.as_ref().expect("endpoint");
+        assert_eq!(endpoint.url, "http://broker-1:9404/metrics");
+        assert!(endpoint.username.is_none());
+        assert!(endpoint.password.is_none());
+    }
+
+    #[test]
+    fn a_metrics_password_travels_as_a_reference() {
+        let json = export_json(&[profile("a", "A")]);
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let endpoint = &doc["profiles"][0]["metrics_endpoint"];
+
+        assert_eq!(endpoint["url"], "https://prometheus.example/federate");
+        assert_eq!(endpoint["username"], "scrape");
+        assert_eq!(
+            endpoint["password"],
+            serde_json::json!({"entry": "a/metrics_password"})
+        );
+        assert_eq!(leaked_secret_field(&doc), None);
+
+        // The detector reaches into the new location too.
+        let mut leaked = doc.clone();
+        leaked["profiles"][0]["metrics_endpoint"]["password"] = serde_json::json!("hunter2");
+        assert_eq!(leaked_secret_field(&leaked).as_deref(), Some("password"));
+        // ...including one hidden inside a SecretRef-shaped object.
+        let mut nested = doc;
+        nested["profiles"][0]["metrics_endpoint"]["password"] =
+            serde_json::json!({"entry": "e", "value": "s3"});
+        assert_eq!(leaked_secret_field(&nested).as_deref(), Some("password"));
+    }
+
+    /// Unlike a Connect password, this one has a fixed suffix — so the purge
+    /// path that iterates the constant covers it, and this is the tripwire that
+    /// says so.
+    #[test]
+    fn the_metrics_password_is_named_by_the_fixed_vocabulary() {
+        assert!(crate::secrets::SECRET_SUFFIXES.contains(&"metrics_password"));
+        assert_eq!(
+            profile("a", "A")
+                .metrics_endpoint
+                .and_then(|endpoint| endpoint.password)
+                .map(|secret| secret.entry),
+            Some(crate::secrets::entry_name("a", "metrics_password"))
+        );
     }
 
     /// `SECRET_SUFFIXES` cannot name these — the cluster's name is in the entry

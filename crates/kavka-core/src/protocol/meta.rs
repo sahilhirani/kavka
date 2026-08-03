@@ -8,17 +8,30 @@
 //! because v13 makes `TopicId` mandatory in the request, which is a different
 //! shape of call than "tell me about this topic by name".
 //!
-//! The broker table and `ControllerId` used to be decoded too, for a
-//! DescribeQuorum redirect that no longer exists (see [`super`] — on KRaft the
-//! id a broker reports there is picked at random from the voters, so it is not
-//! a routing answer). They are stepped over rather than stored: a field nothing
-//! reads is a field someone will start reading, and this decoder's whole
-//! defence is that it stops at what it uses.
+//! `ControllerId` is stepped over rather than stored, and stays that way: it
+//! was decoded once for a DescribeQuorum redirect that no longer exists (see
+//! [`super`] — on KRaft the id a broker reports there is picked at random from
+//! the voters, so it is not a routing answer), and a field nothing reads is a
+//! field someone will start reading.
+//!
+//! The BROKER table is kept, for the one thing that genuinely needs it:
+//! ListGroups is answered by each broker about the groups IT coordinates, so
+//! "every share group on this cluster" is a question that has to be put to
+//! every broker ([`super::ProtocolClient::share_groups_list`]). Its host and
+//! port are the cluster's OWN advertised endpoints for the listener this
+//! connection came in on, which is what makes them dialable.
 
 use super::conn::{BrokerConnection, METADATA};
 use super::errors;
 use super::wire::{Decoder, Encoder};
 use crate::Result;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Broker {
+    pub(crate) node_id: i32,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct TopicMetadata {
@@ -35,6 +48,33 @@ pub(crate) struct TopicMetadata {
 /// megabytes of response for a field this module wants a list of indexes out
 /// of.
 pub(crate) fn fetch(conn: &mut BrokerConnection, topics: &[&str]) -> Result<Vec<TopicMetadata>> {
+    fetch_all(conn, topics).map(|(_, topics)| topics)
+}
+
+/// Every broker in the cluster, as the cluster advertises itself on the
+/// listener this connection arrived on.
+///
+/// An EMPTY topic array rather than a null one: null means "every topic", which
+/// would make the broker serialize every partition of every topic to answer a
+/// question about brokers.
+pub(crate) fn brokers(conn: &mut BrokerConnection) -> Result<Vec<Broker>> {
+    let (mut brokers, _) = fetch_all(conn, &[])?;
+    if brokers.is_empty() {
+        return Err(crate::Error::Other(format!(
+            "{} listed no brokers, so there is nowhere to ask",
+            conn.address()
+        )));
+    }
+    // Sorted so a fan-out visits them in the same order every time, and so the
+    // merged result of one does not depend on the broker table's ordering.
+    brokers.sort_by_key(|broker| broker.node_id);
+    Ok(brokers)
+}
+
+fn fetch_all(
+    conn: &mut BrokerConnection,
+    topics: &[&str],
+) -> Result<(Vec<Broker>, Vec<TopicMetadata>)> {
     let version = conn.negotiate(METADATA)?;
     let mut body = Encoder::new();
     body.compact_array_len(Some(topics.len()));
@@ -57,19 +97,28 @@ pub(crate) fn fetch(conn: &mut BrokerConnection, topics: &[&str]) -> Result<Vec<
     decode(&payload, version)
 }
 
-fn decode(payload: &[u8], version: i16) -> Result<Vec<TopicMetadata>> {
+fn decode(payload: &[u8], version: i16) -> Result<(Vec<Broker>, Vec<TopicMetadata>)> {
     let mut decoder = Decoder::new(payload);
     let _throttle_time_ms = decoder.int32()?;
 
-    // The broker table has to be WALKED to reach the topics — every field of it
-    // is variable width — but nothing here keeps it.
     let broker_count = decoder.compact_array_len()?.unwrap_or(0);
+    let mut brokers = Vec::with_capacity(broker_count);
     for _ in 0..broker_count {
-        let _id = decoder.int32()?;
-        let _host = decoder.compact_string()?;
-        let _port = decoder.int32()?;
+        let node_id = decoder.int32()?;
+        let host = decoder.compact_string()?;
+        let port = decoder.int32()?;
         let _rack = decoder.compact_nullable_string()?;
         decoder.tagged_fields()?;
+        // Kafka carries a port as int32 and every real one is a u16; a broker
+        // that advertised something else could not be connected to anyway, so
+        // it is dropped here rather than turned into a nonsense address later.
+        if let Ok(port) = u16::try_from(port) {
+            brokers.push(Broker {
+                node_id,
+                host,
+                port,
+            });
+        }
     }
 
     let _cluster_id = decoder.compact_nullable_string()?;
@@ -115,7 +164,7 @@ fn decode(payload: &[u8], version: i16) -> Result<Vec<TopicMetadata>> {
     // ClusterAuthorizedOperations (v8-v10) and the top-level tag buffer follow.
     // Nothing here reads them, and stopping short of fields we do not use is
     // what lets this decoder survive a broker that adds one.
-    Ok(topics)
+    Ok((brokers, topics))
 }
 
 /// The partitions of one topic, with the broker's own error for that topic
@@ -187,12 +236,27 @@ mod tests {
     /// them still has to yield the right partitions, which is what this pins.
     #[test]
     fn a_v12_response_yields_each_topics_partitions() {
-        let topics = decode(&response_v12(), 12).expect("decode");
+        let (_, topics) = decode(&response_v12(), 12).expect("decode");
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].name, "orders");
         assert_eq!(topics[0].error_code, 0);
         // Partition order on the wire is not guaranteed; the decoder sorts.
         assert_eq!(topics[0].partitions, vec![0, 1]);
+    }
+
+    /// The broker table is what a ListGroups fan-out is aimed at, so its host
+    /// and port have to survive decoding as something dialable.
+    #[test]
+    fn a_v12_response_yields_the_brokers_to_ask() {
+        let (brokers, _) = decode(&response_v12(), 12).expect("decode");
+        assert_eq!(
+            brokers,
+            vec![Broker {
+                node_id: 1,
+                host: "localhost".into(),
+                port: 9092,
+            }]
+        );
     }
 
     /// Cut inside the broker array — past the trailing fields `decode`

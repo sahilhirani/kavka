@@ -146,6 +146,32 @@ rustls-platform-verifier = { version = "0.6", optional = true }
 # copy of those primitives out of the binary; see src/protocol/scram.rs.
 ring = { version = "0.17", optional = true }
 
+# --- Lag history store (src/history.rs, docs/ARCHITECTURE.md D6) ------------
+# The embedded store D6 names by crate. Lag history is the one thing in Kavka
+# that has to survive a restart — "24 h lag history survives app restarts" is a
+# Phase 4 acceptance criterion — and it is written every 15 seconds per
+# connected profile, forever, which is the shape a log-structured JSON file
+# handles badly and a B-tree handles well.
+#
+# 4.1 rather than an older line: redb reached 1.0 with an on-disk format
+# guarantee and has bumped it deliberately since, so pinning to the current
+# major is the version whose format this build will keep reading. The MSRV
+# (1.89) is well under this workspace's toolchain.
+#
+# **Zero runtime dependencies, pure Rust, no build tooling.** That is the whole
+# reason it is here rather than `sled` (unmaintained 0.34 with a format it never
+# stabilised), `rocksdb` (a C++ build — the exact requirement the `kafka` tier
+# promises not to add), or `rusqlite` (bundled SQLite is a C build, and the
+# system-library alternative is a per-platform hunt). It is also the only new
+# dependency Phase 4 takes: the Prometheus text format is parsed by hand in
+# src/metrics.rs (it is a line format, and a parser crate would be larger than
+# the parser), and alert webhooks reuse the `ureq` already above.
+#
+# NOT optional: the store has no librdkafka involvement — it takes the numbers
+# admin.rs already computed — so it has to compile on the bare (feature-free)
+# tier that tooling and clippy use.
+redb = "4.1"
+
 # `msk-iam` only. MSK IAM is hand-signed rather than via
 # `aws-msk-iam-sasl-signer`; see the dependency note at the top of
 # src/auth/msk.rs.

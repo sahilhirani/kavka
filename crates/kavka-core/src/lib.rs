@@ -14,21 +14,38 @@
 //! - [`serdes`]: bytes -> canonical JSON with schema metadata.
 //! - [`sr`]: Schema Registry clients.
 //! - [`search`]: the streaming unbounded search engine.
+//! - [`history`]: the lag sampler and its durable store (redb).
+//! - [`metrics`]: Prometheus/JMX-exporter scraping, in memory only.
+//! - [`alerts`]: rules, hysteresis, and the webhook that carries an event out.
+//! - [`streams`]: Kafka Streams topology inference — pure, and carrying its own
+//!   list of what it cannot know.
 //! - [`protocol`]: hand-rolled Kafka wire frames for the admin RPCs librdkafka
-//!   does not expose — quorum, leader election, reassignment, client quotas
-//!   (docs/ARCHITECTURE.md D2).
+//!   does not expose — quorum, leader election, reassignment, client quotas,
+//!   share groups (docs/ARCHITECTURE.md D2).
+//!
+//! The three Phase 4 modules divide along one line, and it is a durability
+//! line rather than a subject-matter one: [`history`] owns everything written
+//! to disk, [`metrics`] owns everything that only ever lives in RAM, and
+//! [`alerts`] reads both and owns nothing but its rules. That is why the alert
+//! evaluator is a pure function over observations it is handed — it can be
+//! driven through a synthetic week in a millisecond, which is the only way a
+//! `for_ms`/cooldown state machine ever gets properly tested.
 
 pub mod acl;
 pub mod admin;
+pub mod alerts;
 pub mod cancel;
 pub mod connect;
 pub mod connection;
 pub mod consume;
+pub mod history;
+pub mod metrics;
 pub mod produce;
 pub mod profiles;
 pub mod search;
 pub mod serdes;
 pub mod sr;
+pub mod streams;
 
 /// Behind `kafka` for one reason, spelled out at the top of the module: its
 /// OAUTHBEARER path reuses [`connection::auth::TokenSource`], which is gated on
@@ -67,8 +84,13 @@ pub mod secrets {
     /// full purge is therefore this constant **plus**
     /// [`crate::profiles::ConnectionProfile::connect_secret_entries`], which
     /// means reading the profile *before* deleting it from the store.
-    pub const SECRET_SUFFIXES: &[&str] =
-        &["password", "client_key", "client_secret", "sr_password"];
+    pub const SECRET_SUFFIXES: &[&str] = &[
+        "password",
+        "client_key",
+        "client_secret",
+        "sr_password",
+        "metrics_password",
+    ];
 
     /// The keychain entry name for one of a profile's secrets.
     pub fn entry_name(profile_id: &str, suffix: &str) -> String {
@@ -132,7 +154,18 @@ mod secret_vocabulary {
     /// Registry password outlived the connection it belonged to.
     #[test]
     fn every_entry_the_editor_writes_is_purged_on_delete() {
-        for suffix in ["password", "client_key", "client_secret", "sr_password"] {
+        for suffix in [
+            "password",
+            "client_key",
+            "client_secret",
+            "sr_password",
+            // Phase 4. A metrics endpoint's password is the fourth secret a
+            // profile can own, and the first one added since this tripwire
+            // existed — the whole point of the list is that adding a field to
+            // the editor without adding it here is caught by a test rather
+            // than by a user finding a credential that outlived its cluster.
+            "metrics_password",
+        ] {
             assert!(
                 SECRET_SUFFIXES.contains(&suffix),
                 "{suffix} is written by ProfileEditor but not in SECRET_SUFFIXES"

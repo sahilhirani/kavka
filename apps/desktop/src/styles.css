@@ -4045,3 +4045,555 @@ select.input-invalid { border-color: var(--danger); }
      high contrast is its border. */
   .role-chip { border-color: CanvasText; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 4 — MONITORING · ALERTS · SHARE GROUPS · STREAMS TOPOLOGY
+   Additions only. §5.11 is the whole of the chart vocabulary: 1px strokes,
+   grid at --grid-line, --t-micro tertiary axis labels, no gradient fills
+   beyond a 6%-alpha wash under a SINGLE series, no chart junk, no shadows,
+   and a line-draw animation on first paint only.
+
+   Nothing here gains a card, a radius or a shadow that did not already
+   have one. The charts use --series-*, which is a different token family
+   from --accent on purpose: §2's status-adjacency law means teal may not
+   appear beside a health or lag reading, and this whole tab is health and
+   lag readings.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The chart ───────────────────────────────────────────────────────── */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+/* The plot is the measured element — the SVG is drawn in real pixels from
+   its width, so strokes stay 1px and type stays 10.5px at every size. */
+.chart-plot {
+  position: relative;
+  min-width: 0;
+}
+
+.chart-grid {
+  stroke: var(--grid-line);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-axis-line {
+  stroke: var(--hairline-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+/* SVG text takes `fill`, not `color`. Same step and same tertiary value as
+   every other label in the app. */
+.chart-axis {
+  fill: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* The one fill §5.11 allows, and only under a single series. */
+.chart-area {
+  stroke: none;
+  fill-opacity: 0.06;
+}
+
+/* Tertiary, not accent: teal means live, and it may not appear beside a
+   lag or health reading. Dashed, so it is never mistaken for a series. */
+.chart-crosshair {
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  shape-rendering: crispEdges;
+}
+
+/* The dot takes the canvas as its own outline so it stays legible where
+   two series cross. */
+.chart-dot {
+  stroke: var(--bg-canvas);
+  stroke-width: 1;
+}
+
+/* LINE-DRAW ON FIRST PAINT ONLY. The element is mounted once and never
+   re-keyed, so React reuses it across every data update and this animation
+   cannot re-run. Its RESTING state is the full plot, so a browser that
+   ignores the animation — or a user who has asked for less motion — gets a
+   correct chart rather than an empty one. */
+@keyframes chart-draw {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+.chart-wipe {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: chart-draw var(--dur-slow) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-wipe { animation: none; }
+}
+
+.chart-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Legend — the pattern IS the channel ──────────────────────────────
+   §5.11: "a 6-series line chart identified by hue alone fails SC 1.4.1 for
+   deuteranopes." The swatch draws the real dash pattern, and a hidden
+   series is struck through as well as dimmed — two channels for the OFF
+   state, neither of them colour. */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+}
+
+/* Operable, so it takes --border-control and the --hit-min floor. */
+.chart-key-btn {
+  height: var(--hit-min);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.chart-key-off {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.chart-key-off .chart-swatch { opacity: 0.4; }
+
+.chart-swatch { flex: none; }
+
+.chart-swatch line { stroke-width: 1.5; }
+
+/* ── Readout ──────────────────────────────────────────────────────────
+   A live region, so the keyboard crosshair says something rather than only
+   moving a line. It reserves its own leading, so a value appearing does
+   not shift everything under it. */
+
+.chart-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+  min-height: var(--lh-sm);
+  font-size: var(--t-sm);
+}
+
+.chart-readout-hint { color: var(--text-tertiary); }
+
+.chart-readout-time {
+  font-family: var(--font-mono);
+  color: var(--text-mono);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.chart-readout-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.chart-readout-label { color: var(--text-tertiary); }
+
+.chart-readout-value {
+  color: var(--text-primary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The axis note. Never optional: a downsampled chart whose bucket rule is
+   unstated is a chart the reader will assume is an average. */
+.chart-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* THE A11Y LAW: a chart is never the only way to read the data. */
+.chart-table > summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  padding: var(--s-2) 0;
+}
+
+.chart-table > summary:hover { color: var(--text-secondary); }
+
+.chart-table[open] > summary { margin-bottom: var(--s-3); }
+
+/* One topic, one metric, one picture. A heading plus a count, in the same
+   shape as .panel-head one level down. */
+.chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.chart-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  font-size: var(--t-base);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.chart-title-name {
+  font-family: var(--font-mono);
+  color: var(--text-mono);
+  overflow-wrap: anywhere;
+}
+
+.chart-title-count {
+  max-width: var(--measure);
+  font-weight: var(--w-normal);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+}
+
+/* ── Monitoring controls ──────────────────────────────────────────── */
+
+/* Latched toggles, not a segmented control: the env picker's segments carry
+   the environment guardrail, and nothing else may borrow that shape. */
+.range-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A label, a control and a hint on one line, for a picker that lives in a
+   panel rather than in a form. The hint always takes its own row so it
+   keeps its measure. */
+.field-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+.field-inline > .field-hint { flex-basis: 100%; }
+
+.field-inline select { width: auto; min-width: 22ch; }
+
+.inline-label {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* The sampler line. A dot AND a word AND the numbers behind it — the state
+   the whole tab's trustworthiness rests on. */
+.sampler-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+  margin: 0;
+}
+
+.sampler-detail {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* Health readings sit like stat blocks: no border, no background, no
+   radius, separated by space. Each one is a label, a dot-plus-word, a
+   number and a sentence. */
+.health-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6) var(--s-10);
+}
+
+.health-reading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: 46ch;
+  min-width: 0;
+}
+
+.health-number {
+  margin-left: var(--s-3);
+  color: var(--text-primary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.health-explain {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* A trend is a word AND a glyph AND a colour — three channels, so the
+   colour is the one that can be lost. It is not a --t-display numeral, so
+   it steps down to panel-title size rather than shouting. */
+.stat-value-word {
+  font-size: var(--t-md);
+  line-height: var(--lh-display);
+  font-weight: var(--w-semi);
+  letter-spacing: 0;
+}
+
+.trend-ok    { color: var(--ok); }
+.trend-warn  { color: var(--warn); }
+.trend-quiet { color: var(--text-tertiary); }
+
+/* ── Alerts ───────────────────────────────────────────────────────── */
+
+/* Two of these tables carry a sentence per row, so their cells stop being
+   single-line. `--row-h` stays the MINIMUM (a CSS table treats a height
+   that way), and the padding keeps two-line rows from touching. */
+.data-table-tall td {
+  padding-top: var(--s-3);
+  padding-bottom: var(--s-3);
+  vertical-align: top;
+}
+
+.rule-name {
+  display: block;
+  color: var(--text-primary);
+}
+
+.rule-kind {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* The sentence is the feature, so it gets prose leading and a measure
+   rather than being squeezed into a single line. */
+.rule-sentence {
+  display: block;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.rule-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  justify-content: flex-end;
+}
+
+/* The alert counter §5.1 asks for, on the tab that owns it. The NUMBER is
+   the signal and the title carries the word, so it is never colour alone.
+   --danger on --danger-tint is 6.28:1. */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ── Streams topology ─────────────────────────────────────────────────
+   The honesty note is permanent, not a disclosure. The whole picture is a
+   guess, and a guess behind a chevron is a claim. It takes the banner's
+   shape — a 2px left bar, a sunken well, no radius and no shadow — in the
+   neutral tone, because it is a statement about the data rather than an
+   error. */
+
+.inferred-note {
+  padding: var(--s-4) var(--s-5);
+  border-left: 2px solid var(--border-control);
+  background: var(--bg-sunken);
+}
+
+.inferred-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  font-weight: var(--w-medium);
+}
+
+.inferred-detail {
+  margin: var(--s-2) 0 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.inferred-caveats {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The graph can be wider than the workspace. Nothing inside it is
+   focusable — the keyboard path is the list below it — so a scroll well
+   here cannot clip a focus ring. */
+.topology-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.topology-box {
+  fill: var(--bg-canvas);
+  stroke-width: 1;
+}
+
+.topology-box-dashed { stroke-dasharray: 4 3; }
+
+/* A sub-topology is the application's own code: sunken, like an input or a
+   payload, because it is the one box whose contents Kavka cannot see. */
+.topology-box-code { fill: var(--bg-sunken); }
+
+.topology-label {
+  fill: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+/* The kind, in words, under every label — law 2 applied to a diagram. */
+.topology-kind {
+  fill: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+}
+
+.topology-edge {
+  fill: none;
+  stroke: var(--border-control);
+  stroke-width: 1;
+}
+
+.topology-arrowhead { fill: var(--border-control); }
+
+.topology-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topology-legend li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 18ch) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+@media (max-width: 900px) {
+  .topology-legend li { grid-template-columns: 26px minmax(0, 1fr); }
+  .topology-legend .topology-legend-gloss { grid-column: 2; }
+}
+
+.topology-legend-mark { align-self: center; }
+
+.topology-legend-word {
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+}
+
+.topology-legend-gloss {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Forced colors — the Phase 4 additions ────────────────────────────
+   Same doctrine as every phase before it: restate indicators POSITIVELY,
+   one system colour per meaning, and never a blanket border rule.
+
+   High contrast drops every --series-* hue, so a multi-series chart
+   collapses to one colour and the DASH PATTERN becomes the only channel
+   left. That is exactly why the patterns are there, and why the legend
+   draws them rather than a colour block. */
+
+@media (forced-colors: active) {
+  .chart-line,
+  .chart-swatch line { stroke: CanvasText; }
+
+  /* The wash under a single series has no meaning without its hue, and a
+     flat grey fill would read as a second series. Drop it. */
+  .chart-area { display: none; }
+
+  .chart-crosshair,
+  .chart-grid { stroke: GrayText; }
+
+  .chart-dot { fill: CanvasText; stroke: Canvas; }
+
+  /* A hidden series keeps its strike-through, which survives everything. */
+  .chart-key-off { color: GrayText; }
+
+  /* The alert counter is severity, so it takes the same system colour as
+     the prod wire and every danger banner. */
+  .tab-badge {
+    background: Canvas;
+    color: Mark;
+    border: 1px solid Mark;
+    forced-color-adjust: none;
+  }
+
+  /* Node kind survives as shape and as the word underneath; the dash
+     pattern is what keeps a repartition topic tellable from a source. */
+  .topology-box { stroke: CanvasText; fill: Canvas; }
+  .topology-box-code { fill: Canvas; }
+  .topology-edge { stroke: CanvasText; }
+  .topology-arrowhead { fill: CanvasText; }
+  .topology-label { fill: CanvasText; }
+  .topology-kind { fill: GrayText; }
+
+  /* The honesty note's left bar is its only structure once the well goes. */
+  .inferred-note { border-left-color: CanvasText; }
+}

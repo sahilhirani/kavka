@@ -39,6 +39,8 @@ fn local_connection() -> ClusterConnection {
         read_only: true,
         schema_registry: None,
         connect_clusters: Vec::new(),
+        metrics_endpoint: None,
+        sampler_interval_ms: None,
     })
     .expect("connect")
 }

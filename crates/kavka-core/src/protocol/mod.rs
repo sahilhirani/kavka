@@ -45,6 +45,8 @@
 //! |---|---|---|---|
 //! | ApiVersions | 18 | 0-3 | v0 is the fallback when a broker rejects v3 |
 //! | Metadata | 3 | 9-12 | v9 is the first flexible version |
+//! | FindCoordinator | 10 | 4-6 | v4 is the first with the `Coordinators` array |
+//! | ListGroups | 16 | 5 | v5 adds the `TypesFilter` share groups are found by |
 //! | SaslHandshake | 17 | 1 | v0 puts raw SASL tokens on the socket (pre-Kafka 1.0) |
 //! | SaslAuthenticate | 36 | 2 | first flexible version |
 //! | ElectLeaders | 43 | 2 | first flexible version (Kafka 2.4) |
@@ -53,6 +55,8 @@
 //! | DescribeClientQuotas | 48 | 1 | first flexible version (Kafka 2.7) |
 //! | AlterClientQuotas | 49 | 1 | first flexible version (Kafka 2.7) |
 //! | DescribeQuorum | 55 | 0-1 | v1 adds the fetch timestamps the contract needs |
+//! | ShareGroupDescribe | 77 | 1 | Kafka DELETED v0 in 4.1; v1 is the whole window |
+//! | DescribeShareGroupOffsets | 90 | 0 | the only version Kafka defines |
 //!
 //! The floors are a stance, not an oversight: a legacy encoder for the
 //! pre-flexible version of, say, DescribeClientQuotas is code the integration
@@ -111,6 +115,7 @@ mod quotas;
 mod reassign;
 mod sasl;
 mod scram;
+mod share;
 mod tls;
 mod wire;
 
@@ -118,12 +123,14 @@ pub use elect::PartitionResult;
 pub use quorum::{QuorumInfo, ReplicaState};
 pub use quotas::{QuotaEntity, QuotaEntityPart, QuotaOp, QuotaValue};
 pub use reassign::{ReassignmentSpec, ReassignmentState, TopicPartition};
+pub use share::{ShareGroupDetail, ShareGroupInfo, ShareGroupMember, ShareGroupOffset};
 
 use crate::connection::ClusterConnection;
 use crate::profiles::{AuthConfig, ConnectionProfile};
 use crate::{Error, Result};
 use conn::BrokerConnection;
 use quorum::QuorumReply;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// One sentence for the one mechanism Kavka cannot speak, shared by the
@@ -331,6 +338,93 @@ impl ProtocolClient {
         self.ensure_writable("quotas_alter")?;
         quotas::alter(&mut self.conn, entity, ops)
     }
+
+    /// Every share group on the cluster (KIP-932), with its state and member
+    /// count.
+    ///
+    /// A FAN-OUT, and it has to be: ListGroups is answered by each broker about
+    /// the groups THAT broker coordinates, so asking the one we happen to be
+    /// connected to returns a fraction of the answer that looks exactly like
+    /// all of it. Every broker in the metadata table is asked, and a broker
+    /// that cannot be reached fails the whole call rather than silently
+    /// shortening the list — a share group missing from this view reads as "the
+    /// group is gone", which is the one wrong answer worth failing over.
+    ///
+    /// The per-broker second round trip (ShareGroupDescribe, for the member
+    /// counts ListGroups does not carry) needs no routing of its own: the
+    /// broker that listed a group is by definition its coordinator.
+    pub fn share_groups_list(&mut self) -> Result<Vec<ShareGroupInfo>> {
+        share::ensure_enabled(&self.conn)?;
+        let brokers = meta::brokers(&mut self.conn)?;
+
+        // Keyed by group id: a group is coordinated by exactly one broker, so
+        // this deduplicates nothing in the steady state — it is what keeps a
+        // coordinator move DURING the fan-out from listing one group twice.
+        let mut found: BTreeMap<String, ShareGroupInfo> = BTreeMap::new();
+        for broker in &brokers {
+            let listed = self.with_broker(&broker.host, broker.port, share::list_on)?;
+            for group in listed {
+                found.insert(group.group_id.clone(), group);
+            }
+        }
+        Ok(found.into_values().collect())
+    }
+
+    /// One share group's members, their assignments, and the share-partition
+    /// start offsets it has state for.
+    ///
+    /// Routed through FindCoordinator: a broker that does not coordinate this
+    /// group answers NOT_COORDINATOR rather than forwarding, so the two calls
+    /// go to the broker that does. They share that connection — one lookup, one
+    /// dial, two calls.
+    pub fn share_group_detail(&mut self, group_id: &str) -> Result<ShareGroupDetail> {
+        share::ensure_enabled(&self.conn)?;
+        let coordinator = share::find_coordinator(&mut self.conn, group_id)?;
+        let group = group_id.to_string();
+        self.with_broker(&coordinator.host, coordinator.port, move |conn| {
+            let (state, members) = share::detail_on(conn, &group)?;
+            let offsets = share::offsets_on(conn, &group)?;
+            Ok(ShareGroupDetail {
+                group_id: group,
+                state,
+                members,
+                offsets,
+            })
+        })
+    }
+
+    /// Runs `call` against one named broker: this connection when it is already
+    /// that broker, a fresh one otherwise.
+    ///
+    /// The reuse is not just an optimization — on a single-broker cluster every
+    /// share-group call would otherwise pay a second TCP connect, TLS handshake
+    /// and full SASL exchange to reach the socket it is already holding. The
+    /// comparison is on host and port rather than on the address string, so the
+    /// scheme a user typed in a bootstrap entry does not defeat it.
+    fn with_broker<T>(
+        &mut self,
+        host: &str,
+        port: u16,
+        call: impl FnOnce(&mut BrokerConnection) -> Result<T>,
+    ) -> Result<T> {
+        if self.conn.is_at(host, port) {
+            return call(&mut self.conn);
+        }
+        // Bracketed for an IPv6 literal, which otherwise re-parses as a host
+        // with a port made of colons.
+        let address = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        let tls = tls::client_config(&self.profile.auth)?;
+        let mut conn = Self::open(&address, tls, &self.profile.auth).map_err(|e| {
+            Error::Other(format!(
+                "could not reach {address}, which this cluster named as one of its own brokers: {e}"
+            ))
+        })?;
+        call(&mut conn)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +484,14 @@ pub fn quotas_alter(
     ProtocolClient::for_connection(cluster)?.quotas_alter(entity, ops)
 }
 
+pub fn share_groups_list(cluster: &ClusterConnection) -> Result<Vec<ShareGroupInfo>> {
+    ProtocolClient::for_connection(cluster)?.share_groups_list()
+}
+
+pub fn share_group_detail(cluster: &ClusterConnection, group_id: &str) -> Result<ShareGroupDetail> {
+    ProtocolClient::for_connection(cluster)?.share_group_detail(group_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +507,8 @@ mod tests {
             read_only: false,
             schema_registry: None,
             connect_clusters: Vec::new(),
+            metrics_endpoint: None,
+            sampler_interval_ms: None,
         }
     }
 
@@ -515,6 +619,12 @@ mod tests {
                 .map(|_| ()),
             ProtocolClient::connect(&read_only)
                 .and_then(|mut client| client.quotas_list())
+                .map(|_| ()),
+            ProtocolClient::connect(&read_only)
+                .and_then(|mut client| client.share_groups_list())
+                .map(|_| ()),
+            ProtocolClient::connect(&read_only)
+                .and_then(|mut client| client.share_group_detail("anything"))
                 .map(|_| ()),
         ];
         for outcome in outcomes {

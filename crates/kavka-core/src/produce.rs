@@ -1663,6 +1663,8 @@ mod tests {
             read_only,
             schema_registry,
             connect_clusters: Vec::new(),
+            metrics_endpoint: None,
+            sampler_interval_ms: None,
         })
         .expect("connect")
     }

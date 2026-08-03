@@ -1,7 +1,7 @@
 {
   "$schema": "gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window",
+  "description": "Default capability for the main window. Nothing here is granted 'in case': notification is deliberately absent, because alerts are raised from Rust (notify() in src/lib.rs) and the plugin's Rust API does not go through this ACL — granting notification:default would hand the webview all sixteen of that plugin's commands to buy nothing.",
   "windows": ["main"],
   "permissions": [
     "core:default",
