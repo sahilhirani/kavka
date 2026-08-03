@@ -89,7 +89,13 @@ const EMPTY_PLACEMENT: Placement = {
   streamsGroup: null,
 };
 
-const PANES: readonly TopicPane[] = ["detail", "messages", "search", "schemas"];
+const PANES: readonly TopicPane[] = [
+  "detail",
+  "messages",
+  "search",
+  "schemas",
+  "sql",
+];
 
 function placementKey(profileId: string): string {
   return `kavka.cluster.${profileId}.view`;
@@ -138,6 +144,28 @@ function readPlacement(profileId: string): Placement {
   }
 }
 
+/**
+ * Point another cluster's workspace at a topic BEFORE it is mounted.
+ *
+ * The copy wizard finishes on cluster A and offers to open the destination
+ * topic on cluster B, and the shell answers that by selecting B — which mounts
+ * a fresh ClusterView that reads its placement from storage on the way up.
+ * So the jump is: write the placement, then select. The alternative was a prop
+ * threaded from the app root into a component that may not exist yet, for a
+ * value it would have to ignore on every other render.
+ *
+ * The placement format is this file's, which is why the writer is too: a caller
+ * that hand-rolled the JSON would be the second place that has to change when
+ * the shape does, and it is the one nobody would remember.
+ */
+export function stageTopic(profileId: string, topic: string): void {
+  const current = readPlacement(profileId);
+  lsSet(
+    placementKey(profileId),
+    JSON.stringify({ ...current, tab: "topics", topic, pane: "detail" }),
+  );
+}
+
 interface ClusterViewProps {
   profile: ConnectionProfile;
   overview: ClusterOverview;
@@ -155,6 +183,12 @@ interface ClusterViewProps {
    * something that isn't open.
    */
   onTopicActions?: (actions: TopicActions | null) => void;
+  /**
+   * Switch the whole workspace to another connection, landing on a topic —
+   * the copy wizard's "browse the destination". Handled by the app root,
+   * because selecting a cluster is the shell's job.
+   */
+  onOpenCluster?: (profileId: string, topic: string) => void;
 }
 
 export default function ClusterView({
@@ -163,6 +197,7 @@ export default function ClusterView({
   onDisconnect,
   onDangerChange,
   onTopicActions,
+  onOpenCluster,
 }: ClusterViewProps) {
   const [place, setPlace] = useState<Placement>(() => readPlacement(profile.id));
   const tabRefs = useRef<Partial<Record<TabKey, HTMLButtonElement | null>>>({});
@@ -321,7 +356,9 @@ export default function ClusterView({
   const full =
     place.tab === "topics" &&
     place.topic !== null &&
-    (place.pane === "messages" || place.pane === "search");
+    (place.pane === "messages" ||
+      place.pane === "search" ||
+      place.pane === "sql");
 
   return (
     <div className={`cluster-view${full ? " cluster-view-full" : ""}`}>
@@ -416,6 +453,7 @@ export default function ClusterView({
             onDanger={reportDanger}
             onActions={onTopicActions}
             onEditConnection={editConnection}
+            onOpenCluster={onOpenCluster}
           />
         )}
 

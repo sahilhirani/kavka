@@ -299,6 +299,19 @@ export interface MessageRecord {
   /** null = tombstone (a record with no value, not a record we failed to read). */
   value: DecodedPayload | null;
   headers: HeaderEntry[];
+  /**
+   * Dead-letter metadata, when this record's headers matched a convention
+   * Kavka knows (Phase 5a). See `DlqMeta` at the bottom of this file.
+   *
+   * ADDITIVE AND ABSENT BY DEFAULT — `?` rather than `| null` alone, for the
+   * same reason `connect_clusters` is: the Rust side serde-defaults it to
+   * None, so a record decoded by an older core (or a record whose headers
+   * matched nothing) simply has no key here. Missing and null mean the same
+   * thing to every reader: this is not a recognised dead letter. A record that
+   * IS one always carries the object, so `record.dlq != null` is the whole
+   * test and no view has to sniff header names for itself.
+   */
+  dlq?: DlqMeta | null;
 }
 
 export type SeekSpec =
@@ -887,6 +900,31 @@ export function exportRecords(
   records: MessageRecord[],
 ): Promise<void> {
   return invoke<void>("export_records", { path, format, records });
+}
+
+/**
+ * The same write, for a table that is NOT a list of messages — a SQL result
+ * set, whose columns are whatever the query asked for.
+ *
+ * A SECOND COMMAND RATHER THAN A WIDER `export_records`, because a result row
+ * is not a record: `export_records` takes `MessageRecord[]` and knows its six
+ * columns by name, while a result set's schema is whatever the query asked
+ * for. The webview has no filesystem capability of its own (only the save
+ * dialog), so serialising here and writing there is not an option either —
+ * the shell writes both, and both go through the same RFC 4180 quoting.
+ *
+ * `columns` carries the header row so the shell never has to guess names from
+ * the first row's keys: a result set with zero rows still has a schema, and a
+ * CSV of it is a header line rather than an empty file. `rows` are positional
+ * against that list, exactly as they arrive on `kavka://sql/{id}/rows`.
+ */
+export function exportRows(
+  path: string,
+  format: ExportFormat,
+  columns: SqlColumn[],
+  rows: JsonValue[][],
+): Promise<void> {
+  return invoke<void>("export_rows", { path, format, columns, rows });
 }
 
 export interface SaveDialogFilter {
@@ -2008,4 +2046,649 @@ export function streamsTopology(
   groupId: string,
 ): Promise<StreamsTopology> {
   return invoke<StreamsTopology>("streams_topology", { profileId, groupId });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5a — SQL over topics, cross-cluster copy, config diff, offset
+// migration, DLQ metadata
+//
+// Same contract shape as every phase before it: snake_case struct fields, enums
+// tagged { "kind": … }, and camelCase ONLY in invoke()'s argument keys.
+//
+// TWO THINGS ARE GENUINELY NEW HERE, and both are worth naming.
+//
+// 1. A COMMAND CAN NOW NAME TWO CLUSTERS. Copy, config diff and offset
+//    migration all take a SECOND profile id, and the second one is the one that
+//    gets written to. Every guardrail in docs/DESIGN.md §6 is written about
+//    "the cluster on screen", and on these three screens the cluster on screen
+//    is the SOURCE while the danger is at the DESTINATION — so the UI reads the
+//    destination profile's own environment and read-only flag, never the
+//    workspace's. A prod destination gets the prod treatment even when you
+//    started from dev.
+//
+// 2. SQL AND COPY ARE SESSIONS, exactly like search and bulk produce: `*_start`
+//    resolves with an id, events are addressed by that id, `*_stop` is
+//    idempotent, and the subscribe helper calls `session_ready` the moment the
+//    listeners are registered so the shell can release the first event. There
+//    is no new machinery here at all — see `searchSubscribe`, which these
+//    mirror deliberately.
+// ---------------------------------------------------------------------------
+
+// ── SQL over a topic (DataFusion) ──────────────────────────────────────────
+
+/**
+ * One query, and the slice of the topic it is allowed to read.
+ *
+ * `scan_cap` and `max_rows` are TWO DIFFERENT CEILINGS and neither is the
+ * other: the first is how many records Kavka will read off the topic, the
+ * second is how many result rows it will hand back. A query that scans a
+ * million records and returns four rows hits neither; `SELECT *` on a busy
+ * topic hits both. Whichever bit, `SqlProgress.capped` says so — see there.
+ */
+export interface SqlSpec {
+  topic: string;
+  /** The SQL text, against the `messages` virtual table. */
+  query: string;
+  seek: SeekSpec;
+  /** null = every partition. */
+  partitions: number[] | null;
+  /** Records READ. The core caps this at SQL_SCAN_CAP however large we ask. */
+  scan_cap: number;
+  /** Result ROWS. The core caps this at SQL_MAX_ROWS. */
+  max_rows: number;
+}
+
+/** One column of a result set: the name the query gave it, and its type. */
+export interface SqlColumn {
+  name: string;
+  /**
+   * SQL SPELLING, not Arrow's — `BIGINT`, `VARCHAR`, `DOUBLE`, `TIMESTAMP`.
+   * The core maps Arrow's own names (`Int64`, `Utf8`, …) through
+   * `kavka_core::sql::sql_type_name` before this crosses IPC, because the
+   * person reading a column header wrote SQL and has never seen `Utf8`.
+   * Rendered verbatim.
+   */
+  data_type: string;
+}
+
+/**
+ * How far the query has got, and whether the answer is the whole answer.
+ *
+ * `capped` IS THE HONESTY BIT, and it is the same rule as search's buffer
+ * (§5.7, and this phase's "never silently truncates" gate): it is true when
+ * either ceiling truncated the result, and the view that ignores it shows a
+ * partial answer to an aggregate query as if it were the answer. A `COUNT(*)`
+ * over a capped scan is not a count of the topic — it is a count of what was
+ * read, and the difference is the whole reason this flag exists.
+ */
+export interface SqlProgress {
+  /** Records read off the topic so far. */
+  scanned: number;
+  /** Result rows produced so far. */
+  produced_rows: number;
+  done: boolean;
+  /** Set on the final progress when the query died rather than finished. */
+  error: string | null;
+  /** True when `scan_cap` or `max_rows` truncated the answer. NEVER silent. */
+  capped: boolean;
+}
+
+/** The schema event: the columns, once, before any rows. */
+export interface SqlSchemaPayload {
+  columns: SqlColumn[];
+}
+
+/** One batch of result rows, positional against `SqlSchemaPayload.columns`. */
+export interface SqlRowsPayload {
+  rows: JsonValue[][];
+}
+
+/** The core's own ceiling on records SCANNED by one query. */
+export const SQL_SCAN_CAP = 100000;
+
+/** The core's own ceiling on result ROWS from one query. */
+export const SQL_MAX_ROWS = 10000;
+
+/**
+ * THE VIRTUAL TABLE, mirrored from the core so one file states the schema and
+ * the UI never invents a column.
+ *
+ * Every query runs against a table called `messages` with exactly these
+ * columns. `value_json` is the payload as a **compact JSON string**, not a
+ * parsed structure — and this build has no JSON functions to hand it to (see
+ * SQL_SURFACE), so it is matched as text: compact is what makes
+ * `'%"status":"failed"%'` a stable pattern, because there is no space after the
+ * colon to guess at. `value_text` is the same payload rendered for reading.
+ */
+export const SQL_TABLE_NAME = "messages";
+
+export const SQL_TABLE_COLUMNS: ReadonlyArray<
+  SqlColumn & { nullable: boolean; what: string }
+> = [
+  {
+    name: "partition",
+    data_type: "BIGINT",
+    nullable: false,
+    what: "Which partition the record came from.",
+  },
+  {
+    name: "offset",
+    data_type: "BIGINT",
+    nullable: false,
+    what: "The record's offset within that partition.",
+  },
+  {
+    name: "timestamp_ms",
+    data_type: "BIGINT",
+    nullable: true,
+    what: "Epoch milliseconds, or NULL when the record carries no timestamp.",
+  },
+  {
+    name: "key_text",
+    data_type: "VARCHAR",
+    nullable: true,
+    what: "The decoded key, or NULL when the record has no key.",
+  },
+  {
+    name: "value_text",
+    data_type: "VARCHAR",
+    nullable: true,
+    what: "The decoded value as text — NULL for a tombstone.",
+  },
+  {
+    name: "value_json",
+    data_type: "VARCHAR",
+    nullable: true,
+    what: "The value as compact JSON text when it decoded to JSON, else NULL — matched with LIKE or regexp_like, not with JSON functions.",
+  },
+  {
+    name: "headers_json",
+    data_type: "VARCHAR",
+    nullable: false,
+    what: "Every header as a JSON object, encoded as a string.",
+  },
+];
+
+/**
+ * WHAT THE ENGINE ACTUALLY SUPPORTS, in the engine's own terms.
+ *
+ * Rendered verbatim under the editor. It is a constant rather than prose in a
+ * component because it mirrors the core's documented surface: when the core's
+ * DataFusion version grows a feature, this list is the one place that changes
+ * and every screen quoting it changes with it. A cheatsheet that drifts from
+ * the engine teaches expressions that fail.
+ *
+ * CONTRACT FRICTION — flagged, not resolved. The core owns the canonical text
+ * (`kavka_core::sql::sql_surface()`, kept honest against the functions the
+ * build actually registers by a test), and the Phase 5a IPC contract has no
+ * command that returns it — so the canonical answer cannot be reached from
+ * here and this list is a second copy of it. The moment the shell exposes that
+ * function as a command, this constant should become a call to it and the text
+ * should be rendered verbatim; until then the two are kept in step by hand,
+ * which is exactly the arrangement the core's own comment warns about.
+ */
+export const SQL_SURFACE: readonly string[] = [
+  "SELECT with WHERE, GROUP BY, HAVING, ORDER BY and LIMIT.",
+  "The usual aggregates — count, sum, min, max, avg — and CASE expressions.",
+  "String functions on the text columns: lower, upper, substr, length, position, and LIKE.",
+  "No JSON functions — DataFusion ships none at all, so `value_json` is text and you match it as text: WHERE value_json LIKE '%\"status\":\"failed\"%', or regexp_like(value_json, '\"amount\":[0-9]{4,}'). It is COMPACT — no space after `:` or `,` — which is what makes those patterns stable.",
+  "One table, always called `messages`. There is nothing to join to — a query only ever sees the records this scan read.",
+  "No INSERT, UPDATE, DELETE or CREATE. SQL here reads a topic; producing is the Produce panel's job.",
+];
+
+/** Resolves with the sql id its schema, rows and progress are addressed to. */
+export function sqlStart(profileId: string, spec: SqlSpec): Promise<string> {
+  return invoke<string>("sql_start", { profileId, spec });
+}
+
+/** Idempotent on the Rust side — stopping a finished query is not an error. */
+export function sqlStop(sqlId: string): Promise<void> {
+  return invoke<void>("sql_stop", { sqlId });
+}
+
+export function sqlSchemaEventName(sqlId: string): string {
+  return `kavka://sql/${sqlId}/schema`;
+}
+
+export function sqlRowsEventName(sqlId: string): string {
+  return `kavka://sql/${sqlId}/rows`;
+}
+
+export function sqlProgressEventName(sqlId: string): string {
+  return `kavka://sql/${sqlId}/progress`;
+}
+
+export interface SqlHandlers {
+  onSchema: (payload: SqlSchemaPayload) => void;
+  onRows: (payload: SqlRowsPayload) => void;
+  onProgress: (progress: SqlProgress) => void;
+}
+
+/**
+ * Subscribe to one query's three channels and get ONE unlisten back.
+ *
+ * Three rather than search's two, and the extra one has to be registered
+ * FIRST-CLASS rather than folded into the rows event: the columns arrive once,
+ * before any row, and a grid that learned its schema from the first batch would
+ * render nothing at all for a query that matched nothing — which is exactly
+ * when the column list is the only answer there is.
+ */
+export async function sqlListen(
+  sqlId: string,
+  handlers: SqlHandlers,
+): Promise<UnlistenFn> {
+  const [offSchema, offRows, offProgress] = await Promise.all([
+    listen<SqlSchemaPayload>(sqlSchemaEventName(sqlId), (event) =>
+      handlers.onSchema(event.payload),
+    ),
+    listen<SqlRowsPayload>(sqlRowsEventName(sqlId), (event) =>
+      handlers.onRows(event.payload),
+    ),
+    listen<SqlProgress>(sqlProgressEventName(sqlId), (event) =>
+      handlers.onProgress(event.payload),
+    ),
+  ]);
+  return () => {
+    offSchema();
+    offRows();
+    offProgress();
+  };
+}
+
+/**
+ * `sqlListen` with the unmount race closed and the subscribe handshake
+ * confirmed — see `searchSubscribe`, which this mirrors deliberately.
+ *
+ * The handshake matters more here than anywhere else so far: the SCHEMA event
+ * is emitted once and never again, so a query whose first event is lost has a
+ * result set with no column names for the rest of its life.
+ */
+export function sqlSubscribe(
+  sqlId: string,
+  handlers: SqlHandlers,
+  onError?: (message: string) => void,
+): () => void {
+  let cancelled = false;
+  let unlisten: UnlistenFn | null = null;
+  void sqlListen(sqlId, {
+    onSchema: (payload) => {
+      if (!cancelled) handlers.onSchema(payload);
+    },
+    onRows: (payload) => {
+      if (!cancelled) handlers.onRows(payload);
+    },
+    onProgress: (progress) => {
+      if (!cancelled) handlers.onProgress(progress);
+    },
+  })
+    .then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      void sessionReady(sqlId).catch(() => undefined);
+    })
+    .catch((err: unknown) => {
+      if (!cancelled) onError?.(errorMessage(err));
+    });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = null;
+  };
+}
+
+// ── Cross-cluster copy / replay ────────────────────────────────────────────
+
+/**
+ * One copy: from a topic on the connection this command is sent to, into a
+ * topic on `dest_profile_id`.
+ *
+ * `dest_profile_id` may be the SAME profile — replaying a topic into another
+ * topic on one cluster is the same operation and takes the same path. What it
+ * may never be is implicit: the destination is always named, because "copy this
+ * somewhere" with the somewhere inferred is how a replay lands on prod.
+ */
+export interface CopySpec {
+  source_topic: string;
+  dest_profile_id: string;
+  dest_topic: string;
+  seek: SeekSpec;
+  /** null = every partition of the source. */
+  partitions: number[] | null;
+  /** null = copy everything in the range. Same shape search uses. */
+  filter: SearchQuery | null;
+  /** null = no ceiling beyond the range itself. */
+  max_messages: number | null;
+  /** null = as fast as the destination will take them. */
+  rate_per_sec: number | null;
+  /**
+   * Write each record to the partition it came from, rather than letting the
+   * destination's partitioner choose. Only honest when the destination has at
+   * least as many partitions as the source — see CopyWizard, which says so.
+   */
+  preserve_partition: boolean;
+  /** Add the `kavka.replay.source.*` headers to every copied record. */
+  provenance_headers: boolean;
+}
+
+/**
+ * What a copy would do, without doing any of it.
+ *
+ * `would_copy_estimate` is WATERMARK ARITHMETIC — end minus start across the
+ * partitions in scope — so it is exact for an unfiltered copy and an UPPER
+ * BOUND when `filter` is set: nothing can tell how many records match without
+ * reading them, which is the copy itself. Every renderer of this number says
+ * which of the two it is looking at.
+ */
+export interface CopyEstimate {
+  would_copy_estimate: number;
+  /**
+   * CONTRACT FRICTION — flagged, not resolved, and consumed defensively.
+   *
+   * The Phase 5a contract fixes this payload as `{ would_copy_estimate,
+   * per_partition }`; the core's `CopyEstimate` carries a third field saying
+   * whether the number is a scan size rather than a match count — which is the
+   * same honesty the UI was inferring for itself from "is a filter set". The
+   * core's answer is better than the inference (it also reads high on a
+   * transactional topic, where commit markers occupy offsets no consumer ever
+   * receives), so the wizard prefers it and falls back to the inference when
+   * the field is absent. Optional here rather than required for exactly that
+   * reason: a build that answers with the contract's two fields must not make
+   * the dry run unreadable.
+   */
+  estimate_only?: boolean;
+  per_partition: PartitionProgress[];
+}
+
+/**
+ * The `kavka.replay.source.*` headers a provenance-tagged copy carries.
+ *
+ * The timestamp is the only conditional one: a record written before KIP-32 has
+ * none, and the core writes no header rather than inventing a value. Every
+ * screen quoting this list says so.
+ */
+export const COPY_PROVENANCE_HEADERS: readonly string[] = [
+  "kavka.replay.source.cluster",
+  "kavka.replay.source.topic",
+  "kavka.replay.source.partition",
+  "kavka.replay.source.offset",
+  "kavka.replay.source.ts",
+];
+
+/**
+ * How the copy is going. `scanned` counts records READ from the source and
+ * `copied` counts records the destination ACCEPTED — they differ whenever a
+ * filter is set, and `failed` is the third number because a copy that lost
+ * eleven records to the destination and says nothing is worse than one that
+ * stops.
+ */
+export interface CopyProgress {
+  copied: number;
+  scanned: number;
+  failed: number;
+  done: boolean;
+  error: string | null;
+  /**
+   * Partitions the copy finished because NOTHING MORE ARRIVED FROM THE SOURCE,
+   * rather than because they reached the end offset captured when the copy
+   * started. Ascending, and empty on a copy that read every window out.
+   *
+   * The same field, the same word and the same reason as
+   * `SearchProgress.assumed_complete`: transactional markers take offsets a
+   * consumer never receives, so the watermark cannot always be reached — and a
+   * broker that stopped answering looks identical from here. A copy that moved
+   * 900 of 1 000 records and reported `done` with nothing else to say would be
+   * a silently truncated result wearing a success message, so the core names
+   * the partitions and the panel repeats them.
+   *
+   * Time the copy spends waiting on the DESTINATION — the rate limit's pacing
+   * gap, the in-flight drain — never counts towards that deadline, so a paced
+   * or a slow copy takes longer and still reads everything.
+   */
+  assumed_complete: number[];
+}
+
+/** Read-only: nothing is written, and the destination is never contacted. */
+export function copyDryRun(
+  profileId: string,
+  spec: CopySpec,
+): Promise<CopyEstimate> {
+  return invoke<CopyEstimate>("copy_dry_run", { profileId, spec });
+}
+
+/**
+ * Mutating — AT THE DESTINATION. The core's `ensure_writable` runs against
+ * `spec.dest_profile_id`, not against the profile this command is addressed
+ * to, so a read-only destination refuses a copy started from a writable
+ * source. Resolves with the copy id its progress is addressed to.
+ */
+export function copyStart(profileId: string, spec: CopySpec): Promise<string> {
+  return invoke<string>("copy_start", { profileId, spec });
+}
+
+/** Idempotent on the Rust side. Records already accepted stay written. */
+export function copyStop(copyId: string): Promise<void> {
+  return invoke<void>("copy_stop", { copyId });
+}
+
+export function copyEventName(copyId: string): string {
+  return `kavka://copy/${copyId}`;
+}
+
+export function copyListen(
+  copyId: string,
+  cb: (payload: CopyProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<CopyProgress>(copyEventName(copyId), (event) =>
+    cb(event.payload),
+  );
+}
+
+/**
+ * `copyListen` with the unmount race closed and the handshake confirmed — see
+ * `bulkSubscribe`, which this mirrors for the same reason: a short copy can be
+ * finished before the panel has subscribed, and a lost `done` leaves a progress
+ * panel counting forever over a write that has already happened.
+ */
+export function copySubscribe(
+  copyId: string,
+  cb: (payload: CopyProgress) => void,
+  onError?: (message: string) => void,
+): () => void {
+  let cancelled = false;
+  let unlisten: UnlistenFn | null = null;
+  void copyListen(copyId, (payload) => {
+    if (!cancelled) cb(payload);
+  })
+    .then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+      void sessionReady(copyId).catch(() => undefined);
+    })
+    .catch((err: unknown) => {
+      if (!cancelled) onError?.(errorMessage(err));
+    });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = null;
+  };
+}
+
+// ── Config diff between two topics ─────────────────────────────────────────
+
+/**
+ * One setting, as both topics hold it.
+ *
+ * `a_is_default` / `b_is_default` are the difference between "staging sets
+ * retention.ms to 7 days" and "staging inherits 7 days from its brokers" —
+ * two facts with two different consequences for copying one to the other, and
+ * DESIGN's config table already renders the second one muted. `differs` is the
+ * core's own verdict rather than a string comparison here, so one rule decides
+ * it for both sides.
+ */
+export interface ConfigDiffRow {
+  name: string;
+  /** null = this topic has no value for the setting at all. */
+  a: string | null;
+  b: string | null;
+  a_is_default: boolean;
+  b_is_default: boolean;
+  differs: boolean;
+}
+
+/**
+ * Compare one topic's configuration with another's, across two connections.
+ *
+ * V1 IS TOPICS ONLY. The wire type accepts `null` for either topic — a
+ * broker-level diff — and the core rejects it by name; this wrapper does not
+ * offer the shape at all, so the refusal can only ever be reached by a caller
+ * bypassing it. Broker configs already have their own screen (BrokersTab).
+ */
+export function configDiff(
+  profileIdA: string,
+  topicA: string,
+  profileIdB: string,
+  topicB: string,
+): Promise<ConfigDiffRow[]> {
+  return invoke<ConfigDiffRow[]>("config_diff", {
+    profileIdA,
+    topicA,
+    profileIdB,
+    topicB,
+  });
+}
+
+// ── Consumer-offset migration ──────────────────────────────────────────────
+
+/**
+ * How one partition's destination offset was arrived at.
+ *
+ *  - `timestamp`  — the source's committed offset had a timestamp, and the
+ *                   destination's broker answered with the offset that time
+ *                   maps to there. The only method that survives two clusters
+ *                   whose offsets were never in step, which is all of them.
+ *  - `earliest`   — no timestamp was available, so the destination starts at
+ *                   the beginning of its own partition. Honest, and usually a
+ *                   lot of re-processing.
+ *  - `latest`     — the group was already caught up here (its offset is at or
+ *                   past the source partition's end, or nothing readable
+ *                   remains there), so it starts at the END of the destination
+ *                   partition and waits for new records. A distinct fact from
+ *                   all three others: reporting it as `timestamp` would claim a
+ *                   lookup that never happened, and as `none` would claim there
+ *                   was nothing to migrate when the group was in fact finished.
+ *  - `none`       — nothing to migrate: the source group never committed here.
+ */
+export type OffsetMigrationMethod =
+  | "timestamp"
+  | "earliest"
+  | "latest"
+  | "none";
+
+export interface OffsetMigrationRow {
+  partition: number;
+  /** null = the source group has never committed for this partition. */
+  source_committed: number | null;
+  /** The timestamp of the record at `source_committed`, if there was one. */
+  source_ts_ms: number | null;
+  /** Where the destination group would be put. null with `method: "none"`. */
+  dest_offset: number | null;
+  /** One of OffsetMigrationMethod — kept open in case the core adds one. */
+  method: string;
+}
+
+/**
+ * Read-only. Works out where each of the source group's partitions would land
+ * on the destination, and says how it worked each one out.
+ *
+ * NOTHING IS WRITTEN and the plan is a snapshot: both clusters keep moving, so
+ * a plan read an hour ago describes an hour ago. The wizard re-plans rather
+ * than caching one.
+ */
+export function offsetsMigratePlan(
+  profileId: string,
+  groupId: string,
+  topic: string,
+  destProfileId: string,
+  destGroupId: string,
+  destTopic: string,
+): Promise<OffsetMigrationRow[]> {
+  return invoke<OffsetMigrationRow[]>("offsets_migrate_plan", {
+    profileId,
+    groupId,
+    topic,
+    destProfileId,
+    destGroupId,
+    destTopic,
+  });
+}
+
+/**
+ * Mutating, AT THE DESTINATION, and guarded with the same vocabulary as
+ * `offsets_reset`: the core refuses unless the destination group is Empty, and
+ * refuses outright on a read-only destination connection.
+ *
+ * There is no `force` here on purpose — see OffsetMigrateModal, which states
+ * the Empty requirement before the button rather than after the refusal.
+ * Resolves with the destination group's offsets as they stand AFTER the write.
+ */
+export function offsetsMigrateApply(
+  destProfileId: string,
+  destGroupId: string,
+  destTopic: string,
+  plan: OffsetMigrationRow[],
+): Promise<GroupOffset[]> {
+  return invoke<GroupOffset[]>("offsets_migrate_apply", {
+    destProfileId,
+    destGroupId,
+    destTopic,
+    // CONTRACT FRICTION — the contract names this argument "plan-rows" and the
+    // core function's parameter is `plan`, so `plan` is the guess with two
+    // votes. It is the one argument key in this file that has not been read
+    // back off a registered command, because the shell has not registered one
+    // yet: an invoke argument key must match the Rust parameter name exactly,
+    // and a mismatch fails at the bridge with a message about a missing field
+    // rather than anywhere near this line.
+    plan,
+  });
+}
+
+// ── Dead letter queues ─────────────────────────────────────────────────────
+
+/**
+ * Which convention Kavka recognised in a record's headers.
+ *
+ * `none` never reaches the UI — a record whose headers match nothing carries no
+ * `dlq` at all — but the variant exists because the core's own function is
+ * total, and a UI that pattern-matches on the string must not be surprised by
+ * it.
+ */
+export type DlqConvention = "connect" | "spring" | "none";
+
+/**
+ * Where a dead-lettered record came from and what killed it, as the framework
+ * that wrote it recorded.
+ *
+ * EVERY FIELD IS OPTIONAL BECAUSE EVERY FIELD IS OPTIONAL IN THE FRAMEWORKS.
+ * Kafka Connect writes the exception headers only when the failure carried one,
+ * and Spring's DLT publisher can be configured to leave any of them out. A
+ * record with an original topic and nothing else is a normal, useful dead
+ * letter — so the inspector renders what is there and says nothing about what
+ * is not.
+ */
+export interface DlqMeta {
+  /** One of DlqConvention — kept open in case the core learns another. */
+  convention: string;
+  original_topic: string | null;
+  original_partition: number | null;
+  original_offset: number | null;
+  exception_class: string | null;
+  exception_message: string | null;
+  stacktrace: string | null;
 }

@@ -96,6 +96,14 @@ interface SearchViewProps {
   onBrowse: () => void;
   onDanger: DangerReport;
   push: (spec: ToastSpec) => void;
+  /**
+   * The two dead-letter actions, threaded so a search for failures can act on
+   * what it finds. Searching a DLQ for one exception class and re-producing
+   * the matches is the whole workflow; an inspector that only offers it in the
+   * browser would send the user back to look the record up again.
+   */
+  onBrowseOriginal?: (topic: string, partition: number, offset: number) => void;
+  onReproduce?: (record: MessageRecord) => void;
 }
 
 export default function SearchView({
@@ -106,6 +114,8 @@ export default function SearchView({
   onBrowse,
   onDanger,
   push,
+  onBrowseOriginal,
+  onReproduce,
 }: SearchViewProps) {
   // ── The query ──────────────────────────────────────────────────────────
   const [cel, setCel] = useState(false);
@@ -899,6 +909,13 @@ export default function SearchView({
             record={selected}
             topic={topic}
             onClose={() => setSelectedKey(null)}
+            onBrowseOriginal={onBrowseOriginal}
+            onReproduce={onReproduce}
+            reproduceBlocked={
+              profile.read_only
+                ? "This connection is read-only. Turn that off in the connection's settings to produce or edit."
+                : undefined
+            }
           />
         )}
       </div>

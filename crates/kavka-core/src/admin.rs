@@ -245,8 +245,16 @@ pub fn resolve_reset_offset(target: &ResetTarget, bounds: PartitionBounds) -> i6
 /// count, and the one action that fixes it. `force` skips the check for the
 /// operator who knows the group is about to die anyway — it does not make the
 /// broker accept it.
+/// `pub(crate)` for [`crate::xcluster`]: an offset *migration* commits to a
+/// destination group exactly the way a reset does, and it needs this exact
+/// sentence rather than a second one that drifts from it.
 #[cfg_attr(not(feature = "kafka"), allow(dead_code))]
-fn ensure_group_resettable(group_id: &str, state: &str, members: usize, force: bool) -> Result<()> {
+pub(crate) fn ensure_group_resettable(
+    group_id: &str,
+    state: &str,
+    members: usize,
+    force: bool,
+) -> Result<()> {
     if force || state == "Empty" {
         return Ok(());
     }

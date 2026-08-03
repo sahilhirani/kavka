@@ -256,6 +256,30 @@ impl ClusterConnection {
         &self.profile
     }
 
+    /// The cluster's own id, as its brokers report it.
+    ///
+    /// `None` is a fact rather than a failure: a broker that does not answer
+    /// within [`METADATA_TIMEOUT`], or one too old to send the field, simply has
+    /// no id to give — so callers that need to know whether two connections are
+    /// the same cluster fall back to comparing addresses (see
+    /// [`crate::xcluster::same_cluster`]) rather than treating the absence as an
+    /// error.
+    ///
+    /// Cheaper than [`overview`](Self::overview), which is why it exists
+    /// separately: a same-cluster check has no use for the broker list or the
+    /// topic count, and on a cluster with thousands of topics the full metadata
+    /// fetch is the expensive part.
+    #[cfg(feature = "kafka")]
+    pub fn cluster_id(&self) -> Option<String> {
+        self.service_events();
+        self.consumer.client().fetch_cluster_id(METADATA_TIMEOUT)
+    }
+
+    #[cfg(not(feature = "kafka"))]
+    pub fn cluster_id(&self) -> Option<String> {
+        None
+    }
+
     /// Every mutating entry point calls this first (D5: read-only is enforced
     /// in core, not the UI).
     pub fn ensure_writable(&self, op: &'static str) -> Result<()> {

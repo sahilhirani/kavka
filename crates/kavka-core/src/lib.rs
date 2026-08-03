@@ -14,11 +14,18 @@
 //! - [`serdes`]: bytes -> canonical JSON with schema metadata.
 //! - [`sr`]: Schema Registry clients.
 //! - [`search`]: the streaming unbounded search engine.
+//! - [`sql`]: SQL over a bounded scan window, on DataFusion.
 //! - [`history`]: the lag sampler and its durable store (redb).
 //! - [`metrics`]: Prometheus/JMX-exporter scraping, in memory only.
 //! - [`alerts`]: rules, hysteresis, and the webhook that carries an event out.
 //! - [`streams`]: Kafka Streams topology inference — pure, and carrying its own
 //!   list of what it cannot know.
+//! - [`xcluster`]: work that spans two clusters — copying a topic's records
+//!   into another one, diffing two topics' configurations, and carrying a
+//!   consumer group's position across. It owns no Kafka machinery of its own:
+//!   it composes [`search`]'s filter, [`produce`]'s producer settings and
+//!   [`admin`]'s offset rules, which is what keeps one answer to "is this
+//!   record durable" and one sentence for "this group is still running".
 //! - [`protocol`]: hand-rolled Kafka wire frames for the admin RPCs librdkafka
 //!   does not expose — quorum, leader election, reassignment, client quotas,
 //!   share groups (docs/ARCHITECTURE.md D2).
@@ -44,8 +51,15 @@ pub mod produce;
 pub mod profiles;
 pub mod search;
 pub mod serdes;
+/// Ungated, like [`search`], and for the same reason: the wire types, the
+/// column list and the surface documentation are strings and structs the UI
+/// needs, and none of them involves librdkafka. The engine inside is gated —
+/// `datafusion` rides on the `kafka` feature, because a build that cannot open
+/// a cluster connection has no records to run SQL over (see Cargo.toml).
+pub mod sql;
 pub mod sr;
 pub mod streams;
+pub mod xcluster;
 
 /// Behind `kafka` for one reason, spelled out at the top of the module: its
 /// OAUTHBEARER path reuses [`connection::auth::TokenSource`], which is gated on

@@ -6,7 +6,8 @@ import {
   useMemo,
   useRef,
 } from "react";
-import type { MessageRecord } from "./api";
+import type { DlqMeta, MessageRecord } from "./api";
+import { conventionWord } from "./dlq";
 import { formatClock, groupDigits } from "./format";
 import { Term } from "./Glossary";
 import { previewText } from "./payload";
@@ -44,6 +45,35 @@ import {
 
 export function rowKey(record: MessageRecord): string {
   return `${record.partition}:${record.offset}`;
+}
+
+/**
+ * `org.apache.kafka.connect.errors.DataException` → `DataException`.
+ *
+ * A fully-qualified Java class name is 60 characters of package and one word of
+ * meaning, and the cell has room for the word. The full name is in the title
+ * and in the inspector, so nothing is lost — only the part nobody reads is.
+ */
+export function shortClass(fqcn: string | null): string | null {
+  if (fqcn === null) return null;
+  const cut = fqcn.lastIndexOf(".");
+  const short = cut >= 0 ? fqcn.slice(cut + 1) : fqcn;
+  return short.length === 0 ? fqcn : short;
+}
+
+/** Everything the badge knows, for the hover. */
+function dlqTitle(dlq: DlqMeta): string {
+  const parts = [`Dead letter, ${conventionWord(dlq.convention)} convention.`];
+  if (dlq.original_topic !== null) {
+    const at =
+      dlq.original_partition !== null && dlq.original_offset !== null
+        ? ` at partition ${dlq.original_partition}, offset ${dlq.original_offset}`
+        : "";
+    parts.push(`It failed on ${dlq.original_topic}${at}.`);
+  }
+  if (dlq.exception_class !== null) parts.push(dlq.exception_class);
+  if (dlq.exception_message !== null) parts.push(dlq.exception_message);
+  return parts.join(" ");
 }
 
 /**
@@ -113,6 +143,23 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
       records.length,
     );
     useRowHeightAssertion(firstRowRef, win.rowH, records.length > 0);
+
+    /**
+     * THE DLQ COLUMN APPEARS ONLY WHERE THERE IS ONE.
+     *
+     * A column of empty cells on every ordinary topic is a column that teaches
+     * nothing and costs width on the payload preview, which is the loudest
+     * thing in the table. `record.dlq` is populated by the core only when a
+     * recognised convention matched (see api.ts), so the presence of the
+     * column IS the answer to "is this a dead letter topic" — and the browser
+     * says so in words when the answer is no but the topic's name suggests
+     * otherwise (see MessagesView).
+     */
+    const hasDlq = useMemo(
+      () => records.some((r) => r.dlq != null),
+      [records],
+    );
+    const colCount = hasDlq ? 6 : 5;
 
     const setPinned = useCallback(
       (next: boolean) => {
@@ -289,6 +336,7 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
               <col className="mcol-ts" />
               <col className="mcol-key" />
               <col className="mcol-value" />
+              {hasDlq && <col className="mcol-dlq" />}
             </colgroup>
             <thead>
               <tr aria-rowindex={1}>
@@ -301,12 +349,16 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
                 <th scope="col">Time</th>
                 <th scope="col">Key</th>
                 <th scope="col">Value</th>
+                {hasDlq && <th scope="col">Dead letter</th>}
               </tr>
             </thead>
             <tbody>
               {win.padTop > 0 && (
                 <tr aria-hidden="true" className="row-pad">
-                  <td colSpan={5} style={{ height: win.padTop, padding: 0 }} />
+                  <td
+                    colSpan={colCount}
+                    style={{ height: win.padTop, padding: 0 }}
+                  />
                 </tr>
               )}
               {visible.map((record, i) => {
@@ -374,13 +426,37 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
                         previewText(record.value)
                       )}
                     </td>
+                    {hasDlq && (
+                      <td className="cell-preview">
+                        {record.dlq == null ? (
+                          <span
+                            className="absent"
+                            title="No dead-letter headers Kavka recognises on this record."
+                          >
+                            ∅
+                          </span>
+                        ) : (
+                          // Law 2: the badge carries a word, and the word is
+                          // the exception when the framework named one — a
+                          // coloured pill saying "DLQ" would be a colour with
+                          // a label, not information.
+                          <span
+                            className="dlq-badge"
+                            title={dlqTitle(record.dlq)}
+                          >
+                            {shortClass(record.dlq.exception_class) ??
+                              "dead letter"}
+                          </span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {win.padBottom > 0 && (
                 <tr aria-hidden="true" className="row-pad">
                   <td
-                    colSpan={5}
+                    colSpan={colCount}
                     style={{ height: win.padBottom, padding: 0 }}
                   />
                 </tr>

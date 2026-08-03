@@ -11,6 +11,7 @@ import {
   type ConnectionProfile,
   type JsonValue,
   type PartitionDetail,
+  type ProduceHeaderInput,
   type ProduceRecordSpec,
   type ProduceValueSpec,
 } from "./api";
@@ -175,6 +176,26 @@ interface FieldError {
 
 let nextHeaderId = 1;
 
+/**
+ * A record on its way INTO the form rather than out of it.
+ *
+ * Phase 5a's DLQ replay is the first caller: it hands over the dead-lettered
+ * record's key, value and headers — minus the framework's own dead-letter
+ * bookkeeping, plus Kavka's provenance — with the destination set to the topic
+ * it originally failed on. The form is otherwise unchanged, and everything the
+ * user does to it afterwards is theirs: this is an initial value, never a lock.
+ */
+export interface ProducePrefill {
+  key: string;
+  /** The value's text. `null` = a tombstone, which is a real thing to replay. */
+  value: string | null;
+  /** JSON gets the parse-on-blur treatment; text does not. */
+  valueKind?: "text" | "json";
+  headers: ProduceHeaderInput[];
+  /** One sentence saying where this came from, shown above the form. */
+  note?: React.ReactNode;
+}
+
 interface ProducePanelProps {
   profile: ConnectionProfile;
   topic: string;
@@ -183,6 +204,8 @@ interface ProducePanelProps {
   /** Jump the message browser to the record that was just written. */
   onViewRecord: (partition: number, offset: number) => void;
   onClose: () => void;
+  /** Open with these values already in the form. See `ProducePrefill`. */
+  initial?: ProducePrefill | null;
 }
 
 export default function ProducePanel({
@@ -192,16 +215,29 @@ export default function ProducePanel({
   push,
   onViewRecord,
   onClose,
+  initial = null,
 }: ProducePanelProps) {
   const [tab, setTab] = useState<Tab>("one");
 
   // ── One message ────────────────────────────────────────────────────────
-  const [key, setKey] = useState("");
-  const [valueKind, setValueKind] = useState<ValueKind>("json");
-  const [value, setValue] = useState("{\n  \n}");
+  const [key, setKey] = useState(initial?.key ?? "");
+  const [valueKind, setValueKind] = useState<ValueKind>(
+    initial === null ? "json" : (initial.valueKind ?? "text"),
+  );
+  const [value, setValue] = useState(
+    initial === null ? "{\n  \n}" : (initial.value ?? ""),
+  );
   const [subject, setSubject] = useState(`${topic}-value`);
-  const [tombstone, setTombstone] = useState(false);
-  const [headers, setHeaders] = useState<HeaderRow[]>([]);
+  const [tombstone, setTombstone] = useState(
+    initial !== null && initial.value === null,
+  );
+  const [headers, setHeaders] = useState<HeaderRow[]>(() =>
+    (initial?.headers ?? []).map((h) => ({
+      id: nextHeaderId++,
+      key: h.key,
+      value: h.value,
+    })),
+  );
   const [partition, setPartition] = useState("auto");
 
   // ── Bulk ───────────────────────────────────────────────────────────────
@@ -661,6 +697,13 @@ export default function ProducePanel({
       )}
 
       {readOnly && <p className="readonly-note">{READ_ONLY_WHY}</p>}
+
+      {/* Where the values in this form came from, when they did not come from
+          the user. A prefilled form that says nothing about why it is
+          prefilled is a form nobody trusts enough to press. */}
+      {initial?.note !== undefined && (
+        <p className="dialog-note">{initial.note}</p>
+      )}
 
       <div className="modal-tabs" role="tablist" aria-label="Produce">
         {(

@@ -1226,6 +1226,8 @@ fn record(
         value: message
             .payload()
             .map(|bytes| serdes::decode(bytes, registry, max_display)),
+        // Before `headers` moves — see `MessageRecord::dlq`.
+        dlq: serdes::dlq_inspect(&headers),
         headers,
     }
 }
@@ -1446,6 +1448,7 @@ mod filters {
                 decode_header("trace-id", Some(b"abc-123")),
                 decode_header("retry", None),
             ],
+            dlq: None,
         }
     }
 

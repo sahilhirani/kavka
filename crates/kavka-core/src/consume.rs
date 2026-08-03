@@ -522,6 +522,10 @@ fn record(
         value: message
             .payload()
             .map(|bytes| serdes::decode(bytes, registry, max_display)),
+        // Before `headers` moves. `None` for every record that is not a dead
+        // letter, which costs one pass over a short list and nothing on the
+        // wire (see `MessageRecord::dlq`).
+        dlq: serdes::dlq_inspect(&headers),
         headers,
     }
 }

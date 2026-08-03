@@ -30,8 +30,12 @@ use kavka_core::protocol::{
 };
 use kavka_core::search::{SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
+use kavka_core::sql::{SqlColumn, SqlSession, SqlSpec};
 use kavka_core::sr::{CompatibilityCheck, CompatibilityInForce, RegisteredId, SubjectVersion};
 use kavka_core::streams::StreamsTopology;
+use kavka_core::xcluster::{
+    self, ConfigDiffRow, CopyEstimate, CopySession, CopySpec, OffsetMigrationRow,
+};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -83,6 +87,16 @@ const SEARCH_POLL: Duration = Duration::from_millis(250);
 /// often everything before it does.
 const BULK_POLL: Duration = Duration::from_millis(50);
 
+/// How long a query's reader waits for result rows before looking at the world
+/// again. Also the worst-case latency of `sql_stop` and of the final progress
+/// event — the same trade as [`SEARCH_POLL`], for the same shape of read.
+const SQL_POLL: Duration = Duration::from_millis(250);
+
+/// A copy reports by snapshot for the same reason a bulk run does — the counts
+/// are written by delivery callbacks on librdkafka's thread — so this is only
+/// how promptly its `done` becomes an event.
+const COPY_POLL: Duration = Duration::from_millis(50);
+
 struct AppState {
     store: Arc<ProfileStore>,
     connections: Mutex<HashMap<String, Arc<ClusterConnection>>>,
@@ -93,12 +107,19 @@ struct AppState {
     /// disconnects — or deletes — must not leave one working.
     searches: SessionMap<SearchSession>,
     bulks: SessionMap<BulkSession>,
+    /// Running SQL queries, on the same books and for the same reason: a query
+    /// owns a consumer, and an in-memory Arrow scan besides.
+    sqls: SessionMap<SqlSession>,
+    /// Running cross-cluster copies. The one kind of session bound to TWO
+    /// profiles — see [`SessionEntry::dest_profile_id`] — because it owns a
+    /// consumer on one cluster and a producer on another.
+    copies: SessionMap<CopySession>,
     id_seq: AtomicU64,
     id_epoch: u64,
     /// The subscribe handshake of every session that has not started emitting
     /// yet, keyed by the same id its events are addressed to (see
-    /// [`READY_TIMEOUT`]). Searches and bulk runs share it because they share
-    /// the id namespace and the race.
+    /// [`READY_TIMEOUT`]). Searches, bulk runs, queries and copies share it
+    /// because they share the id namespace and the race.
     ready: Mutex<HashMap<String, Arc<ReadyGate>>>,
     /// The in-flight `messages_fetch` of each profile, so a newer browse can
     /// stop the one it replaces. A fetch is interactive and can hold a
@@ -145,10 +166,11 @@ type ProtocolSlot = Arc<Mutex<Option<ProtocolClient>>>;
 /// from a thread that is not the one draining it.
 ///
 /// Every session in the core already has exactly this method. The trait is what
-/// lets one [`SessionMap`] keep the books for tails, searches and bulk runs
-/// instead of three copies of the same bookkeeping drifting apart — and the
-/// lifecycle rules here (stop before removing, drop off the event loop, take a
-/// profile's sessions with the profile) are the ones that must not drift.
+/// lets one [`SessionMap`] keep the books for tails, searches, bulk runs,
+/// queries and copies instead of five copies of the same bookkeeping drifting
+/// apart — and the lifecycle rules here (stop before removing, drop off the
+/// event loop, take a profile's sessions with the profile) are the ones that
+/// must not drift.
 trait Stoppable: Send + Sync + 'static {
     fn stop(&self);
 }
@@ -168,6 +190,18 @@ impl Stoppable for SearchSession {
 impl Stoppable for BulkSession {
     fn stop(&self) {
         BulkSession::stop(self);
+    }
+}
+
+impl Stoppable for SqlSession {
+    fn stop(&self) {
+        SqlSession::stop(self);
+    }
+}
+
+impl Stoppable for CopySession {
+    fn stop(&self) {
+        CopySession::stop(self);
     }
 }
 
@@ -214,7 +248,25 @@ struct SessionMap<T> {
 
 struct SessionEntry<T> {
     profile_id: String,
+    /// A SECOND cluster this session is bound to: the destination of a copy,
+    /// which reads from `profile_id`'s workspace and writes somewhere else.
+    /// `None` for every session that only ever touches one cluster, which is
+    /// all of them except a copy.
+    ///
+    /// Disconnecting *either* end takes the copy down. Keying it by the source
+    /// alone would leave a session WRITING to a cluster the user has just
+    /// walked away from, which is the more expensive half of the thing this
+    /// bookkeeping exists to prevent — and the destination is exactly the end
+    /// the source's workspace does not show.
+    dest_profile_id: Option<String>,
     session: Arc<T>,
+}
+
+impl<T> SessionEntry<T> {
+    /// Whether this session belongs to `profile_id` at either end.
+    fn touches(&self, profile_id: &str) -> bool {
+        self.profile_id == profile_id || self.dest_profile_id.as_deref() == Some(profile_id)
+    }
 }
 
 impl<T: Stoppable> SessionMap<T> {
@@ -225,10 +277,25 @@ impl<T: Stoppable> SessionMap<T> {
     }
 
     fn insert(&self, id: String, profile_id: &str, session: &Arc<T>) {
+        self.insert_between(id, profile_id, None, session);
+    }
+
+    /// [`SessionMap::insert`] for a session that spans two connections — see
+    /// [`SessionEntry::dest_profile_id`]. A copy whose destination is its own
+    /// source is not a special case: `retain` visits each entry once, so an
+    /// entry naming one profile twice is still taken exactly once.
+    fn insert_between(
+        &self,
+        id: String,
+        profile_id: &str,
+        dest_profile_id: Option<&str>,
+        session: &Arc<T>,
+    ) {
         self.entries.lock().unwrap().insert(
             id,
             SessionEntry {
                 profile_id: profile_id.to_string(),
+                dest_profile_id: dest_profile_id.map(str::to_string),
                 session: Arc::clone(session),
             },
         );
@@ -243,11 +310,11 @@ impl<T: Stoppable> SessionMap<T> {
         Some(entry.session)
     }
 
-    /// Same, for every session belonging to one profile.
+    /// Same, for every session belonging to one profile — at either end.
     fn take_of(&self, profile_id: &str) -> Vec<Arc<T>> {
         let mut taken = Vec::new();
         self.entries.lock().unwrap().retain(|_, entry| {
-            if entry.profile_id != profile_id {
+            if !entry.touches(profile_id) {
                 return true;
             }
             entry.session.stop();
@@ -284,11 +351,18 @@ struct ProfileSessions {
     tails: Vec<Arc<TailSession>>,
     searches: Vec<Arc<SearchSession>>,
     bulks: Vec<Arc<BulkSession>>,
+    sqls: Vec<Arc<SqlSession>>,
+    /// Copies with this profile at *either* end.
+    copies: Vec<Arc<CopySession>>,
 }
 
 impl ProfileSessions {
     fn is_empty(&self) -> bool {
-        self.tails.is_empty() && self.searches.is_empty() && self.bulks.is_empty()
+        self.tails.is_empty()
+            && self.searches.is_empty()
+            && self.bulks.is_empty()
+            && self.sqls.is_empty()
+            && self.copies.is_empty()
     }
 }
 
@@ -843,8 +917,8 @@ impl AppState {
     /// event names it addresses — a session id never leaves this machine or
     /// outlives the app, so a counter plus the start time answers "keep two
     /// browsers of the same topic apart" without a uuid dependency. One counter
-    /// serves all three kinds: they share a namespace, so a mixed-up id is a
-    /// miss rather than a collision.
+    /// serves every kind: they share a namespace, so a mixed-up id is a miss
+    /// rather than a collision.
     fn next_id(&self) -> String {
         let seq = self.id_seq.fetch_add(1, Ordering::Relaxed);
         format!("{:x}-{seq:x}", self.id_epoch)
@@ -868,6 +942,8 @@ impl AppState {
             tails: self.tails.take_of(profile_id),
             searches: self.searches.take_of(profile_id),
             bulks: self.bulks.take_of(profile_id),
+            sqls: self.sqls.take_of(profile_id),
+            copies: self.copies.take_of(profile_id),
         }
     }
 
@@ -1021,6 +1097,8 @@ impl AppState {
         self.tails.stop_all();
         self.searches.stop_all();
         self.bulks.stop_all();
+        self.sqls.stop_all();
+        self.copies.stop_all();
         // The monitors too: each is a thread holding a librdkafka client and a
         // redb write handle, and each is woken by this rather than joined —
         // quitting must never wait on a broker.
@@ -1041,6 +1119,67 @@ where
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+/// The connection for `profile_id`, opening one if the user has not.
+///
+/// **Only for the FAR END of a cross-cluster command** — the destination of a
+/// copy or an offset migration, side B of a config diff. Everything addressed
+/// to a single cluster still goes through [`AppState::connection`] and still
+/// refuses when that cluster is not open: a workspace command is asked from a
+/// screen the user opened, and "not connected" is the truth there.
+///
+/// A cross-cluster command is different. The destination is named in the
+/// request, chosen from the full profile list, and is very often a cluster this
+/// window has never opened — refusing it would mean "connect to prod first,
+/// then come back and copy into it", which is more clicks *and* leaves a prod
+/// workspace sitting open afterwards.
+///
+/// **Lifetime, which is the whole design.**
+///
+/// - A connection the user already has open is **borrowed and never closed
+///   here**. The map keeps its own reference, so the clone this returns is one
+///   more `Arc`, and dropping it does nothing.
+/// - A connection opened here is **not put on the books**. It lives exactly as
+///   long as the command that needed it: every caller moves it straight into a
+///   `blocking` closure, so the last reference — and the librdkafka client
+///   teardown — goes with that closure, on the blocking pool.
+///
+/// Not caching it is deliberate. `connections` is the set of clusters the UI
+/// says are open, and a hidden entry in it is a client Kavka holds against a
+/// cluster whose status bar reads "not connected" and whose disconnect button
+/// does not exist. In an app whose sixth guardrail layer is *prod is visible
+/// wherever data is*, an invisible connection to prod is the wrong side of the
+/// trade — a copy pays one connect for it, once, and a `CopySession` owns its
+/// own producer from that point on (see `xcluster::CopySession::start`), so
+/// nothing outlives the command that needs the connection anyway.
+async fn connection_or_open(
+    state: &AppState,
+    profile_id: &str,
+) -> CmdResult<Arc<ClusterConnection>> {
+    // Bound to a local rather than tested inline: the guard must be gone before
+    // the `await` below, and a `MutexGuard` living across one is how an async
+    // command stops being `Send`.
+    let open = state.connections.lock().unwrap().get(profile_id).cloned();
+    if let Some(open) = open {
+        return Ok(open);
+    }
+    let store = state.store.clone();
+    let id = profile_id.to_string();
+    blocking(move || {
+        let profile = store
+            .list()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| {
+                kavka_core::Error::Other(format!(
+                    "Kavka has no saved connection with the id {id}. If it was deleted while \
+                     this screen was open, pick the cluster again."
+                ))
+            })?;
+        ClusterConnection::connect(profile).map(Arc::new)
+    })
+    .await
 }
 
 /// Runs one wire-protocol call on this profile's kept-alive connection,
@@ -1387,9 +1526,11 @@ async fn cluster_connect(
 #[tauri::command]
 async fn cluster_disconnect(state: State<'_, AppState>, profile_id: String) -> CmdResult<()> {
     // Sessions first: each owns its own client, so disconnecting without them
-    // leaves tails emitting into a UI that thinks it is offline, searches
-    // fetching, and bulk runs still writing. The same argument applies to a
-    // fetch that is still polling — and to the monitor, which `take_sessions_of`
+    // leaves tails emitting into a UI that thinks it is offline, searches and
+    // queries fetching, and bulk runs still writing. It takes the copies with
+    // this cluster at EITHER end, too — a copy started elsewhere is still a
+    // producer writing into this one. The same argument applies to a fetch
+    // that is still polling — and to the monitor, which `take_sessions_of`
     // stops with them. Sampling is a thing Kavka does *while you are watching a
     // cluster*, and a sampler that outlived the disconnect would keep a broker
     // answering `ListGroups` for a window nobody has open.
@@ -1716,8 +1857,8 @@ async fn search_start(
 ///
 /// Idempotent, and an unknown id is `Ok(())` — the session may already be
 /// emitting, or already over, and neither is a mistake worth an error. One
-/// command serves searches and bulk runs because both are keyed by the same id
-/// namespace and both have the same race.
+/// command serves searches, bulk runs, SQL queries and copies because they are
+/// keyed by the same id namespace and all have the same race.
 #[tauri::command]
 async fn session_ready(state: State<'_, AppState>, session_id: String) -> CmdResult<()> {
     state.open_ready(&session_id);
@@ -1730,6 +1871,156 @@ async fn session_ready(state: State<'_, AppState>, session_id: String) -> CmdRes
 #[tauri::command]
 async fn search_stop(state: State<'_, AppState>, search_id: String) -> CmdResult<()> {
     match state.searches.take(&search_id) {
+        Some(session) => retire(session).await,
+        None => Ok(()),
+    }
+}
+
+// ── SQL over a topic ───────────────────────────────────────────────────────
+
+/// The three event names one query's payloads are addressed to. All go to every
+/// window, so the id in the name is what keeps two queries apart.
+fn sql_schema_event(sql_id: &str) -> String {
+    format!("kavka://sql/{sql_id}/schema")
+}
+
+fn sql_rows_event(sql_id: &str) -> String {
+    format!("kavka://sql/{sql_id}/rows")
+}
+
+fn sql_progress_event(sql_id: &str) -> String {
+    format!("kavka://sql/{sql_id}/progress")
+}
+
+/// The answer's columns, emitted **once** and before any row.
+///
+/// A third channel rather than a field on the first row batch, because the
+/// column list is the only answer a query that matched nothing has: a grid that
+/// learned its schema from the first batch would render nothing at all for it.
+#[derive(Clone, Serialize)]
+struct SqlSchema {
+    columns: Vec<SqlColumn>,
+}
+
+/// One batch of result rows, positional against [`SqlSchema::columns`].
+#[derive(Clone, Serialize)]
+struct SqlRows {
+    rows: Vec<Vec<serde_json::Value>>,
+}
+
+/// One query's reader loop. Runs on its own thread — see [`spawn_emitter`].
+fn pump_sql(app: &AppHandle, sql_id: &str, session: &SqlSession) {
+    let schema_event = sql_schema_event(sql_id);
+    let rows_event = sql_rows_event(sql_id);
+    let progress_event = sql_progress_event(sql_id);
+
+    // Nothing is emitted until the UI says its listeners are up — and the
+    // handshake matters more here than for a search, because the schema is
+    // emitted once and never again: a query whose first event is lost has a
+    // result set with no column names for the rest of its life.
+    let mut last_progress = Instant::now();
+    await_subscriber(app, sql_id, "sql query");
+
+    if let Err(e) = app.emit(
+        &schema_event,
+        SqlSchema {
+            columns: session.columns(),
+        },
+    ) {
+        // Nobody can receive this query any more; don't scan a topic for it.
+        tracing::warn!("sql {sql_id}: {e}");
+        session.stop();
+    } else {
+        // `None` is the end of the query; `Some(empty)` is a scan that has not
+        // produced a row yet, which is a state the UI has to be able to say out
+        // loud (docs/DESIGN.md §7: never "no results" while something runs).
+        while let Some(rows) = session.next_rows(SQL_POLL) {
+            if !rows.is_empty() {
+                if let Err(e) = app.emit(&rows_event, SqlRows { rows }) {
+                    tracing::warn!("sql {sql_id}: {e}");
+                    session.stop();
+                    break;
+                }
+            }
+            if last_progress.elapsed() < PROGRESS_EVERY {
+                continue;
+            }
+            last_progress = Instant::now();
+            if let Err(e) = app.emit(&progress_event, session.progress()) {
+                tracing::warn!("sql {sql_id}: {e}");
+                session.stop();
+                break;
+            }
+        }
+    }
+
+    // Forgotten first, so a `sql_stop` racing the last event is the no-op it
+    // claims to be, then the one event the UI cannot do without: the final
+    // counts, the error if the query died — and `capped`, which is the whole
+    // honesty of the feature and is only trustworthy once the scan is over.
+    if let Some(state) = app.try_state::<AppState>() {
+        state.sqls.forget(sql_id);
+    }
+    let mut final_progress = session.progress();
+    // Forced rather than read, for the one case where it would be false: a loop
+    // that left early because an emit failed. As far as anything downstream is
+    // concerned this query is over, and the contract is that the last progress
+    // event says so.
+    final_progress.done = true;
+    let _ = app.emit(&progress_event, final_progress);
+}
+
+/// Starts a query and answers with the id its three channels are named for.
+///
+/// Everything a user can get wrong fails here rather than as a query that ends
+/// a moment later having answered nothing: `SqlSession::start` parses and plans
+/// the SQL — and refuses every write statement — **before a single broker
+/// call**, then resolves partitions and watermarks on the calling thread, which
+/// is the blocking pool because all of that talks to librdkafka.
+#[tauri::command]
+async fn sql_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    spec: SqlSpec,
+) -> CmdResult<String> {
+    let conn = state.connection(&profile_id)?;
+    let session = blocking(move || {
+        // The registry is the profile's, not a global — same rule as search:
+        // `key_text`/`value_text` are decoded values, and two clusters can have
+        // different registries or none.
+        SqlSession::start(&conn, conn.profile().schema_registry.as_ref(), &spec).map(Arc::new)
+    })
+    .await?;
+
+    let sql_id = state.next_id();
+    state.sqls.insert(sql_id.clone(), &profile_id, &session);
+    // Armed before the id leaves this function, so a `session_ready` racing the
+    // emitter's own start has a gate to open.
+    state.arm_ready(&sql_id);
+
+    let spawned = spawn_emitter("kavka-sql-emit", {
+        let sql_id = sql_id.clone();
+        move || pump_sql(&app, &sql_id, &session)
+    });
+    if let Err(e) = spawned {
+        // Nothing will ever drain this session, and a query nobody drains is a
+        // consumer fetching at full speed into an Arrow buffer.
+        state.disarm_ready(&sql_id);
+        if let Some(orphan) = state.sqls.take(&sql_id) {
+            retire(orphan).await?;
+        }
+        return Err(format!("starting the SQL reader: {e}"));
+    }
+    Ok(sql_id)
+}
+
+/// Idempotent: an unknown id is `Ok(())`. The UI stops a query when the view
+/// unmounts, when `Esc` cancels it, and again when the final progress says
+/// `done` — none of those is a mistake worth an error.
+#[tauri::command]
+async fn sql_stop(state: State<'_, AppState>, sql_id: String) -> CmdResult<()> {
+    match state.sqls.take(&sql_id) {
         Some(session) => retire(session).await,
         None => Ok(()),
     }
@@ -1850,6 +2141,262 @@ async fn bulk_stop(state: State<'_, AppState>, bulk_id: String) -> CmdResult<()>
         Some(session) => retire(session).await,
         None => Ok(()),
     }
+}
+
+// ── Cross-cluster: copy, config diff, offset migration ─────────────────────
+//
+// The one family of commands with TWO connections. Every rule about the second
+// one is in [`connection_or_open`]; the rules that belong to the commands are:
+//
+//  - **The command's own `profile_id` is the SOURCE**, and it must already be
+//    connected, like every other command in this file. The destination is
+//    named in the request and is opened on demand.
+//  - **Read-only is the destination's, and the core decides it.** `copy_start`
+//    and `offsets_migrate_apply` both call `ensure_writable` on the connection
+//    they are about to WRITE to, which is not the one the command was addressed
+//    to — a writable source cannot copy into a read-only destination (D5).
+//  - **A copy is on the books under both profiles**, so disconnecting either
+//    end stops it — see [`SessionEntry::dest_profile_id`].
+
+/// The event name one copy's progress is addressed to.
+fn copy_event(copy_id: &str) -> String {
+    format!("kavka://copy/{copy_id}")
+}
+
+/// One copy's reporter loop. Runs on its own thread — see [`spawn_emitter`].
+fn pump_copy(app: &AppHandle, copy_id: &str, session: &CopySession) {
+    let event = copy_event(copy_id);
+
+    // The same handshake as a bulk run, and it matters for the same reason: a
+    // copy of forty records finishes long before the wizard has subscribed, and
+    // a `done` emitted into that window leaves it counting forever over a write
+    // that has already happened.
+    let mut last = Instant::now();
+    await_subscriber(app, copy_id, "copy");
+
+    // A poll, not a blocking read: `copied` is written by delivery callbacks on
+    // librdkafka's thread, so progress is a snapshot of counters.
+    loop {
+        let progress = session.progress();
+        if progress.done {
+            break;
+        }
+        if last.elapsed() >= PROGRESS_EVERY {
+            last = Instant::now();
+            if let Err(e) = app.emit(&event, progress) {
+                // Nobody can receive this copy any more. It is a run that
+                // WRITES, so it stops rather than finishing unobserved.
+                tracing::warn!("copy {copy_id}: {e}");
+                session.stop();
+                break;
+            }
+        }
+        std::thread::sleep(COPY_POLL);
+    }
+
+    // Forgotten first, so a `copy_stop` racing the last payload is the no-op it
+    // claims to be, then the final counts — which are the acknowledged ones,
+    // because the reader flushes what librdkafka already accepted before it
+    // sets `done`.
+    if let Some(state) = app.try_state::<AppState>() {
+        state.copies.forget(copy_id);
+    }
+    let mut final_progress = session.progress();
+    final_progress.done = true;
+    let _ = app.emit(&event, final_progress);
+}
+
+/// Read-only, and the destination is never contacted: the estimate is
+/// watermark arithmetic over the source alone.
+///
+/// `estimate_only` in the answer is what says the number is a scan size rather
+/// than a match count — the core sets it whenever a filter is in play, and no
+/// screen may render the number without it (docs/DESIGN.md §7 rule 5).
+#[tauri::command]
+async fn copy_dry_run(
+    state: State<'_, AppState>,
+    profile_id: String,
+    spec: CopySpec,
+) -> CmdResult<CopyEstimate> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || xcluster::copy_dry_run(&conn, &spec)).await
+}
+
+/// Mutating — **at the destination**. Answers with the id its progress events
+/// are addressed to.
+///
+/// Read-only at the destination, a filter that does not compile, a partition
+/// mapping that cannot work and a topic that is not there are all decided in
+/// `CopySession::start`, on this side of the id: a copy that returns an id is a
+/// copy that has begun. Discovering the destination has four partitions on
+/// record 40 000 would leave 40 000 records already written.
+#[tauri::command]
+async fn copy_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    spec: CopySpec,
+) -> CmdResult<String> {
+    let source = state.connection(&profile_id)?;
+    let dest_profile_id = spec.dest_profile_id.clone();
+    let dest = connection_or_open(&state, &dest_profile_id).await?;
+
+    let session = blocking(move || {
+        // `dest` is captured by this closure and destroyed with it — on the
+        // blocking pool, and only if nothing else holds it (see
+        // `connection_or_open`). The session does not need it to survive: it
+        // built its own producer from the profile inside `start`.
+        CopySession::start(&source, &dest, &spec).map(Arc::new)
+    })
+    .await?;
+
+    let copy_id = state.next_id();
+    // Under BOTH profiles: disconnecting the destination has to stop a copy
+    // that is writing into it, and the destination's workspace is not the one
+    // this session was started from.
+    state.copies.insert_between(
+        copy_id.clone(),
+        &profile_id,
+        Some(&dest_profile_id),
+        &session,
+    );
+    state.arm_ready(&copy_id);
+
+    let spawned = spawn_emitter("kavka-copy-emit", {
+        let copy_id = copy_id.clone();
+        move || pump_copy(&app, &copy_id, &session)
+    });
+    if let Err(e) = spawned {
+        // Nobody would ever report this copy, and it is a copy that writes.
+        state.disarm_ready(&copy_id);
+        if let Some(orphan) = state.copies.take(&copy_id) {
+            retire(orphan).await?;
+        }
+        return Err(format!("starting the copy reporter: {e}"));
+    }
+    Ok(copy_id)
+}
+
+/// Idempotent. Records the destination has already acknowledged stay written —
+/// stopping flushes what librdkafka accepted so the final counts describe the
+/// destination rather than our intentions, and that flush happens in `retire`,
+/// on the blocking pool, never on the event loop.
+#[tauri::command]
+async fn copy_stop(state: State<'_, AppState>, copy_id: String) -> CmdResult<()> {
+    match state.copies.take(&copy_id) {
+        Some(session) => retire(session).await,
+        None => Ok(()),
+    }
+}
+
+/// **v1 is topics only**, and this is where that is enforced.
+///
+/// The wire type accepts `null` for either side because the contract's shape
+/// allows a broker-level diff; the answer is a sentence rather than a silent
+/// empty table, and it names the screen that does have broker configs. The
+/// check is here rather than in the core because the core takes two lists of
+/// config entries and has no opinion about where they came from.
+fn diff_topic(topic: Option<&str>, side: &str) -> CmdResult<String> {
+    match topic.map(str::trim) {
+        Some(name) if !name.is_empty() => Ok(name.to_string()),
+        _ => Err(format!(
+            "Kavka compares the configuration of two TOPICS, and side {side} names none. A \
+             broker-level diff isn't something this screen does — the Brokers tab shows each \
+             broker's configuration in full."
+        )),
+    }
+}
+
+/// Read-only on both sides: two `DescribeConfigs` calls and a pure comparison.
+///
+/// The verdict is the core's ([`xcluster::config_diff`]), not a string
+/// comparison here — one rule decides `differs` for every caller, so the row
+/// that is highlighted and the row that is counted cannot come to disagree.
+#[tauri::command]
+async fn config_diff(
+    state: State<'_, AppState>,
+    profile_id_a: String,
+    topic_a: Option<String>,
+    profile_id_b: String,
+    topic_b: Option<String>,
+) -> CmdResult<Vec<ConfigDiffRow>> {
+    // Before either connection is looked at, let alone opened: a missing topic
+    // name is a mistake about the request, not about a cluster.
+    let topic_a = diff_topic(topic_a.as_deref(), "A")?;
+    let topic_b = diff_topic(topic_b.as_deref(), "B")?;
+    // Both sides are peers here — neither is "the workspace" — so both may be
+    // opened on demand. This is the one command where that is true of side A.
+    let conn_a = connection_or_open(&state, &profile_id_a).await?;
+    let conn_b = match connection_or_open(&state, &profile_id_b).await {
+        Ok(conn_b) => conn_b,
+        Err(e) => {
+            // The only place in this file where a connection is held across a
+            // second fallible step. If side A was opened *here*, this is its
+            // last reference and dropping it is a librdkafka client teardown —
+            // which never happens on the event loop (see the file header). An
+            // `Arc` the user's own connection map still holds drops for free,
+            // so this costs a task and nothing else.
+            tauri::async_runtime::spawn_blocking(move || drop(conn_a));
+            return Err(e);
+        }
+    };
+    blocking(move || {
+        let a = admin::topic_detail(&conn_a, &topic_a)?.configs;
+        let b = admin::topic_detail(&conn_b, &topic_b)?.configs;
+        Ok(xcluster::config_diff(&a, &b))
+    })
+    .await
+}
+
+/// Read-only, on both clusters. Works out where each of the source group's
+/// partitions would land on the destination, and says how it worked each one
+/// out — including the rows with nowhere to go.
+///
+/// A plan is a snapshot: both clusters keep moving, so nothing here is cached
+/// and the modal re-plans rather than holding one.
+#[tauri::command]
+async fn offsets_migrate_plan(
+    state: State<'_, AppState>,
+    profile_id: String,
+    group_id: String,
+    topic: String,
+    dest_profile_id: String,
+    dest_group_id: String,
+    dest_topic: String,
+) -> CmdResult<Vec<OffsetMigrationRow>> {
+    let source = state.connection(&profile_id)?;
+    let dest = connection_or_open(&state, &dest_profile_id).await?;
+    blocking(move || {
+        xcluster::offsets_migrate_plan(
+            &source,
+            &group_id,
+            &topic,
+            &dest,
+            &dest_group_id,
+            &dest_topic,
+        )
+    })
+    .await
+}
+
+/// Mutating, **at the destination** — which is the only cluster this one
+/// touches, so it is addressed to the destination profile directly rather than
+/// to a workspace.
+///
+/// Guarded in core with `offsets_reset`'s own vocabulary: read-only refuses
+/// first, then a destination group that exists and is not `Empty`. There is no
+/// `force`, deliberately.
+#[tauri::command]
+async fn offsets_migrate_apply(
+    state: State<'_, AppState>,
+    dest_profile_id: String,
+    dest_group_id: String,
+    dest_topic: String,
+    plan: Vec<OffsetMigrationRow>,
+) -> CmdResult<Vec<GroupOffset>> {
+    let dest = connection_or_open(&state, &dest_profile_id).await?;
+    blocking(move || xcluster::offsets_migrate_apply(&dest, &dest_group_id, &dest_topic, &plan))
+        .await
 }
 
 // ── ACLs ───────────────────────────────────────────────────────────────────
@@ -2703,6 +3250,150 @@ fn write_ndjson(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Res
     Ok(())
 }
 
+/// The same write, for a table that is not a list of messages: a SQL result
+/// set, whose columns are whatever the query asked for.
+///
+/// `columns` carries the header row rather than being inferred from the first
+/// row's shape, for the reason the SQL panel exists to respect: **a result set
+/// with zero rows still has a schema**, and a CSV of it is a header line rather
+/// than an empty file. The rows are positional against that list, exactly as
+/// they arrive over `kavka://sql/{id}/rows`.
+#[tauri::command]
+async fn export_rows(
+    path: String,
+    format: String,
+    columns: Vec<SqlColumn>,
+    rows: Vec<Vec<serde_json::Value>>,
+) -> CmdResult<()> {
+    blocking(move || write_row_export(&path, &format, &columns, &rows)).await
+}
+
+fn write_row_export(
+    path: &str,
+    format: &str,
+    columns: &[SqlColumn],
+    rows: &[Vec<serde_json::Value>],
+) -> kavka_core::Result<()> {
+    // Parsed before the file is opened, exactly as in `write_export`: a bad
+    // format must not truncate a file the user already had.
+    let format = export_format(format)?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|e| file_trouble(path, &e))?;
+
+    let mut out = std::io::BufWriter::new(file);
+    let written = match format {
+        ExportFormat::Csv => write_rows_csv(&mut out, columns, rows),
+        ExportFormat::Json => write_rows_json(&mut out, columns, rows),
+        ExportFormat::Ndjson => write_rows_ndjson(&mut out, columns, rows),
+    };
+    written
+        .and_then(|()| out.flush())
+        .map_err(|e| file_trouble(path, &e))
+}
+
+/// RFC 4180, with the query's own column names as the header row and
+/// [`csv_field`]'s quoting — the same writer the message export uses, so one
+/// bug fix serves both.
+fn write_rows_csv(
+    out: &mut impl Write,
+    columns: &[SqlColumn],
+    rows: &[Vec<serde_json::Value>],
+) -> std::io::Result<()> {
+    let header: Vec<Cow<'_, str>> = columns
+        .iter()
+        .map(|column| csv_field(&column.name))
+        .collect();
+    out.write_all(header.join(",").as_bytes())?;
+    out.write_all(b"\r\n")?;
+
+    for row in rows {
+        let cells: Vec<Cow<'_, str>> = row
+            .iter()
+            .map(|value| match csv_cell(value) {
+                Cow::Borrowed(text) => csv_field(text),
+                Cow::Owned(text) => Cow::Owned(csv_field(&text).into_owned()),
+            })
+            .collect();
+        out.write_all(cells.join(",").as_bytes())?;
+        out.write_all(b"\r\n")?;
+    }
+    Ok(())
+}
+
+/// One result cell as CSV text.
+///
+/// A SQL NULL is an EMPTY FIELD, never the word "null" — the same rule the
+/// message export follows for a tombstone (docs/DESIGN.md §7), and the reason
+/// the JSON formats exist for anything that needs to tell an empty string from
+/// an absent value. A string cell is its own text, unquoted by JSON: exporting
+/// `"order-7"` with the quotes would put them in the spreadsheet.
+fn csv_cell(value: &serde_json::Value) -> Cow<'_, str> {
+    match value {
+        serde_json::Value::Null => Cow::Borrowed(""),
+        serde_json::Value::String(text) => Cow::Borrowed(text.as_str()),
+        // A number, a bool, or a nested structure DataFusion produced (an
+        // `array_agg`, say) — its compact JSON is the only faithful rendering.
+        other => Cow::Owned(other.to_string()),
+    }
+}
+
+/// The whole result set as one array of OBJECTS keyed by column name,
+/// pretty-printed. Positional arrays would be smaller and unreadable: the
+/// column list is right there, so the export spends the bytes and keeps the
+/// names.
+fn write_rows_json(
+    out: &mut impl Write,
+    columns: &[SqlColumn],
+    rows: &[Vec<serde_json::Value>],
+) -> std::io::Result<()> {
+    let objects: Vec<serde_json::Map<String, serde_json::Value>> =
+        rows.iter().map(|row| row_object(columns, row)).collect();
+    serde_json::to_writer_pretty(&mut *out, &objects)?;
+    out.write_all(b"\n")
+}
+
+fn write_rows_ndjson(
+    out: &mut impl Write,
+    columns: &[SqlColumn],
+    rows: &[Vec<serde_json::Value>],
+) -> std::io::Result<()> {
+    for row in rows {
+        serde_json::to_writer(&mut *out, &row_object(columns, row))?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+/// One row as `{column: value}`.
+///
+/// A row shorter than the column list gets `null` for the columns it does not
+/// reach, and a row longer than it keeps the extra cells under positional names
+/// (`column_7`) rather than dropping them: this is an export, and silently
+/// losing a column is the one outcome worse than an ugly key. Neither case can
+/// arise from the core, which sends rows positional against the schema it
+/// already emitted — they are here because a writer that drops data on a shape
+/// it did not expect is a writer nobody can trust.
+fn row_object(
+    columns: &[SqlColumn],
+    row: &[serde_json::Value],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut object = serde_json::Map::with_capacity(columns.len().max(row.len()));
+    for (index, column) in columns.iter().enumerate() {
+        object.insert(
+            column.name.clone(),
+            row.get(index).cloned().unwrap_or(serde_json::Value::Null),
+        );
+    }
+    for (index, value) in row.iter().enumerate().skip(columns.len()) {
+        object.insert(format!("column_{index}"), value.clone());
+    }
+    object
+}
+
 /// What went wrong with the file, in the shape docs/DESIGN.md §7 asks for: what
 /// happened, then the next click. The OS message is kept for everything Kavka
 /// does not recognise — it usually names the path or the process holding the
@@ -2748,6 +3439,8 @@ pub fn run() {
                 tails: SessionMap::new(),
                 searches: SessionMap::new(),
                 bulks: SessionMap::new(),
+                sqls: SessionMap::new(),
+                copies: SessionMap::new(),
                 ready: Mutex::new(HashMap::new()),
                 fetches: Mutex::new(HashMap::new()),
                 protocol: Mutex::new(HashMap::new()),
@@ -2786,9 +3479,17 @@ pub fn run() {
             search_start,
             search_stop,
             session_ready,
+            sql_start,
+            sql_stop,
             produce_send,
             produce_bulk,
             bulk_stop,
+            copy_dry_run,
+            copy_start,
+            copy_stop,
+            config_diff,
+            offsets_migrate_plan,
+            offsets_migrate_apply,
             acls_list,
             acls_create,
             acls_delete,
@@ -2830,6 +3531,7 @@ pub fn run() {
             share_group_detail,
             streams_topology,
             export_records,
+            export_rows,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Kavka");
@@ -2879,6 +3581,7 @@ mod tests {
             key: Some(payload("order-7")),
             value: Some(payload("{\"id\":7}")),
             headers: Vec::new(),
+            dlq: None,
         }
     }
 
@@ -3014,6 +3717,167 @@ mod tests {
         write_export(&path_text, "ndjson", &[record(1)]).expect("ndjson is a format Kavka writes");
         let written = std::fs::read_to_string(&path).expect("the file is still there");
         assert!(written.starts_with('{'), "{written}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── The SQL result-set writers ─────────────────────────────────────────
+    //
+    // A second export path, and the same reason the first one is tested here:
+    // a quoting bug is a corrupted file rather than a visible error, and the
+    // shell is the only place that decides how a result set becomes text.
+
+    fn columns(names: &[&str]) -> Vec<SqlColumn> {
+        names
+            .iter()
+            .map(|name| SqlColumn {
+                name: (*name).to_string(),
+                data_type: "VARCHAR".into(),
+            })
+            .collect()
+    }
+
+    fn rows_csv_of(cols: &[SqlColumn], rows: &[Vec<serde_json::Value>]) -> String {
+        let mut out = Vec::new();
+        write_rows_csv(&mut out, cols, rows).expect("a Vec never fails to write");
+        String::from_utf8(out).expect("the writer only ever emits UTF-8")
+    }
+
+    /// A RESULT SET WITH NO ROWS STILL HAS A SCHEMA — which is exactly why the
+    /// command takes the columns rather than inferring them from row one.
+    #[test]
+    fn a_result_set_with_no_rows_still_exports_its_header() {
+        let csv = rows_csv_of(&columns(&["partition", "n"]), &[]);
+        assert_eq!(csv, "partition,n\r\n");
+    }
+
+    #[test]
+    fn result_cells_are_written_as_their_own_text_never_as_json_literals() {
+        let csv = rows_csv_of(
+            &columns(&["key_text", "n", "ok", "value_text"]),
+            &[vec![
+                serde_json::json!("order-7"),
+                serde_json::json!(42),
+                serde_json::json!(true),
+                serde_json::Value::Null,
+            ]],
+        );
+        // A string keeps neither its JSON quotes nor an escape; a NULL is an
+        // empty field, never the word "null" (docs/DESIGN.md §7).
+        assert_eq!(csv, "key_text,n,ok,value_text\r\norder-7,42,true,\r\n");
+    }
+
+    #[test]
+    fn a_result_cell_is_quoted_only_when_rfc4180_requires_it() {
+        let csv = rows_csv_of(
+            &columns(&["value_text"]),
+            &[
+                vec![serde_json::json!("a,b")],
+                vec![serde_json::json!("say \"hi\"")],
+                vec![serde_json::json!("line\nbreak")],
+                // A structure DataFusion produced: compact JSON, then quoted
+                // because that JSON contains commas and quotes.
+                vec![serde_json::json!({"status": "failed"})],
+            ],
+        );
+        // Split on the RECORD separator only: a quoted field is allowed to
+        // contain a bare newline, and that is the whole point of quoting it.
+        let lines: Vec<&str> = csv.split("\r\n").collect();
+        assert_eq!(lines[0], "value_text");
+        assert_eq!(lines[1], "\"a,b\"");
+        assert_eq!(lines[2], "\"say \"\"hi\"\"\"");
+        assert_eq!(lines[3], "\"line\nbreak\"");
+        assert_eq!(lines[4], "\"{\"\"status\"\":\"\"failed\"\"}\"");
+        assert_eq!(lines[5], "", "the last record ends with a separator");
+    }
+
+    /// A column name is user text — a query can alias a column to anything at
+    /// all — so the header row goes through the same quoting as the cells.
+    #[test]
+    fn a_column_name_with_a_comma_is_quoted_in_the_header() {
+        let csv = rows_csv_of(&columns(&["last, first"]), &[]);
+        assert_eq!(csv, "\"last, first\"\r\n");
+    }
+
+    #[test]
+    fn rows_json_is_one_array_of_objects_keyed_by_column() {
+        let mut out = Vec::new();
+        write_rows_json(
+            &mut out,
+            &columns(&["partition", "n"]),
+            &[
+                vec![serde_json::json!(0), serde_json::json!(17)],
+                vec![serde_json::json!(1), serde_json::json!(16)],
+            ],
+        )
+        .expect("a Vec never fails to write");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&out).expect("the whole file is one JSON document");
+        let array = parsed.as_array().expect("an array");
+        assert_eq!(array.len(), 2);
+        assert_eq!(array[0]["partition"], 0);
+        assert_eq!(array[1]["n"], 16);
+    }
+
+    #[test]
+    fn rows_ndjson_is_one_object_per_line() {
+        let mut out = Vec::new();
+        write_rows_ndjson(
+            &mut out,
+            &columns(&["key_text"]),
+            &[
+                vec![serde_json::json!("order-1")],
+                vec![serde_json::Value::Null],
+            ],
+        )
+        .expect("a Vec never fails to write");
+        let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], r#"{"key_text":"order-1"}"#);
+        // Null survives as null here, which is the whole reason the JSON
+        // formats exist beside the CSV one.
+        assert_eq!(lines[1], r#"{"key_text":null}"#);
+    }
+
+    /// Neither shape can come from the core, which sends rows positional
+    /// against the schema it already emitted. They are asserted because a
+    /// writer that silently drops a column on a shape it did not expect is a
+    /// writer nobody can trust with an export.
+    #[test]
+    fn a_row_that_does_not_match_the_column_list_loses_nothing() {
+        let short = row_object(&columns(&["a", "b"]), &[serde_json::json!(1)]);
+        assert_eq!(short["a"], 1);
+        assert_eq!(short["b"], serde_json::Value::Null);
+
+        let long = row_object(
+            &columns(&["a"]),
+            &[serde_json::json!(1), serde_json::json!(2)],
+        );
+        assert_eq!(long["a"], 1);
+        assert_eq!(long["column_1"], 2);
+    }
+
+    #[test]
+    fn a_bad_row_format_never_touches_the_file() {
+        let path = std::env::temp_dir().join(format!(
+            "kavka-rows-{}.txt",
+            std::process::id() as u64 * 37 + 11
+        ));
+        std::fs::write(&path, b"not Kavka's").expect("the temp dir is writable");
+        let path_text = path.to_string_lossy().to_string();
+        let cols = columns(&["n"]);
+        let rows = vec![vec![serde_json::json!(1)]];
+
+        write_row_export(&path_text, "parquet", &cols, &rows)
+            .expect_err("not a format Kavka writes");
+        assert_eq!(
+            std::fs::read(&path).expect("the file is still there"),
+            b"not Kavka's"
+        );
+
+        write_row_export(&path_text, "csv", &cols, &rows).expect("csv is a format Kavka writes");
+        let written = std::fs::read_to_string(&path).expect("the file is still there");
+        assert_eq!(written, "n\r\n1\r\n");
         let _ = std::fs::remove_file(&path);
     }
 

@@ -21,7 +21,22 @@ default = []
 # at all — so there would be nothing for those RPCs to talk to. It adds NO
 # build-tool requirement: rustls and ring are already in this crate's graph via
 # ureq, so the tier's promise (CMake + MSVC, nothing more) is unchanged.
-kafka = ["dep:rdkafka", "dep:rustls", "dep:rustls-platform-verifier", "dep:ring"]
+#
+# `src/sql` (SQL over topics, Phase 5a) rides along for the same reason and by
+# the same rule: a query answers about the records in a topic, and a build that
+# cannot open a cluster connection has no records to answer about. Riding along
+# rather than standing alone is also what keeps it reachable — the desktop shell
+# enables `kafka-ssl` and nothing else. It is the ONE place in this crate where
+# that rule costs something real; the numbers are on the `datafusion` entry
+# below, and they are the reason it is not in the bare tier.
+kafka = [
+    "dep:rdkafka",
+    "dep:rustls",
+    "dep:rustls-platform-verifier",
+    "dep:ring",
+    "dep:datafusion",
+    "dep:futures",
+]
 # AWS MSK IAM tokens (SigV4-presigned `kafka-cluster:Connect` URLs). Split out
 # of `kafka` because of the NASM/`aws-lc-sys` build requirement above. Without
 # it, `AuthConfig::AwsMskIam` refuses to connect instead of failing to build.
@@ -112,6 +127,81 @@ ciborium = "0.2"
 # (feature-free) tier that tooling and clippy use. Pure Rust — antlr4rust, nom,
 # regex — so it adds no build-tool requirement.
 cel = { version = "0.14", default-features = false, features = ["regex"] }
+
+# --- SQL over topics (src/sql.rs, docs/ROADMAP.md Phase 5a) -----------------
+# THE EXPENSIVE DEPENDENCY IN THIS FILE, and the only one whose cost is worth a
+# paragraph of numbers rather than a paragraph of reasoning. Measured on this
+# machine (Windows, rustc 1.97.1), before and after this entry:
+#
+#   crates in the tree      bare tier    113 ->  113   (+0)
+#                           kafka-ssl    231 ->  330   (+99)
+#   cargo check, kafka-ssl               0.3s -> 69s   (the +99, cold)
+#   release build of the datafusion tree alone       3m 55s
+#     …with lto + codegen-units=1 + strip           12m 49s
+#   linked binary running one query, release       108.5 MiB
+#     …with lto + strip + panic=abort               49.2 MiB
+#     …the same binary without datafusion            0.2 MiB
+#
+# **+49 MiB of shipped binary, against D1's "small installers" — this is the
+# trade, stated plainly.** It buys the feature FEATURES.md names as the reason
+# teams pay four figures a year elsewhere ("engineers could just query topics"),
+# and it is not a trade that can be made smaller by being cleverer:
+#
+# - `default-features = false` is doing real work: it drops parquet (+ thrift,
+#   snap, brotli, bzip2, liblzma, flate2 — one of which is a C build), the Avro
+#   datasource, `compression`, `crypto_expressions` (blake2/blake3/md-5/sha2),
+#   and `recursive_protection` (psm/stacker, an asm build). That is 49 of the
+#   240 crates a default `datafusion` would bring: 240 -> 191 standalone.
+# - The six features kept add ZERO crates between them — every one of them is a
+#   module inside `datafusion-functions`, so `string_expressions` and friends
+#   cost compile time and nothing else. `sql` is not optional (it is the whole
+#   point); the rest are what make the surface in src/sql.rs's SQL_SURFACE the
+#   one an analyst expects. `crypto`/`nested`/`encoding` are left off: hashes,
+#   array constructors and base64 have nothing to do here.
+# - What CANNOT be trimmed: `object_store`, `arrow-csv`/`-json`/`-ipc` and the
+#   CSV/JSON/Arrow datasource crates are unconditional dependencies of
+#   `datafusion` itself, and arrow-ipc's zstd (a `cc` build via zstd-sys) rides
+#   in on `arrow`'s own defaults, which a downstream crate cannot switch off.
+#   Roughly 20 of the 99 crates are file-format machinery nothing here calls.
+#
+# NOT the "core-only" crates. Assembling datafusion-sql + -expr + -optimizer +
+# -physical-plan by hand would skip the datasource layer — but `DefaultPhysical
+# Planner` lives in this umbrella crate and nowhere else, so "core-only" means
+# hand-writing the logical->physical planner and a `ContextProvider`, which is
+# the one part of a query engine where a subtle mistake produces a wrong ANSWER
+# rather than an error. A query result nobody can check is worth less than the
+# 20 crates it would save.
+#
+# OPTIONAL, and on the `kafka` list. This is the one dependency in this file
+# that would have broken the bare tier's promise. `cc` is already a build-dep of
+# that tier via ring — but ring ships PREGENERATED Windows objects, so nothing
+# there actually compiles C; zstd-sys compiles C source on every platform, so a
+# non-optional datafusion would mean `cargo clippy -p kavka-core` on a bare
+# toolchain stops building. Gated, the bare tier is byte-for-byte what it was
+# (113 crates, no C source compiled) and the `kafka` tier — which already needs
+# CMake + MSVC for librdkafka — absorbs a C compiler at no new cost.
+#
+# `54.1` pins the API line: DataFusion ships a breaking major every couple of
+# months, and `54.x` is the range whose `SessionContext`, `SQLOptions` and
+# `MemTable` this module is written against. Cargo.lock pins the exact build.
+datafusion = { version = "54.1", default-features = false, features = [
+    "sql",
+    "string_expressions",
+    "unicode_expressions",
+    "regex_expressions",
+    "datetime_expressions",
+    "math_expressions",
+], optional = true }
+# `StreamExt::next`, and nothing else. DataFusion's `execute_stream` hands back
+# a `Stream`, and streaming the answer out batch by batch — rather than
+# `collect()`ing the whole result before the first row can be shown — is the
+# difference between a query that reports progress and one that hangs then
+# blinks. futures is ALREADY in this crate's graph via datafusion, at the same
+# version, so depending on it directly adds exactly zero crates; the alternative
+# is hand-rolling a `poll_fn` around a trait we would have to reach into
+# datafusion's own graph to name. Optional, and on the `kafka` list beside
+# datafusion, so the bare tier is untouched.
+futures = { version = "0.3", optional = true }
 
 # --- Wire protocol client (src/protocol, docs/ARCHITECTURE.md D2) -----------
 # The six admin APIs Phase 3b needs (ElectLeaders, Alter/ListPartitionReassignments,

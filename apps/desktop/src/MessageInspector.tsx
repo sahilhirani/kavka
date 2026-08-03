@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_MAX_VALUE_BYTES,
   type DecodedPayload,
+  type DlqMeta,
   type MessageRecord,
 } from "./api";
 import { copyText } from "./clipboard";
+import { conventionWord, droppedBinaryCount, droppedHeaderCount } from "./dlq";
 import { formatBytes, formatStamp, groupDigits } from "./format";
 import { Term } from "./Glossary";
 import {
@@ -29,6 +31,16 @@ interface MessageInspectorProps {
   record: MessageRecord;
   topic: string;
   onClose: () => void;
+  /**
+   * Open the topic this record originally failed on, at the exact record.
+   * Absent where there is nowhere to navigate to (search results live inside
+   * one topic's screen, and a jump out of them would lose the search).
+   */
+  onBrowseOriginal?: (topic: string, partition: number, offset: number) => void;
+  /** Send this record back to the topic it came from — see ProducePanel. */
+  onReproduce?: (record: MessageRecord) => void;
+  /** Set = re-producing is unavailable, and this is the sentence saying why. */
+  reproduceBlocked?: string;
 }
 
 /**
@@ -50,6 +62,9 @@ export default function MessageInspector({
   record,
   topic,
   onClose,
+  onBrowseOriginal,
+  onReproduce,
+  reproduceBlocked,
 }: MessageInspectorProps) {
   const [tab, setTab] = useState<InspectorTab>("value");
   const [raw, setRaw] = useState(false);
@@ -166,6 +181,24 @@ export default function MessageInspector({
           Close
         </button>
       </header>
+
+      {/* THE DEAD LETTER SECTION.
+          Above the tabs, and that is deliberate: §5.10 keeps chrome off the
+          top of this panel because the payload is the loudest thing here — but
+          on a dead letter the payload is not what the user came for. They came
+          for what killed it and where it came from, and burying that under a
+          tab would make the one screen that explains a failure the one screen
+          you have to go looking in. It is only ever rendered when the core
+          actually matched a convention. */}
+      {record.dlq != null && (
+        <DeadLetterSection
+          dlq={record.dlq}
+          record={record}
+          onBrowseOriginal={onBrowseOriginal}
+          onReproduce={onReproduce}
+          reproduceBlocked={reproduceBlocked}
+        />
+      )}
 
       <div className="modal-tabs inspector-tabs" role="tablist" aria-label="Payload">
         {(
@@ -387,5 +420,140 @@ export default function MessageInspector({
         </>
       )}
     </aside>
+  );
+}
+
+/**
+ * Where this record failed, what killed it, and the two ways back.
+ *
+ * THE STACK TRACE IS BEHIND A DISCLOSURE, exactly like the raw broker string
+ * under every error banner (§7): the class and the message are what a person
+ * reads, and forty frames of JVM internals is what an expert opens when those
+ * two are not enough. Rendering it inline would push everything else — the
+ * original coordinates, the actions — off the panel.
+ *
+ * EVERY FIELD IS OPTIONAL, so every field is conditional. A dead letter with an
+ * original topic and no exception is a normal record (the framework was
+ * configured that way), and inventing "unknown" rows for the missing ones would
+ * turn a complete answer into a broken-looking one.
+ */
+function DeadLetterSection({
+  dlq,
+  record,
+  onBrowseOriginal,
+  onReproduce,
+  reproduceBlocked,
+}: {
+  dlq: DlqMeta;
+  record: MessageRecord;
+  onBrowseOriginal?: (topic: string, partition: number, offset: number) => void;
+  onReproduce?: (record: MessageRecord) => void;
+  reproduceBlocked?: string;
+}) {
+  const [trace, setTrace] = useState(false);
+  const canJump =
+    onBrowseOriginal !== undefined &&
+    dlq.original_topic !== null &&
+    dlq.original_partition !== null &&
+    dlq.original_offset !== null;
+
+  return (
+    <section className="dlq-section" aria-label="Dead letter">
+      <p className="dlq-eyebrow">Dead letter</p>
+
+      <dl className="dlq-facts">
+        {dlq.original_topic !== null && (
+          <div className="dlq-fact">
+            <dt>Came from</dt>
+            <dd className="cell-mono">
+              {dlq.original_topic}
+              {dlq.original_partition !== null && (
+                <> · partition {dlq.original_partition}</>
+              )}
+              {dlq.original_offset !== null && (
+                <> · offset {groupDigits(dlq.original_offset)}</>
+              )}
+            </dd>
+          </div>
+        )}
+        {dlq.exception_class !== null && (
+          <div className="dlq-fact">
+            <dt>Failed with</dt>
+            <dd className="cell-mono">{dlq.exception_class}</dd>
+          </div>
+        )}
+        {dlq.exception_message !== null && (
+          <div className="dlq-fact">
+            <dt>Because</dt>
+            <dd className="dlq-message">{dlq.exception_message}</dd>
+          </div>
+        )}
+      </dl>
+
+      {dlq.stacktrace !== null && (
+        <div className="dlq-trace">
+          <button
+            type="button"
+            className="btn btn-ghost inspector-inline-btn"
+            aria-expanded={trace}
+            onClick={() => setTrace((prev) => !prev)}
+          >
+            {trace ? "Hide details" : "Show details"}
+          </button>
+          {trace && <pre className="banner-raw dlq-stack">{dlq.stacktrace}</pre>}
+        </div>
+      )}
+
+      <div className="dlq-actions">
+        {canJump && (
+          <button
+            type="button"
+            className="btn"
+            title={`Open ${dlq.original_topic} at the record this one is about`}
+            onClick={() =>
+              onBrowseOriginal?.(
+                dlq.original_topic as string,
+                dlq.original_partition as number,
+                dlq.original_offset as number,
+              )
+            }
+          >
+            Browse the original
+          </button>
+        )}
+        {onReproduce !== undefined && dlq.original_topic !== null && (
+          <button
+            type="button"
+            className="btn"
+            disabled={reproduceBlocked !== undefined}
+            title={
+              reproduceBlocked ??
+              `Send this record back to ${dlq.original_topic}, without the framework's dead-letter headers${
+                droppedHeaderCount(record) > 0
+                  ? ` (${droppedHeaderCount(record)} of them)`
+                  : ""
+              } and with Kavka's own kavka.dlq.replayed.from.* provenance.${
+                // The other thing the replay loses, in the same breath: produce
+                // writes text, and a binary header's `value` is Kavka's hex
+                // rendering rather than the bytes themselves.
+                droppedBinaryCount(record) > 0
+                  ? ` ${droppedBinaryCount(record)} binary header${
+                      droppedBinaryCount(record) === 1 ? "" : "s"
+                    } can't be re-produced as text and were left off.`
+                  : ""
+              }`
+            }
+            onClick={() => onReproduce(record)}
+          >
+            Re-produce to {dlq.original_topic}
+          </button>
+        )}
+      </div>
+
+      <p className="dlq-convention">
+        Read using the {conventionWord(dlq.convention)} convention — Kavka
+        matched that framework's headers on this record.
+      </p>
+    </section>
   );
 }

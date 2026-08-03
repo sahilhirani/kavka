@@ -110,6 +110,274 @@ pub struct MessageRecord {
     pub key: Option<DecodedPayload>,
     pub value: Option<DecodedPayload>,
     pub headers: Vec<HeaderEntry>,
+    /// Where this record came from, when its headers follow a dead-letter
+    /// convention Kavka recognises — see [`dlq_inspect`]. `None` for every
+    /// record that is not a dead letter, which is nearly all of them.
+    ///
+    /// **Additive by construction.** It is `#[serde(default)]`, so a payload
+    /// written before this field existed still parses, and it is skipped when
+    /// `None`, so a normal record's wire form is byte-for-byte what it was —
+    /// an old UI sees no new field, and 10,000 search hits pay nothing for a
+    /// feature none of them use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dlq: Option<DlqMeta>,
+}
+
+// ---------------------------------------------------------------------------
+// Dead-letter metadata (Phase 5b). Pure, and outside every gate: it reads
+// headers a record already carries, so it is testable with no cluster and no
+// librdkafka.
+// ---------------------------------------------------------------------------
+
+/// Which framework's dead-letter convention a record's headers follow.
+///
+/// [`DlqConvention::None`] never reaches the UI inside a [`DlqMeta`] —
+/// [`dlq_inspect`] answers `None` for a record that matches nothing — but it is
+/// part of the wire vocabulary so the three strings the IPC contract names all
+/// exist in one enum rather than two of them existing and the third being
+/// spelled by the absence of a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DlqConvention {
+    Connect,
+    Spring,
+    None,
+}
+
+/// What a dead-letter record says about the record it came from.
+///
+/// Every field is optional because every field is a header that may not be
+/// there: Kafka Connect writes its context headers only when
+/// `errors.deadletterqueue.context.headers.enable` is on, and Spring's
+/// recoverer writes an exception message only when the exception had one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DlqMeta {
+    pub convention: DlqConvention,
+    pub original_topic: Option<String>,
+    pub original_partition: Option<i32>,
+    pub original_offset: Option<i64>,
+    pub exception_class: Option<String>,
+    pub exception_message: Option<String>,
+    /// Capped at [`MAX_STACKTRACE_BYTES`] with a marker naming the cut — see
+    /// [`dlq_inspect`].
+    pub stacktrace: Option<String>,
+}
+
+/// How much of a stack trace crosses IPC — **in both places one appears.**
+///
+/// A Java stack trace with a dozen `Caused by:` sections runs to tens of
+/// kilobytes, and it rides on *every* record of a dead-letter topic: at the
+/// 10,000-record buffer a search can hold, an uncapped trace is the difference
+/// between a payload the webview parses in a frame and one it chokes on. 8 KB
+/// is comfortably the first few frames plus the first cause, which is the part
+/// anybody reads.
+///
+/// The bound applies to [`DlqMeta::stacktrace`] **and** to the two raw header
+/// entries it is read from ([`decode_header`]), because a record carries both
+/// and capping one of them halves nothing. Every other header is deliberately
+/// uncapped: header bytes are short by construction, and a cap that applied to
+/// all of them would quietly truncate a payload somebody put in a header on
+/// purpose. These two are named, known, and known to be enormous.
+pub const MAX_STACKTRACE_BYTES: usize = 8_192;
+
+/// Appended to a `DlqMeta` stack trace that was cut. The full text is still on
+/// the record, one tab away, so the marker says where to find it.
+const STACKTRACE_CUT: &str = "\n… truncated by Kavka — the full trace is in the record's headers";
+
+/// Appended to the stack-trace HEADER when it was cut. A different sentence
+/// from [`STACKTRACE_CUT`] on purpose: this *is* the header, so pointing at the
+/// headers would be pointing at itself.
+const HEADER_TRACE_CUT: &str = "\n… truncated by Kavka — this header is over 8 KB";
+
+/// The two headers a dead-letter framework puts a whole Java stack trace in,
+/// and therefore the only two [`decode_header`] bounds.
+const STACKTRACE_HEADERS: [&str; 2] = [CONNECT_STACKTRACE, SPRING_STACKTRACE];
+
+// Kafka Connect: `org.apache.kafka.connect.runtime.errors.DeadLetterQueueReporter`
+// (`ERROR_HEADER_PREFIX = "__connect.errors."`, plus the constants below).
+// Every value is UTF-8 there, including the numbers: the reporter writes them
+// with `toBytes(String.valueOf(value))`.
+const CONNECT_TOPIC: &str = "__connect.errors.topic";
+const CONNECT_PARTITION: &str = "__connect.errors.partition";
+const CONNECT_OFFSET: &str = "__connect.errors.offset";
+const CONNECT_EXCEPTION: &str = "__connect.errors.exception.class.name";
+const CONNECT_EXCEPTION_MESSAGE: &str = "__connect.errors.exception.message";
+const CONNECT_STACKTRACE: &str = "__connect.errors.exception.stacktrace";
+
+// Spring Kafka: `org.springframework.kafka.support.KafkaHeaders` (`PREFIX =
+// "kafka_"`, `DLT_ORIGINAL_TOPIC = PREFIX + "dlt-original-topic"`, and so on),
+// written by `org.springframework.kafka.listener.DeadLetterPublishingRecoverer`
+// — since 4.0 through its `DeadLetterRecordManager`.
+//
+// **The numbers here are BINARY, not text.** The recoverer writes the partition
+// as `ByteBuffer.allocate(Integer.BYTES).putInt(...).array()` and the offset and
+// timestamp as the `Long.BYTES` equivalent — big-endian, and with no option to
+// write them as strings. Only the topic and the exception fields are UTF-8.
+// That is the whole reason [`header_number`] reads two spellings.
+const SPRING_TOPIC: &str = "kafka_dlt-original-topic";
+const SPRING_PARTITION: &str = "kafka_dlt-original-partition";
+const SPRING_OFFSET: &str = "kafka_dlt-original-offset";
+const SPRING_EXCEPTION: &str = "kafka_dlt-exception-fqcn";
+const SPRING_EXCEPTION_MESSAGE: &str = "kafka_dlt-exception-message";
+const SPRING_STACKTRACE: &str = "kafka_dlt-exception-stacktrace";
+
+/// Reads a record's dead-letter provenance out of its headers, or `None` when
+/// the headers follow no convention Kavka knows.
+///
+/// Pure: headers in, metadata out. It is called once per decoded record (see
+/// [`crate::consume`] and [`crate::search`]), so it never allocates for a
+/// record that is not a dead letter — the first thing it does is look for a
+/// name, and nearly every record on a cluster has none of them.
+///
+/// # What "a convention matches" means
+///
+/// At least one of the six headers Kavka reads for that convention is present.
+/// A Connect DLQ with `errors.deadletterqueue.context.headers.enable=false`
+/// carries none of them, so it reports `None` — correctly: without the context
+/// headers there is nothing in the record that says where it came from, and
+/// inventing "this is a dead letter, origin unknown" from the topic's name is
+/// not something a core function can honestly do.
+///
+/// # A record carrying both conventions
+///
+/// Both frameworks copy the source record's headers onto the dead letter and
+/// add their own, so a record dead-lettered twice — once by each — carries both
+/// sets, and nothing in the names says which hop was last. Connect is reported,
+/// deterministically, and the other set stays visible in the headers tab. This
+/// is the one case where the answer is a choice rather than a fact, and it is
+/// documented rather than hidden.
+pub fn dlq_inspect(headers: &[HeaderEntry]) -> Option<DlqMeta> {
+    connect_meta(headers).or_else(|| spring_meta(headers))
+}
+
+fn connect_meta(headers: &[HeaderEntry]) -> Option<DlqMeta> {
+    let known = [
+        CONNECT_TOPIC,
+        CONNECT_PARTITION,
+        CONNECT_OFFSET,
+        CONNECT_EXCEPTION,
+        CONNECT_EXCEPTION_MESSAGE,
+        CONNECT_STACKTRACE,
+    ];
+    if !known.iter().any(|name| find(headers, name).is_some()) {
+        return None;
+    }
+    Some(DlqMeta {
+        convention: DlqConvention::Connect,
+        original_topic: text(headers, CONNECT_TOPIC),
+        original_partition: number(headers, CONNECT_PARTITION).and_then(|n| i32::try_from(n).ok()),
+        original_offset: number(headers, CONNECT_OFFSET),
+        exception_class: text(headers, CONNECT_EXCEPTION),
+        exception_message: text(headers, CONNECT_EXCEPTION_MESSAGE),
+        stacktrace: text(headers, CONNECT_STACKTRACE).map(|trace| cap_stacktrace(&trace)),
+    })
+}
+
+fn spring_meta(headers: &[HeaderEntry]) -> Option<DlqMeta> {
+    let known = [
+        SPRING_TOPIC,
+        SPRING_PARTITION,
+        SPRING_OFFSET,
+        SPRING_EXCEPTION,
+        SPRING_EXCEPTION_MESSAGE,
+        SPRING_STACKTRACE,
+    ];
+    if !known.iter().any(|name| find(headers, name).is_some()) {
+        return None;
+    }
+    Some(DlqMeta {
+        convention: DlqConvention::Spring,
+        original_topic: text(headers, SPRING_TOPIC),
+        original_partition: number(headers, SPRING_PARTITION).and_then(|n| i32::try_from(n).ok()),
+        original_offset: number(headers, SPRING_OFFSET),
+        exception_class: text(headers, SPRING_EXCEPTION),
+        exception_message: text(headers, SPRING_EXCEPTION_MESSAGE),
+        stacktrace: text(headers, SPRING_STACKTRACE).map(|trace| cap_stacktrace(&trace)),
+    })
+}
+
+/// The first header with this name. Kafka permits duplicates; neither framework
+/// writes one, and taking the first keeps this total.
+fn find<'h>(headers: &'h [HeaderEntry], name: &str) -> Option<&'h HeaderEntry> {
+    headers.iter().find(|header| header.key == name)
+}
+
+/// A header's value as text, or `None` when it is absent, null, or bytes that
+/// were not text at all.
+///
+/// The charset question is already settled by the time this runs:
+/// [`decode_header`] renders a header value as its own UTF-8 text or, when the
+/// bytes are not displayable text, as hex — and both frameworks write these
+/// particular fields as UTF-8 (`getBytes(StandardCharsets.UTF_8)`), so a hex
+/// rendering here means the header did not hold what its name claims. Returning
+/// `None` rather than the hex is the honest answer: `exception_class: "6a 61
+/// 76 61"` in a UI field labelled "exception" is worse than an empty field.
+fn text(headers: &[HeaderEntry], name: &str) -> Option<String> {
+    let header = find(headers, name)?;
+    if !header.is_text {
+        return None;
+    }
+    header.value.clone()
+}
+
+/// A header's value as a number, in either spelling a dead-letter writer uses.
+///
+/// Kafka Connect writes `String.valueOf(partition)`, so its headers are text
+/// and parse as decimal. Spring writes a 4-byte (partition) or 8-byte (offset,
+/// timestamp) **big-endian** integer, which is not displayable text, so
+/// [`decode_header`] has already rendered it as space-separated hex pairs and
+/// this reads those back.
+///
+/// The two spellings can in principle collide — an 8-byte offset whose bytes
+/// all happen to be printable ASCII would arrive as text and be read as a
+/// decimal number. That needs an offset in the region of 3.7×10^18 whose every
+/// byte is a printable character; it is documented rather than defended
+/// against, because the defence (a length check on text that is also valid
+/// decimal) would mis-read Connect's own short numbers.
+fn number(headers: &[HeaderEntry], name: &str) -> Option<i64> {
+    let header = find(headers, name)?;
+    let value = header.value.as_deref()?;
+    if header.is_text {
+        return value.trim().parse::<i64>().ok();
+    }
+    let mut bytes = Vec::with_capacity(8);
+    for pair in value.split_whitespace() {
+        bytes.push(u8::from_str_radix(pair, 16).ok()?);
+    }
+    match bytes.len() {
+        4 => Some(i64::from(i32::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+        ]))),
+        8 => Some(i64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])),
+        _ => None,
+    }
+}
+
+/// Cuts a stack trace to [`MAX_STACKTRACE_BYTES`] on a character boundary and
+/// says so in the text itself.
+fn cap_stacktrace(trace: &str) -> String {
+    cap_to(trace, STACKTRACE_CUT)
+}
+
+/// The same cut, with the marker a HEADER can honestly carry.
+fn cap_header_trace(trace: &str) -> String {
+    cap_to(trace, HEADER_TRACE_CUT)
+}
+
+/// Cuts `text` to [`MAX_STACKTRACE_BYTES`] on a character boundary, appending
+/// `marker` when it had to. A short text is returned unchanged and unmarked, so
+/// a truncated one can never be mistaken for a complete one.
+fn cap_to(text: &str, marker: &str) -> String {
+    if text.len() <= MAX_STACKTRACE_BYTES {
+        return text.to_string();
+    }
+    let mut cut = MAX_STACKTRACE_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{marker}", &text[..cut])
 }
 
 /// Decodes one key or value.
@@ -174,10 +442,31 @@ pub fn decode(
     hex_payload(bytes, None)
 }
 
-/// Decodes a header value. Header bytes are short by construction (Kafka
-/// rejects oversized record batches long before a header gets interesting), so
-/// this is text-or-hex with no ladder and no cap.
+/// Decodes a header value: text-or-hex, with no ladder.
+///
+/// **No cap, with two named exceptions.** Header bytes are short by
+/// construction — Kafka rejects an oversized record batch long before a header
+/// gets interesting — and a general cap would quietly truncate something a
+/// producer put in a header on purpose, which is a worse failure than a long
+/// row in the headers tab.
+///
+/// The exceptions are the two dead-letter stack-trace headers, which are the
+/// one case where "short by construction" is false: a Java trace with a dozen
+/// causes is tens of kilobytes, it is on *every* record of a DLQ topic, and a
+/// search buffering 10,000 of them turns that into hundreds of megabytes of IPC
+/// for text nobody scrolls to the end of. [`DlqMeta::stacktrace`] was already
+/// bounded; the raw header beside it is bounded here, to the same
+/// [`MAX_STACKTRACE_BYTES`], so a record cannot carry the same trace twice at
+/// full length.
 pub fn decode_header(key: &str, value: Option<&[u8]>) -> HeaderEntry {
+    let bounded = STACKTRACE_HEADERS.contains(&key);
+    let cap = |rendered: String| {
+        if bounded {
+            cap_header_trace(&rendered)
+        } else {
+            rendered
+        }
+    };
     match value {
         None => HeaderEntry {
             key: key.to_string(),
@@ -190,12 +479,16 @@ pub fn decode_header(key: &str, value: Option<&[u8]>) -> HeaderEntry {
         {
             Some(text) => HeaderEntry {
                 key: key.to_string(),
-                value: Some(text.to_string()),
+                value: Some(cap(text.to_string())),
                 is_text: true,
             },
             None => HeaderEntry {
                 key: key.to_string(),
-                value: Some(hex_text(bytes)),
+                // Hex is three characters per byte, so the cut lands on a byte
+                // pair rather than mid-pair only because the marker is appended
+                // to whatever `cap_to` kept — the value is a rendering either
+                // way, and `is_text: false` already says not to parse it.
+                value: Some(cap(hex_text(bytes))),
                 is_text: false,
             },
         },
@@ -927,6 +1220,61 @@ mod tests {
         assert!(!absent.is_text);
     }
 
+    /// THE TWO NAMED HEADERS ARE BOUNDED ON THE RECORD ITSELF, not only inside
+    /// `DlqMeta`: a search buffering 10,000 dead letters would otherwise carry
+    /// every trace across IPC twice, once capped and once whole.
+    #[test]
+    fn the_two_stacktrace_headers_are_capped_and_say_so() {
+        let trace = "at com.example.Service.handle(Service.java:42)\n".repeat(1_000);
+        assert!(trace.len() > MAX_STACKTRACE_BYTES);
+
+        for name in [
+            "__connect.errors.exception.stacktrace",
+            "kafka_dlt-exception-stacktrace",
+        ] {
+            let header = decode_header(name, Some(trace.as_bytes()));
+            let value = header.value.expect("a value");
+            assert!(header.is_text, "{name} is text, capped or not");
+            assert!(
+                value.len() <= MAX_STACKTRACE_BYTES + HEADER_TRACE_CUT.len(),
+                "{name} is {} bytes",
+                value.len()
+            );
+            assert!(
+                value.ends_with(HEADER_TRACE_CUT),
+                "{name} has to say it was cut"
+            );
+            assert!(value.starts_with("at com.example.Service"));
+        }
+
+        // Under the bound, untouched and unmarked.
+        let short = "java.lang.IllegalStateException\n\tat com.example.A(A.java:1)";
+        let header = decode_header("kafka_dlt-exception-stacktrace", Some(short.as_bytes()));
+        assert_eq!(header.value.as_deref(), Some(short));
+    }
+
+    /// The general rule is unchanged: a header Kavka does not recognise crosses
+    /// whole, however long it is. Capping every header would silently truncate
+    /// something a producer put there on purpose, which is the worse failure.
+    #[test]
+    fn every_other_header_is_still_uncapped() {
+        let big = "x".repeat(MAX_STACKTRACE_BYTES * 3);
+        for name in [
+            "trace-id",
+            // Same namespace, different field — the rule is the two names, not
+            // the prefix, because the other fields are short by construction.
+            "__connect.errors.exception.message",
+            "kafka_dlt-exception-message",
+        ] {
+            let header = decode_header(name, Some(big.as_bytes()));
+            assert_eq!(
+                header.value.as_deref().map(str::len),
+                Some(big.len()),
+                "{name} must not be capped"
+            );
+        }
+    }
+
     /// `{"type":"record","name":"Order","fields":[
     ///    {"name":"orderId","type":"int"},{"name":"status","type":"string"}]}`
     const ORDER_SCHEMA: &str = r#"{"schema":"{\"type\":\"record\",\"name\":\"Order\",\"fields\":[{\"name\":\"orderId\",\"type\":\"int\"},{\"name\":\"status\",\"type\":\"string\"}]}"}"#;
@@ -1054,6 +1402,7 @@ mod tests {
             key: Some(decode(b"order-1", None, CAP)),
             value: None,
             headers: vec![decode_header("trace-id", Some(b"abc"))],
+            dlq: None,
         };
         assert_eq!(
             serde_json::to_value(&record).unwrap(),
@@ -1084,6 +1433,55 @@ mod tests {
             .unwrap(),
             serde_json::json!({"schema_id": 217, "subject": "orders-value", "version": 4})
         );
+    }
+
+    /// The compatibility half of the additive field: a record that is not a
+    /// dead letter serializes to **exactly** what it did before `dlq` existed,
+    /// and a payload written by that older build still parses.
+    #[test]
+    fn the_dlq_field_is_additive_in_both_directions() {
+        let record = MessageRecord {
+            partition: 0,
+            offset: 1,
+            timestamp_ms: None,
+            key: None,
+            value: None,
+            headers: Vec::new(),
+            dlq: None,
+        };
+        let wire = serde_json::to_value(&record).unwrap();
+        assert!(
+            !wire
+                .as_object()
+                .expect("a record is an object")
+                .contains_key("dlq"),
+            "a record with no dead-letter headers must not grow a field: {wire}"
+        );
+
+        // The old wire form — no `dlq` key at all — still parses.
+        let old: MessageRecord = serde_json::from_value(serde_json::json!({
+            "partition": 0,
+            "offset": 1,
+            "timestamp_ms": null,
+            "key": null,
+            "value": null,
+            "headers": [],
+        }))
+        .expect("a payload from before the field existed");
+        assert!(old.dlq.is_none());
+
+        // And an explicit null is the same thing, for a caller that spells it.
+        let explicit: MessageRecord = serde_json::from_value(serde_json::json!({
+            "partition": 0,
+            "offset": 1,
+            "timestamp_ms": null,
+            "key": null,
+            "value": null,
+            "headers": [],
+            "dlq": null,
+        }))
+        .expect("an explicit null");
+        assert!(explicit.dlq.is_none());
     }
 
     #[test]
@@ -1299,5 +1697,269 @@ mod tests {
         let err = encode_error(&rich_schema(), &serde_json::json!("just a string"));
         assert!(err.contains("the value"), "got {err}");
         assert!(err.contains("Order"), "got {err}");
+    }
+}
+
+/// Dead-letter header parsing. Its own module because its fixtures are the two
+/// frameworks' wire forms, verified against their source: Kafka Connect's
+/// `DeadLetterQueueReporter` writes every value as UTF-8 text, and Spring's
+/// `DeadLetterPublishingRecoverer` writes the numbers as big-endian binary.
+/// Reading one convention's spelling with the other's rule is the mistake these
+/// tests exist to catch.
+#[cfg(test)]
+mod dlq {
+    use super::*;
+
+    /// Spring's `ByteBuffer.allocate(Integer.BYTES).putInt(partition).array()`,
+    /// as the header the record actually carries.
+    fn spring_int(key: &str, value: i32) -> HeaderEntry {
+        decode_header(key, Some(&value.to_be_bytes()))
+    }
+
+    /// Spring's `ByteBuffer.allocate(Long.BYTES).putLong(offset).array()`.
+    fn spring_long(key: &str, value: i64) -> HeaderEntry {
+        decode_header(key, Some(&value.to_be_bytes()))
+    }
+
+    fn utf8(key: &str, value: &str) -> HeaderEntry {
+        decode_header(key, Some(value.as_bytes()))
+    }
+
+    #[test]
+    fn a_connect_dead_letter_reads_every_field_it_writes() {
+        let headers = vec![
+            utf8("__connect.errors.topic", "orders"),
+            utf8("__connect.errors.partition", "3"),
+            utf8("__connect.errors.offset", "8412"),
+            utf8("__connect.errors.connector.name", "s3-sink"),
+            utf8("__connect.errors.stage", "VALUE_CONVERTER"),
+            utf8(
+                "__connect.errors.exception.class.name",
+                "org.apache.kafka.connect.errors.DataException",
+            ),
+            utf8(
+                "__connect.errors.exception.message",
+                "Converting byte[] to Kafka Connect data failed due to serialization error",
+            ),
+            utf8(
+                "__connect.errors.exception.stacktrace",
+                "org.apache.kafka.connect.errors.DataException\n\tat org.apache…",
+            ),
+        ];
+
+        let meta = dlq_inspect(&headers).expect("a Connect dead letter");
+        assert_eq!(meta.convention, DlqConvention::Connect);
+        assert_eq!(meta.original_topic.as_deref(), Some("orders"));
+        assert_eq!(meta.original_partition, Some(3));
+        assert_eq!(meta.original_offset, Some(8412));
+        assert_eq!(
+            meta.exception_class.as_deref(),
+            Some("org.apache.kafka.connect.errors.DataException")
+        );
+        assert!(meta
+            .exception_message
+            .as_deref()
+            .expect("a message")
+            .contains("serialization error"));
+        assert!(meta
+            .stacktrace
+            .as_deref()
+            .expect("a trace")
+            .contains("at org"));
+    }
+
+    /// THE BINARY HALF. Spring writes the partition and the offset as
+    /// big-endian integers, so by the time they reach this parser
+    /// `decode_header` has rendered them as hex — reading them as decimal text
+    /// would answer `None` for every Spring dead letter in existence.
+    #[test]
+    fn a_spring_dead_letter_reads_its_binary_numbers() {
+        let headers = vec![
+            utf8("kafka_dlt-original-topic", "orders"),
+            spring_int("kafka_dlt-original-partition", 3),
+            spring_long("kafka_dlt-original-offset", 8412),
+            spring_long("kafka_dlt-original-timestamp", 1_700_000_000_000),
+            utf8("kafka_dlt-original-consumer-group", "checkout-service"),
+            utf8(
+                "kafka_dlt-exception-fqcn",
+                "org.springframework.kafka.listener.ListenerExecutionFailedException",
+            ),
+            utf8(
+                "kafka_dlt-exception-message",
+                "Listener failed; nested is …",
+            ),
+            utf8(
+                "kafka_dlt-exception-stacktrace",
+                "java.lang.IllegalStateException\n\tat com.example…",
+            ),
+        ];
+
+        // The fixture is only a fixture if it really is binary.
+        let partition = headers
+            .iter()
+            .find(|h| h.key == "kafka_dlt-original-partition")
+            .expect("the fixture has one");
+        assert!(!partition.is_text, "Spring's partition is not text");
+        assert_eq!(partition.value.as_deref(), Some("00 00 00 03"));
+
+        let meta = dlq_inspect(&headers).expect("a Spring dead letter");
+        assert_eq!(meta.convention, DlqConvention::Spring);
+        assert_eq!(meta.original_topic.as_deref(), Some("orders"));
+        assert_eq!(meta.original_partition, Some(3));
+        assert_eq!(meta.original_offset, Some(8412));
+        assert_eq!(
+            meta.exception_class.as_deref(),
+            Some("org.springframework.kafka.listener.ListenerExecutionFailedException")
+        );
+        assert!(meta.stacktrace.is_some());
+    }
+
+    /// A big offset exercises all eight bytes, and partition 0 is the one whose
+    /// bytes are all zero — the value most likely to be mistaken for absent.
+    #[test]
+    fn spring_numbers_survive_their_extremes() {
+        let headers = vec![
+            spring_int("kafka_dlt-original-partition", 0),
+            spring_long("kafka_dlt-original-offset", 4_294_967_296),
+        ];
+        let meta = dlq_inspect(&headers).expect("matched on the numbers alone");
+        assert_eq!(meta.original_partition, Some(0));
+        assert_eq!(meta.original_offset, Some(4_294_967_296));
+    }
+
+    #[test]
+    fn an_ordinary_record_is_not_a_dead_letter() {
+        assert!(dlq_inspect(&[]).is_none());
+        assert!(dlq_inspect(&[
+            utf8("trace-id", "abc-123"),
+            decode_header("retry", None),
+            // Close, but neither framework's name.
+            utf8("dlt-original-topic", "orders"),
+            utf8("__connect.errors.something.else", "orders"),
+        ])
+        .is_none());
+    }
+
+    /// Malformed is not a panic and not a lie: a header carrying something
+    /// other than what its name promises reads as absent, and the record is
+    /// still recognised as a dead letter on the strength of the ones that are
+    /// intact.
+    #[test]
+    fn malformed_headers_degrade_field_by_field() {
+        let headers = vec![
+            utf8("__connect.errors.topic", "orders"),
+            utf8("__connect.errors.partition", "three"),
+            utf8("__connect.errors.offset", ""),
+            // Null-valued, which Kafka allows.
+            decode_header("__connect.errors.exception.class.name", None),
+            // Bytes that are not text at all, in a field that is always UTF-8.
+            decode_header("__connect.errors.exception.message", Some(&[0xff, 0xfe])),
+        ];
+        let meta = dlq_inspect(&headers).expect("still a Connect dead letter");
+        assert_eq!(meta.original_topic.as_deref(), Some("orders"));
+        assert_eq!(
+            meta.original_partition, None,
+            "\"three\" is not a partition"
+        );
+        assert_eq!(meta.original_offset, None);
+        assert_eq!(meta.exception_class, None, "a null header has no value");
+        assert_eq!(meta.exception_message, None, "hex is not an exception");
+
+        // A binary number of a length neither framework writes.
+        let odd = vec![decode_header(
+            "kafka_dlt-original-offset",
+            Some(&[0x00, 0x01, 0x02]),
+        )];
+        assert_eq!(dlq_inspect(&odd).expect("spring").original_offset, None);
+    }
+
+    #[test]
+    fn a_huge_stacktrace_is_cut_and_says_so() {
+        let trace = "at com.example.Service.handle(Service.java:42)\n".repeat(1_000);
+        assert!(trace.len() > MAX_STACKTRACE_BYTES);
+
+        let meta = dlq_inspect(&[utf8("kafka_dlt-exception-stacktrace", &trace)])
+            .expect("a Spring dead letter");
+        let surfaced = meta.stacktrace.expect("a trace");
+        assert!(
+            surfaced.len() <= MAX_STACKTRACE_BYTES + STACKTRACE_CUT.len(),
+            "capped: {} bytes",
+            surfaced.len()
+        );
+        assert!(
+            surfaced.ends_with(STACKTRACE_CUT),
+            "a cut trace has to say it was cut"
+        );
+        assert!(surfaced.starts_with("at com.example.Service"));
+
+        // A trace that fits is untouched — no marker, no surprise.
+        let short = "java.lang.IllegalStateException\n\tat com.example.A(A.java:1)";
+        let meta = dlq_inspect(&[utf8("__connect.errors.exception.stacktrace", short)])
+            .expect("a Connect dead letter");
+        assert_eq!(meta.stacktrace.as_deref(), Some(short));
+    }
+
+    /// Cutting a multi-byte character in half would panic on the slice; the cap
+    /// is a byte budget, so it has to walk back to a boundary.
+    #[test]
+    fn the_stacktrace_cap_never_splits_a_character() {
+        let trace = "é".repeat(MAX_STACKTRACE_BYTES);
+        let meta = dlq_inspect(&[utf8("kafka_dlt-exception-stacktrace", &trace)]).expect("spring");
+        let surfaced = meta.stacktrace.expect("a trace");
+        assert!(surfaced.ends_with(STACKTRACE_CUT));
+        assert!(surfaced.starts_with('é'));
+    }
+
+    /// Both conventions on one record: documented, deterministic, and tested so
+    /// it cannot change by accident.
+    #[test]
+    fn a_record_carrying_both_conventions_reports_connect() {
+        let headers = vec![
+            utf8("kafka_dlt-original-topic", "orders"),
+            utf8("__connect.errors.topic", "orders.DLT"),
+        ];
+        let meta = dlq_inspect(&headers).expect("matched");
+        assert_eq!(meta.convention, DlqConvention::Connect);
+        assert_eq!(meta.original_topic.as_deref(), Some("orders.DLT"));
+    }
+
+    /// The IPC contract fixes these three strings, and the TypeScript side
+    /// matches on them literally.
+    #[test]
+    fn the_convention_wire_form_is_fixed() {
+        for (convention, expected) in [
+            (DlqConvention::Connect, "connect"),
+            (DlqConvention::Spring, "spring"),
+            (DlqConvention::None, "none"),
+        ] {
+            assert_eq!(serde_json::to_value(convention).unwrap(), expected);
+        }
+
+        let meta = DlqMeta {
+            convention: DlqConvention::Spring,
+            original_topic: Some("orders".into()),
+            original_partition: Some(3),
+            original_offset: Some(8412),
+            exception_class: Some("java.lang.IllegalStateException".into()),
+            exception_message: None,
+            stacktrace: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&meta).unwrap(),
+            serde_json::json!({
+                "convention": "spring",
+                "original_topic": "orders",
+                "original_partition": 3,
+                "original_offset": 8412,
+                "exception_class": "java.lang.IllegalStateException",
+                "exception_message": null,
+                "stacktrace": null,
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<DlqMeta>(serde_json::to_value(&meta).unwrap()).unwrap(),
+            meta,
+            "round trip"
+        );
     }
 }

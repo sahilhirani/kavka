@@ -7,13 +7,17 @@ import {
   topicsList,
   type BrokerInfo,
   type ConnectionProfile,
+  type MessageRecord,
   type PartitionDetail,
   type TopicDetail,
   type TopicInfo,
 } from "./api";
+import ConfigDiffView from "./ConfigDiffView";
 import ConfirmModal from "./ConfirmModal";
+import CopyWizard from "./CopyWizard";
 import CreateTopicModal from "./CreateTopicModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { replayHeaders } from "./dlq";
 import { approxCount, groupDigits } from "./format";
 import { Term } from "./Glossary";
 import MessagesView from "./MessagesView";
@@ -24,10 +28,11 @@ import {
   splitResults,
   type ResultSplit,
 } from "./PartitionOps";
-import ProducePanel from "./ProducePanel";
+import ProducePanel, { type ProducePrefill } from "./ProducePanel";
 import { ErrorBanner } from "./ProfileEditor";
 import SchemasPanel from "./SchemasPanel";
 import SearchView from "./SearchView";
+import SqlView from "./SqlView";
 import { ToastStack, useToasts } from "./Toast";
 
 function isInternal(topic: TopicInfo): boolean {
@@ -47,8 +52,14 @@ const READ_ONLY_WHY =
  * are these messages" is a fourth question, and it is asked about a topic
  * rather than about a cluster, which is why it lives here and not in its own
  * tab beside Brokers.
+ *
+ * Phase 5a adds `sql` on the same argument again, and it is a PEER of search
+ * rather than a mode inside it: search asks "which records match this", SQL
+ * asks "what do these records add up to". They read the same topic through the
+ * same scan and answer different questions, and neither belongs in the other's
+ * toolbar.
  */
-export type TopicPane = "detail" | "messages" | "search" | "schemas";
+export type TopicPane = "detail" | "messages" | "search" | "schemas" | "sql";
 
 interface TopicsTabProps {
   profile: ConnectionProfile;
@@ -76,6 +87,12 @@ interface TopicsTabProps {
   /** Opens this connection's settings — the schemas pane offers it when the
       connection has no registry. It disconnects; both call sites say so. */
   onEditConnection: () => void;
+  /**
+   * Select another CLUSTER, landing on a topic — the copy wizard's "browse the
+   * destination". It is threaded from the app root rather than done here
+   * because switching clusters is the shell's job, not a tab's.
+   */
+  onOpenCluster?: (profileId: string, topic: string) => void;
 }
 
 /** What the command palette can do to the topic currently on screen. */
@@ -85,6 +102,8 @@ export interface TopicActions {
   produce: () => void;
   /** Set = producing is unavailable, and this is the sentence saying why. */
   produceBlocked?: string;
+  /** Open the SQL pane on this topic (Phase 5a). */
+  sql: () => void;
 }
 
 export default function TopicsTab({
@@ -97,6 +116,7 @@ export default function TopicsTab({
   onDanger,
   onActions,
   onEditConnection,
+  onOpenCluster,
 }: TopicsTabProps) {
   const [topics, setTopics] = useState<TopicInfo[] | null>(null);
   const [loadingTopics, setLoadingTopics] = useState(false);
@@ -132,13 +152,39 @@ export default function TopicsTab({
 
   // Produce and its aftermath. `jump` carries the record a produce just wrote
   // so "View it" on the toast lands the browser on that exact offset.
-  const [producing, setProducing] = useState(false);
+  //
+  // `producing` carries its own TOPIC, which is not always the topic on
+  // screen: a dead letter is re-produced to the topic it originally failed on,
+  // and that is the whole point of the action. It also carries the prefill.
+  const [producing, setProducing] = useState<{
+    topic: string;
+    prefill: ProducePrefill | null;
+  } | null>(null);
   const [jump, setJump] = useState<{
     partition: number;
     offset: number;
     nonce: number;
   } | null>(null);
   const jumpNonce = useRef(0);
+  /**
+   * A jump that has to survive a TOPIC CHANGE — "browse the original" from a
+   * dead letter. The topic-change effect below clears `jump` on purpose (a
+   * stale offset means something else on another topic), so a cross-topic jump
+   * is parked here and claimed by that same effect when the topic it names
+   * arrives. Anything else in the ref is dropped, which is the correct answer
+   * for a jump the user navigated away from.
+   */
+  const pendingJump = useRef<{
+    topic: string;
+    partition: number;
+    offset: number;
+  } | null>(null);
+
+  // Phase 5a: the cross-cluster copy wizard, and the config comparison. Both
+  // belong to the tab rather than to a topic — the wizard is opened FROM a
+  // topic, and the comparison is opened from the list.
+  const [copying, setCopying] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const toaster = useToasts();
   const push = toaster.push;
 
@@ -200,7 +246,22 @@ export default function TopicsTab({
     // something else now — or nothing at all. The same is true of the last
     // batch's results: "partition 3 was refused" says nothing once partition 3
     // belongs to a different topic.
-    setJump(null);
+    //
+    // The one exception is a jump that ASKED for this topic — "browse the
+    // original" from a dead letter names the topic it is going to, so it is
+    // claimed here rather than cleared.
+    const pending = pendingJump.current;
+    pendingJump.current = null;
+    if (pending !== null && pending.topic === topic) {
+      jumpNonce.current += 1;
+      setJump({
+        partition: pending.partition,
+        offset: pending.offset,
+        nonce: jumpNonce.current,
+      });
+    } else {
+      setJump(null);
+    }
     setOpResult(null);
     setElecting(null);
     setReassigning(null);
@@ -323,7 +384,49 @@ export default function TopicsTab({
 
   // ── Produce ────────────────────────────────────────────────────────────
 
-  const openProduce = useCallback(() => setProducing(true), []);
+  const openProduce = useCallback(() => {
+    if (topic === null) return;
+    setProducing({ topic, prefill: null });
+  }, [topic]);
+
+  /**
+   * THE WAY BACK OUT OF A DEAD LETTER.
+   *
+   * The record goes to the topic it originally failed on — never to the DLQ it
+   * is sitting in — with the framework's own dead-letter headers stripped and
+   * Kavka's provenance added, so the replayed record says where it came from
+   * and the NEXT failure's headers describe that failure rather than this one.
+   * Everything is a prefill: the form is the user's, and a value they want to
+   * fix before replaying is exactly what this screen is for.
+   */
+  const reproduce = useCallback(
+    (record: MessageRecord) => {
+      const original = record.dlq?.original_topic ?? null;
+      if (original === null || topic === null) return;
+      setProducing({
+        topic: original,
+        prefill: {
+          key: record.key?.text ?? "",
+          // A tombstone stays a tombstone: it is a real record to replay, and
+          // turning it into an empty string would change what it means.
+          value: record.value === null ? null : record.value.text,
+          valueKind: record.value?.json != null ? "json" : "text",
+          headers: replayHeaders(record, profile.name, topic),
+          note: (
+            <>
+              Prefilled from the dead letter at partition {record.partition},
+              offset {groupDigits(record.offset)} of <code>{topic}</code>. The
+              framework's dead-letter headers have been left off and{" "}
+              <code>kavka.dlq.replayed.from.*</code> added in their place. Fix
+              whatever failed before you send it, or the record will come
+              straight back.
+            </>
+          ),
+        },
+      });
+    },
+    [topic, profile.name],
+  );
 
   /**
    * Every pane change goes through here so the produce jump dies with it.
@@ -351,6 +454,25 @@ export default function TopicsTab({
     [onPane],
   );
 
+  /**
+   * "Browse the original" from a dead letter. Usually another topic, which is
+   * why it parks the jump rather than setting it: the topic-change effect
+   * clears `jump` by design, and the record we are going to does not exist
+   * until that topic's partitions have been read.
+   */
+  const browseOriginal = useCallback(
+    (original: string, partition: number, offset: number) => {
+      if (original === topic) {
+        viewRecord(partition, offset);
+        return;
+      }
+      pendingJump.current = { topic: original, partition, offset };
+      onPane("messages");
+      onSelectTopic(original);
+    },
+    [topic, viewRecord, onPane, onSelectTopic],
+  );
+
   // The palette's contextual actions, reported up rather than reached down
   // for. Cleared on unmount, so a stale "Produce to orders.v2" can never
   // outlive the screen it belongs to.
@@ -364,6 +486,7 @@ export default function TopicsTab({
             search: () => goPane("search"),
             produce: openProduce,
             produceBlocked: profile.read_only ? READ_ONLY_WHY : undefined,
+            sql: () => goPane("sql"),
           },
     );
     return () => onActions(null);
@@ -398,6 +521,23 @@ export default function TopicsTab({
    * panel, four screens.
    */
   const body = ((): React.ReactNode => {
+    // ── Comparing two topics' settings ────────────────────────────────────
+    // It replaces the tab's body rather than opening a modal: the answer is a
+    // table someone reads carefully and copies out of, and a dialog is the
+    // wrong shape for both.
+
+    if (comparing) {
+      return (
+        <ConfigDiffView
+          profile={profile}
+          topics={topics?.map((t) => t.name) ?? []}
+          initialTopic={topic}
+          onBack={() => setComparing(false)}
+          onDanger={onDanger}
+        />
+      );
+    }
+
     // ── Schemas: a page of panels, not a full-height view ──────────────────
     // It is checked BEFORE the two full-height panes because it needs no
     // partition list — a subject can be read (and registered) whether or not
@@ -472,6 +612,25 @@ export default function TopicsTab({
             onBrowse={() => goPane("messages")}
             onDanger={onDanger}
             push={push}
+            onBrowseOriginal={browseOriginal}
+            onReproduce={reproduce}
+          />
+        );
+      }
+      if (pane === "sql") {
+        return (
+          <SqlView
+            // Same rule again: a query and its result set belong to ONE topic,
+            // and carrying them across would answer about the wrong one.
+            key={`sql:${detail.name}`}
+            profile={profile}
+            topic={detail.name}
+            partitions={detail.partitions}
+            onBack={() => goPane("detail")}
+            onBrowse={() => goPane("messages")}
+            onSearch={() => goPane("search")}
+            onDanger={onDanger}
+            push={push}
           />
         );
       }
@@ -497,6 +656,8 @@ export default function TopicsTab({
               ? null
               : { partition: jump.partition, offset: jump.offset }
           }
+          onBrowseOriginal={browseOriginal}
+          onReproduce={reproduce}
         />
       );
     }
@@ -570,10 +731,39 @@ export default function TopicsTab({
                 <button
                   type="button"
                   className="btn"
+                  onClick={() => goPane("sql")}
+                  disabled={detail === null}
+                  title={
+                    detail === null
+                      ? "Kavka is still reading this topic's partitions"
+                      : "Run SQL over a slice of this topic"
+                  }
+                >
+                  SQL
+                </button>
+                <button
+                  type="button"
+                  className="btn"
                   onClick={() => goPane("schemas")}
                   title="See the schemas registered for this topic, and register a new version"
                 >
                   Schemas
+                </button>
+                {/* Reading is on THIS cluster; the write is on another one, so
+                    the button is neutral here and the wizard wears the
+                    destination's environment (see CopyWizard). */}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setCopying(true)}
+                  disabled={detail === null}
+                  title={
+                    detail === null
+                      ? "Kavka is still reading this topic's partitions"
+                      : "Copy or replay these messages into another topic, on this cluster or another one"
+                  }
+                >
+                  Copy to…
                 </button>
                 {/* A write action renders danger-outlined on prod even when it
                     is routine (§6 layer 7). */}
@@ -1027,6 +1217,14 @@ export default function TopicsTab({
               <button
                 type="button"
                 className="btn"
+                title="Put two topics' settings side by side — this cluster's and another's"
+                onClick={() => setComparing(true)}
+              >
+                Compare configs…
+              </button>
+              <button
+                type="button"
+                className="btn"
                 disabled={loadingTopics}
                 aria-busy={loadingTopics || undefined}
                 title={
@@ -1174,20 +1372,41 @@ export default function TopicsTab({
     <>
       {body}
 
-      {producing && topic !== null && (
+      {producing !== null && (
         <ProducePanel
           profile={profile}
-          topic={topic}
+          topic={producing.topic}
           // Without the detail read there is no partition list, so the panel
           // offers "let Kafka choose" and nothing else — which is honest
-          // rather than a select full of guesses.
-          partitions={detail?.partitions ?? []}
+          // rather than a select full of guesses. A replay to ANOTHER topic
+          // gets the same treatment for the same reason: this tab holds the
+          // partitions of the topic on screen, and they are not that topic's.
+          partitions={
+            producing.topic === topic ? (detail?.partitions ?? []) : []
+          }
+          initial={producing.prefill}
           push={push}
           onViewRecord={(partition, offset) => {
-            setProducing(false);
-            viewRecord(partition, offset);
+            const wrote = producing.topic;
+            setProducing(null);
+            if (wrote === topic) viewRecord(partition, offset);
+            else browseOriginal(wrote, partition, offset);
           }}
-          onClose={() => setProducing(false)}
+          onClose={() => setProducing(null)}
+        />
+      )}
+
+      {/* The copy wizard belongs to the topic it copies FROM, and it is the
+          one screen in the app whose danger lives on another cluster — see
+          the file header. */}
+      {copying && topic !== null && (
+        <CopyWizard
+          profile={profile}
+          topic={topic}
+          partitions={detail?.partitions ?? []}
+          push={push}
+          onOpenCluster={onOpenCluster}
+          onClose={() => setCopying(false)}
         />
       )}
 

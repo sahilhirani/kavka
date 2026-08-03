@@ -10,7 +10,7 @@ import {
 } from "./api";
 import Sidebar from "./Sidebar";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
-import ClusterView from "./ClusterView";
+import ClusterView, { stageTopic } from "./ClusterView";
 import Palette, {
   paletteKeyLabel,
   type PaletteAction,
@@ -92,6 +92,14 @@ export default function App() {
   // Mirror of `profiles` for use after awaits without stale closures.
   const profilesRef = useRef<ConnectionProfile[] | null>(null);
   profilesRef.current = profiles;
+  // Same, for connection state. It exists so `openCluster` can stay identity-
+  // stable: it is handed down into the copy wizard, whose session effect must
+  // not re-run — a torn-down copy effect stops a running copy and starts a
+  // second one.
+  const connectionsRef = useRef<Record<string, ConnState>>({});
+  connectionsRef.current = connections;
+  const selectedIdRef = useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
 
   const showError = useCallback((msg: string) => setError(msg), []);
 
@@ -229,6 +237,41 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [aboutOpen, transfer]);
 
+  /**
+   * "Browse the destination" after a cross-cluster copy.
+   *
+   * Three things have to happen and the order matters: the target cluster's
+   * placement is staged FIRST (a ClusterView reads it on the way up, so
+   * writing it afterwards would land the user wherever they were last time),
+   * then the selection moves, then the connection is opened if it is not
+   * already. Reconnecting a cluster that is already up would flip its status
+   * to "connecting" and swap the workspace for the connection form — the user
+   * asked to look at a topic, not to be logged out of one.
+   *
+   * Same cluster is not a no-op: the workspace is already mounted, so nothing
+   * would read the staged placement. The nonce remounts it, which is exactly
+   * what "Refresh topics" does and for the same reason.
+   */
+  const openCluster = useCallback(
+    (profileId: string, topic: string) => {
+      stageTopic(profileId, topic);
+      const target = profilesRef.current?.find((p) => p.id === profileId) ?? null;
+      if (target === null) {
+        setError(
+          "That connection isn't on this machine any more. It may have been deleted in another window.",
+        );
+        return;
+      }
+      const already = connectionsRef.current[profileId]?.status === "connected";
+      if (selectedIdRef.current === profileId) setTopicsNonce((n) => n + 1);
+      setCreating(false);
+      setSelectedId(profileId);
+      lsSet(SELECTED_KEY, profileId);
+      if (!already) void connect(target);
+    },
+    [connect],
+  );
+
   const openAbout = useCallback(() => setAboutOpen(true), []);
   const closeAbout = useCallback(() => setAboutOpen(false), []);
   const closeTransfer = useCallback(() => setTransfer(null), []);
@@ -295,6 +338,7 @@ export default function App() {
         onDisconnect={disconnect}
         onDangerChange={setViewDanger}
         onTopicActions={setTopicActions}
+        onOpenCluster={openCluster}
       />
     );
   } else if (selected) {
@@ -401,6 +445,15 @@ export default function App() {
         keywords: "find filter cel scan query messages grep",
         env: selected.environment,
         run: topicActions.search,
+      },
+      {
+        id: "topic-sql",
+        glyph: "∑",
+        label: `Query ${topicActions.topic} with SQL`,
+        context: selected.name,
+        keywords: "sql select query aggregate count group datafusion analyse",
+        env: selected.environment,
+        run: topicActions.sql,
       },
       {
         id: "topic-produce",

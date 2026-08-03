@@ -4597,3 +4597,363 @@ select.input-invalid { border-color: var(--danger); }
   /* The honesty note's left bar is its only structure once the well goes. */
   .inferred-note { border-left-color: CanvasText; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 5a — SQL · CROSS-CLUSTER COPY · CONFIG DIFF · OFFSET MIGRATION ·
+   DEAD LETTERS
+   Additions only. Everything here composes the primitives above: the
+   table, the ledger gutter, the banner, the modal, the seek bar and the
+   form. Nothing gains a card, a radius or a shadow that did not already
+   have one, and nothing inside .messages-scroll is touched (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The SQL editor ───────────────────────────────────────────────────
+   A query is a literal you could paste into any other SQL client, so it
+   is mono on the sunken surface every input in this app uses. No syntax
+   highlighting: a <textarea> cannot carry it without a second, absolutely
+   positioned copy of the text underneath, and a highlighter that drifts
+   one pixel out of register is worse than none. */
+
+.sql-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.sql-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.sql-input {
+  width: 100%;
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+  resize: vertical;
+}
+
+.sql-input:focus-visible { border-color: var(--accent); }
+
+/* What the engine understands. A disclosure rather than a permanent
+   block: it is reference, and it is long. The summary is always visible,
+   because a user who does not know there is a documented surface will
+   never go looking for one. */
+.sql-surface > summary {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.sql-surface-list {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* How much will be read, and what that means for the answer. §7 rule 6 —
+   a sentence rather than a bar. */
+.sql-scope-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── The result grid ──────────────────────────────────────────────────
+   Same table, same gutter, same virtualizer as the message grid. The one
+   addition is a sortable header, and the caret's slot is reserved on
+   EVERY column (§5.2) so sorting never reflows the header. */
+
+.result-table th { padding: 0; }
+
+.th-sort {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  height: var(--row-h-head);
+  min-height: var(--hit-min);
+  padding: 0 var(--s-5);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.result-table th.col-num .th-sort { justify-content: flex-end; }
+
+.th-sort-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Reserved always, so the header does not move when a column is sorted. */
+.sort-caret {
+  flex: 0 0 8px;
+  width: 8px;
+  color: var(--accent);
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* ── The dead-letter column ───────────────────────────────────────────
+   Present only on a topic that actually has dead letters — see
+   MessageGrid. The badge carries the exception's short name, so it reads
+   as information rather than as a coloured label. */
+
+.mcol-dlq { width: 22ch; }
+
+.dlq-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--warn);
+  font-size: var(--t-sm);
+}
+
+/* ── The inspector's dead-letter section ──────────────────────────────
+   Above the tabs, because on a dead letter this is what the user came
+   for. Grouping is a hairline plus space, like everything else. */
+
+.dlq-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-5) var(--s-6);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.dlq-eyebrow {
+  margin: 0;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.dlq-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: 0;
+}
+
+.dlq-fact {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 1fr);
+  gap: var(--s-2) var(--s-4);
+  align-items: baseline;
+}
+
+.dlq-fact dt {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.dlq-fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dlq-message {
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.dlq-trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+/* The trace scrolls in its own well rather than growing the panel: forty
+   frames of JVM internals must not push the actions off the screen. */
+.dlq-stack {
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.dlq-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.dlq-convention {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-prose);
+}
+
+/* ── The copy wizard ──────────────────────────────────────────────────
+   The body carries the DESTINATION's [data-env], so the ledger rule
+   inside this modal is coral the moment a prod destination is picked —
+   §6 layer 1, aimed at the cluster that is actually being written to. */
+
+.copy-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  min-width: 0;
+}
+
+/* Where you are in the wizard: numbers and space, no card, no chevrons. */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+  margin: 0;
+  padding: 0 0 var(--s-4);
+  border-bottom: 1px solid var(--hairline);
+  list-style: none;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+/* The current step is weight plus lightness — never colour alone (law 2),
+   and the number stays legible in every state. */
+.wizard-step-active {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.wizard-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  font-size: var(--t-micro);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.wizard-step-active .wizard-step-n {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+.copy-dest-id {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.copy-dest-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.copy-topic-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.copy-topic-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── The config comparison ────────────────────────────────────────────
+   Two pickers side by side, and one table. A fieldset keeps the two
+   halves' semantics without a border (§5.3). */
+
+.diff-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4) var(--s-6);
+  padding: 0 var(--s-5) var(--s-5);
+}
+
+.diff-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.diff-side-legend {
+  padding: 0 0 var(--s-2);
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+/* A row the two topics disagree about. The gutter's sign is the meaning;
+   the wash only makes a run of them findable at a glance. */
+.diff-change { background: var(--warn-tint); }
+.diff-change .ledger-gutter { color: var(--warn); }
+
+/* A value that is not set on the topic at all — muted, and always beside
+   the words "broker default" (§5.2's special cells: never colour alone). */
+.config-inherited { color: var(--text-tertiary); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Phase 5a additions
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning, and never a blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Sorting is an indicator, and Highlight is what the OS uses for "the
+     thing you chose". */
+  .sort-caret { color: Highlight; }
+
+  /* A dead letter is severity, so it takes the same system colour as the
+     prod wire and every danger banner. The word is already there. */
+  .dlq-badge,
+  .dlq-eyebrow { color: Mark; }
+
+  /* The differing row keeps its sign; the wash is gone, so the gutter is
+     the only channel left and it must not fade. */
+  .diff-change .ledger-gutter { color: Mark; }
+
+  /* The current step is weight and a border, never a fill. */
+  .wizard-step-active .wizard-step-n { border-color: Highlight; }
+}

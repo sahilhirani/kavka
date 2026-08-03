@@ -13,6 +13,7 @@ import {
   type TailPayload,
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { looksLikeDlqTopic } from "./dlq";
 import ExportButton from "./ExportButton";
 import { groupDigits } from "./format";
 import { Term } from "./Glossary";
@@ -80,6 +81,10 @@ interface MessagesViewProps {
    * brings it in.
    */
   initialSeek?: { partition: number; offset: number } | null;
+  /** Open the topic a dead letter originally failed on, at that record. */
+  onBrowseOriginal?: (topic: string, partition: number, offset: number) => void;
+  /** Send a dead-lettered record back to the topic it came from. */
+  onReproduce?: (record: MessageRecord) => void;
 }
 
 export default function MessagesView({
@@ -92,6 +97,8 @@ export default function MessagesView({
   onSearch,
   onProduce,
   initialSeek = null,
+  onBrowseOriginal,
+  onReproduce,
 }: MessagesViewProps) {
   // ── Seek bar ───────────────────────────────────────────────────────────
   const [seek, setSeek] = useState<SeekState>(() => {
@@ -345,6 +352,20 @@ export default function MessagesView({
 
   const topicIsEmpty = partitions.length > 0 && totalMessages === 0;
 
+  /**
+   * THE DLQ EMPTY STATE, which is a teaching state rather than an error.
+   *
+   * A topic called `orders.dlq` whose records carry no headers Kavka
+   * recognises produces a question the user is about to ask out loud, and the
+   * honest answer is specific: the two conventions Kavka knows, and the fact
+   * that a home-grown one is not one of them. Naming a topic is not evidence
+   * about its records, so this NEVER decides whether something is a dead
+   * letter — `record.dlq` does — it only decides whether to say something.
+   */
+  const dlqExpected = looksLikeDlqTopic(topic);
+  const sawDlq = rows.some((r) => r.dlq != null);
+  const teachDlq = dlqExpected && rows.length > 0 && !sawDlq;
+
   const busyReason = fetching
     ? "Kavka is asking the cluster for messages"
     : tailing
@@ -468,6 +489,19 @@ export default function MessagesView({
         {tailError !== null && (
           <ErrorBanner raw={tailError} onDismiss={() => setTailError(null)} />
         )}
+        {teachDlq && (
+          <p className="table-note" role="note">
+            No recognised dead-letter headers on these {groupDigits(rows.length)}{" "}
+            {rows.length === 1 ? "record" : "records"}. Kavka knows two
+            conventions — Kafka Connect's <code>__connect.errors.*</code> and
+            Spring for Apache Kafka's <code>kafka_dlt-*</code> — and shows a Dead
+            letter column, the original coordinates and the exception whenever
+            one of them matches. A dead-letter topic written by your own code
+            carries whatever headers that code chose, and Kavka won't guess at
+            them; the Headers tab in the inspector shows what is actually there.
+          </p>
+        )}
+
         {tailEnded && (
           <div className="banner banner-warn" role="status">
             <span className="banner-glyph" aria-hidden="true">
@@ -569,6 +603,13 @@ export default function MessagesView({
             record={selected}
             topic={topic}
             onClose={() => setSelectedKey(null)}
+            onBrowseOriginal={onBrowseOriginal}
+            onReproduce={onReproduce}
+            reproduceBlocked={
+              profile.read_only
+                ? "This connection is read-only. Turn that off in the connection's settings to produce or edit."
+                : undefined
+            }
           />
         )}
       </div>

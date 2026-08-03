@@ -11,6 +11,7 @@ import {
 import { useDangerSignal, type DangerReport } from "./danger";
 import { groupDigits } from "./format";
 import { Term } from "./Glossary";
+import OffsetMigrateModal from "./OffsetMigrateModal";
 import { ErrorBanner } from "./ProfileEditor";
 import ResetOffsetsModal from "./ResetOffsetsModal";
 import ShareGroupsPanel from "./ShareGroupsPanel";
@@ -92,6 +93,15 @@ export default function GroupsTab({
   const [error, setError] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState<string | null>(null);
+  /**
+   * Phase 5a: moving this group's position onto ANOTHER cluster.
+   *
+   * A sibling of reset rather than a mode inside it — reset moves a group
+   * within one cluster, where an offset is a number that means something;
+   * migration crosses two clusters, where it is not, and the whole modal is
+   * about that difference.
+   */
+  const [migrating, setMigrating] = useState(false);
 
   const listSeq = useRef(0);
   const detailSeq = useRef(0);
@@ -209,6 +219,25 @@ export default function GroupsTab({
               {detail !== null && <StateChip state={detail.state} />}
             </h2>
             <div className="panel-tools">
+              {/* Neutral here, not danger-outlined: the write lands on ANOTHER
+                  connection, and the modal wears that connection's
+                  environment — including its read-only flag, which this one's
+                  cannot speak for. */}
+              <button
+                type="button"
+                className="btn"
+                disabled={detail === null || detail.offsets.length === 0}
+                title={
+                  detail === null
+                    ? "Kavka is still reading this group"
+                    : detail.offsets.length === 0
+                      ? "This group has never committed an offset, so there is no position to migrate."
+                      : "Give another cluster's group the same position, matched by time"
+                }
+                onClick={() => setMigrating(true)}
+              >
+                Migrate offsets…
+              </button>
               <button
                 type="button"
                 className="btn btn-danger"
@@ -399,6 +428,15 @@ export default function GroupsTab({
             initialTopic={detail.offsets[0]?.topic ?? ""}
             onDone={applyReset}
             onClose={() => setResetting(false)}
+          />
+        )}
+
+        {migrating && detail !== null && (
+          <OffsetMigrateModal
+            profile={profile}
+            detail={detail}
+            initialTopic={detail.offsets[0]?.topic ?? ""}
+            onClose={() => setMigrating(false)}
           />
         )}
       </>

@@ -625,6 +625,29 @@ pub struct DeliverySink {
 
 #[cfg(feature = "kafka")]
 impl DeliverySink {
+    /// Records the broker **acknowledged**, ever.
+    ///
+    /// The three readers exist because a sink is the only thing that knows
+    /// whether a record reached a cluster, and [`crate::xcluster`] produces
+    /// through a producer of its own rather than through [`send`] or
+    /// [`BulkSession`] — a copy is one long stream of records that already
+    /// exist, so neither a per-call producer nor a template engine fits it.
+    /// They are reads and nothing else: the counting rule ("sent means
+    /// acknowledged") stays here, where it is justified.
+    pub fn delivered(&self) -> u64 {
+        self.delivered.load(Ordering::Relaxed)
+    }
+
+    pub fn failed(&self) -> u64 {
+        self.failed.load(Ordering::Relaxed)
+    }
+
+    /// The first rejection, verbatim — the broker's own wording, which is what
+    /// an expert needs under `Show details` (docs/DESIGN.md §7).
+    pub fn first_error(&self) -> Option<String> {
+        guard(&self.error).clone()
+    }
+
     fn record(&self, result: &DeliveryResult<'_>) {
         match result {
             Ok(message) => {
@@ -671,8 +694,13 @@ impl ProducerContext for KavkaClientContext {
 }
 
 /// The producer properties every produce path shares.
+///
+/// `pub(crate)` for [`crate::xcluster`], which builds its own producer for a
+/// cross-cluster copy: `acks=all` is a promise Kavka makes about every count it
+/// shows, and a second copy of these four properties somewhere else is how a
+/// build ends up with two answers to "is a delivered record durable".
 #[cfg(feature = "kafka")]
-fn tune(config: &mut ClientConfig, message_timeout: Duration, linger_ms: &str) {
+pub(crate) fn tune(config: &mut ClientConfig, message_timeout: Duration, linger_ms: &str) {
     config
         // Delivery is confirmed by the whole ISR, so a count Kavka shows is a
         // count Kafka has durably.
