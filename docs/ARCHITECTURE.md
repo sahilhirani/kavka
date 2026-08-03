@@ -14,14 +14,12 @@
 │                                   ├─ metrics collector (Phase 4)           │
 │                                   └─ rdkafka (librdkafka) → Kafka clusters │
 └────────────────────────────────────────────────────────────────────────────┘
-            │  HTTPS (only when Team Server is configured)
-┌───────────▼── Team Server (Phase 6, self-hosted, axum + Postgres) ────────┐
-│  identity (OIDC/SAML/LDAP) · RBAC policy distribution · profile sync      │
-│  central audit ingestion · alert routing · read-mostly web console        │
-│  (control plane only — NEVER a Kafka wire proxy; clients talk to Kafka    │
-│   directly)                                                                │
-└────────────────────────────────────────────────────────────────────────────┘
 ```
+
+The desktop app is the entire system. There is no server component, no account
+system, and no licensing plane — Kavka talks only to the Kafka clusters (and
+Schema Registry / Connect / metrics endpoints) you configure, plus the
+auto-update manifest.
 
 ## Key decisions
 
@@ -42,22 +40,23 @@ librdkafka is the most complete non-Java client (SASL/SCRAM/OAUTHBEARER/mTLS, KI
 
 ### D4 — Serde pipeline
 `bytes → (optional SR framing detect: magic byte 0x0 + schema id) → decoder → canonical JSON value + metadata (schema subject/version/id) → UI`.
-Built-in decoders: JSON, Avro (apache-avro), Protobuf (prost + dynamic descriptors from SR), JSON Schema, XML, MessagePack, CBOR, UTF-8, hex. Custom serdes (Pro) are WASM modules (wasmtime) with a byte-in/JSON-out ABI — sandboxed, cross-platform, language-agnostic. SR clients: Confluent, Apicurio, AWS Glue behind one trait.
+Built-in decoders: JSON, Avro (apache-avro), Protobuf (prost + dynamic descriptors from SR), JSON Schema, XML, MessagePack, CBOR, UTF-8, hex. Custom serdes (Phase 5) are WASM modules (wasmtime) with a byte-in/JSON-out ABI — sandboxed, cross-platform, language-agnostic. SR clients: Confluent, Apicurio, AWS Glue behind one trait.
 
 ### D5 — Credentials & profiles
 Profiles are JSON documents in the app data dir; **secrets never live in them** — they hold keychain references. Secrets go to macOS Keychain / Windows Credential Manager via the `keyring` crate. Profile export produces a secret-free document by construction. Read-only mode is enforced in `kavka-core` (mutating APIs check the connection's mode), not in the UI.
 
 ### D6 — Monitoring (Phase 4)
-Lag history needs no broker cooperation (computed from committed vs end offsets, sampled by a background task into a local embedded store — redb). Throughput/broker metrics scrape JMX-exporter/Prometheus endpoints when configured, degrading gracefully when unreachable. Alert rules evaluate locally → OS notifications; when a Team Server is attached, the server evaluates centrally and routes to Slack/PagerDuty/webhooks.
+Lag history needs no broker cooperation (computed from committed vs end offsets, sampled by a background task into a local embedded store — redb). Throughput/broker metrics scrape JMX-exporter/Prometheus endpoints when configured, degrading gracefully when unreachable. Alert rules evaluate locally → OS notifications, plus optional user-configured webhooks (Slack-compatible incoming webhooks, generic HTTP) fired directly from the app.
 
-### D7 — Team Server is a control plane, not a data plane
-No Kafka proxying (Conduktor Gateway's latency/HA-hop model is a known adoption fear). The server: authenticates users (OIDC/SAML/LDAP), issues short-lived policy bundles (RBAC rules per cluster/topic-pattern/action) that clients enforce in `kavka-core`, syncs shared profiles/filters/serdes, ingests audit events, routes alerts, and serves a read-mostly web console (reusing the React components against a server-side consume API for browser users). Stack: Rust axum + Postgres; stateless except Postgres; Docker/Helm distribution; air-gapped licensing supported.
-
-### D8 — Licensing/entitlements
-Signed license tokens (Ed25519) checked in `kavka-core`; offline grace period for air-gapped use. Free features never phone home; telemetry is opt-in only (a repeated praise point for KafkIO — "no telemetry").
+### D7 — Fully open source, desktop-only, donation-funded
+AGPL-3.0 across the whole repo; every feature free for personal and commercial use. Strong copyleft is deliberate — forks and derivatives (including network services built on `kavka-core`) must publish their source: no closed forks. Consequences for the architecture:
+- **No server component.** SSO, RBAC, central audit, shared-profile sync, governance workflows, and the web console (the old "Team Server" plan) are out of scope. The safety story is per-connection read-only mode (enforced in `kavka-core`, see D5) plus the local action log.
+- **No licensing/entitlement machinery.** No license tokens, no feature gates, no account system — code that never has to exist.
+- **No phone-home.** The app contacts only user-configured endpoints and the signed auto-update manifest; crash reporting and telemetry are strictly opt-in (a repeated praise point for KafkIO — "no telemetry").
+- **Donations, not subscriptions:** Buy Me a Coffee via README badge, `.github/FUNDING.yml` (GitHub Sponsor button), and a quiet "Support Kavka ☕" link in the app's About panel and command palette.
 
 ## Testing strategy
-- Unit: serde pipeline golden tests; CEL filter semantics; policy enforcement.
+- Unit: serde pipeline golden tests; CEL filter semantics; read-only-mode enforcement.
 - Integration: testcontainers with single-binary Redpanda + Apache Kafka (KRaft) matrices; SR (Confluent + Apicurio) containers; auth matrix against SASL-configured containers.
 - E2E: Playwright driving the built app via tauri-driver on Windows + macOS CI runners.
 - Perf: search throughput benchmark topic (10M messages) as a CI regression gate.

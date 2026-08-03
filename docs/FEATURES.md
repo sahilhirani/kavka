@@ -1,8 +1,8 @@
 # Cross-Platform Kafka Client — Full-App Feature Specification
 
-**Date:** 2026-08-02
-**Decisions locked:** Freemium (free core + paid subscription premium) · Desktop app + team server component · Tauri + Rust (rust-rdkafka/librdkafka) · Full monitoring in scope
-**Positioning:** Fill the vacuum left by Conduktor Desktop's retirement (end 2025) and provectus/kafka-ui's abandonment. A modern, tiny, no-Docker, no-JVM desktop Kafka client for macOS + Windows that is free for commercial use at the core — directly attacking Offset Explorer's personal-use-only license, dated UI, and bounded search.
+**Date:** 2026-08-02 (revised same day: pivot to fully open source)
+**Decisions locked:** Fully open source (AGPL-3.0 — no closed forks), every feature free, donation-funded (Buy Me a Coffee) · Desktop app only — no server component, no SSO/enterprise plane · Tauri + Rust (rust-rdkafka/librdkafka) · Full monitoring in scope · Repo private until launch
+**Positioning:** Fill the vacuum left by Conduktor Desktop's retirement (end 2025) and provectus/kafka-ui's abandonment. A modern, tiny, no-Docker, no-JVM desktop Kafka client for macOS + Windows that is completely free and open source — directly attacking Offset Explorer's personal-use-only license, dated UI, and bounded search, and answering the explicit "open source clone of Conduktor Desktop" community demand.
 
 ---
 
@@ -19,28 +19,30 @@
 2. Correct **Avro/Protobuf decoding via Schema Registry** separates usable tools from toys.
 3. **Consumer lag + offset reset** is table stakes in every thread.
 4. Loudest complaints about incumbents: **Conduktor pricing** (~$80–150k/yr @ 100 seats), **Docker/server requirements**, **JVM bloat**, **clunky OSS UX**, **keystore-only TLS config**.
-5. Orgs run **two tools**: a governed web/commercial tool for the platform team + a lightweight local tool for quick peeking. Our desktop+server model covers both sides.
+5. Orgs run **two tools**: a governed web/commercial tool for the platform team + a lightweight local tool for quick peeking. Kavka is the definitive second tool — the lightweight local one — and being free + open source removes every barrier to it spreading engineer-to-engineer.
 
-### Competitive pricing reference
+### Competitive pricing reference (market context — Kavka itself is free)
 - Conduktor Team: $1,200/seat/yr (per-seat, loudly resented)
 - kpow: ~$4,500/cluster/yr (per-cluster, beloved — "Nothing is remotely close")
 - Kadeck: $25–32/user/mo
 - Lenses: from ~$4,000/yr
 - Offset Explorer: $139/user + $46/yr maintenance
 
+Every dollar on that list is a reason an engineer will try the free, open-source alternative first.
+
 ---
 
 ## Architecture at a glance
 
 - **Desktop app:** Tauri 2.x shell, Rust core using rust-rdkafka (librdkafka) for the Kafka protocol; web-tech UI (React or Svelte). Target < 25 MB installers, instant startup, macOS Universal + Windows x64/ARM64. All cluster communication is local — credentials never leave the machine (OS keychain).
-- **Team server (premium):** self-hosted (Docker/Helm) control plane. It is NOT a Kafka proxy — desktop clients still talk to Kafka directly. The server provides identity (SSO), authorization (RBAC policies pushed to clients), shared config sync, central audit ingestion, alert routing, and a read-only web console. Stateless where possible; Postgres for state.
-- **Licensing plane:** subscription entitlements checked by desktop app; offline/air-gapped grace licensing supported (air-gapped operation is a repeated enterprise requirement).
+- **That's it.** No server component, no licensing plane, no account system, no phone-home. The entire product is the desktop app; everything below ships in it, free.
+- **Sustainability:** donation-funded — a Buy Me a Coffee button in the README, GitHub's Sponsor button via `.github/FUNDING.yml`, and a quiet "Support Kavka ☕" link in the app's About panel and command palette. Never a nag screen, never a feature gate.
 
 ---
 
 ## MUST-HAVE FEATURES
 
-### 1. Connectivity & security (free) — must match Offset Explorer's one strength, then beat it
+### 1. Connectivity & security — must match Offset Explorer's one strength, then beat it
 - Multi-cluster saved connection profiles; environment tagging (prod/staging/dev) with color-coded UI chrome; instant cluster switcher
 - Auth matrix: PLAINTEXT, SSL/TLS, mTLS, SASL PLAIN, SCRAM-SHA-256/512, **AWS MSK IAM**, **OAUTHBEARER/OIDC to the broker** (top unresolved ask on every OSS tracker), Kerberos/GSSAPI, Confluent Cloud API keys, Azure Event Hubs connection strings
 - **PEM certs/keys directly — no JKS/keystore conversion ever** (chronically upvoted pain point)
@@ -50,7 +52,7 @@
 - Verified against: Apache Kafka, Amazon MSK, Confluent Cloud/Platform, Redpanda, Aiven, Azure Event Hubs, Strimzi
 - **Per-connection read-only mode** (hand prod to on-call/juniors safely — desktop counter-positioning vs web-UI-with-admin-creds fear)
 
-### 2. Message browsing, search & produce (free core) — the crown jewel
+### 2. Message browsing, search & produce — the crown jewel
 - **Streaming, unbounded search across partitions** — no "max messages per partition" pre-commit; progressive results; target ≥ 1M msgs/min scan rate (kpow benchmark)
 - Seek by offset, timestamp, or **time range**; **cross-partition chronological sort**; live tail with pause/resume
 - Serdes: JSON, Avro, Protobuf, JSON Schema, XML, UTF-8, hex/binary, MessagePack, CBOR — auto-detected, Schema-Registry-driven
@@ -62,14 +64,14 @@
 - Produce: key + value + headers + explicit partition or key-hash; serialize via Schema Registry (Avro/Proto/JSON Schema); produce from file; **templated bulk data generator** (faker-style fields, N messages at interval)
 - Record deletion (delete-records API); message replay onto the same topic
 
-### 3. Consumer groups (free)
+### 3. Consumer groups
 - All groups with state, members, assignment strategy; per-partition committed offset, end offset, **lag — live-refreshing**
 - Lag visible directly in topic view (top Kafbat ergonomics ask)
 - Offset reset: earliest / latest / specific offset / timestamp / shift-by-N — per group, per topic, or per partition; guarded when group is active
 - **KIP-932 Share Groups view** (Kafka 4.x queues — single top-voted open ask on Kafbat, no tool has shipped it well)
 - Static membership visibility; group deletion; member-level lag attribution
 
-### 4. Topics & cluster operations (free)
+### 4. Topics & cluster operations
 - Topic CRUD; config editing with **diff-from-broker-default highlighting**; batch operations across topics
 - Partition detail: leader, replicas, ISR, offsets, size on disk; under-replicated partition surfacing
 - Broker list with configs (read + edit dynamic configs), rack awareness, KRaft quorum/controller view
@@ -77,54 +79,45 @@
 - Client quota viewing and management
 - **Partition reassignment + preferred leader election** (engineers still drop to CLI for these; CMAK's beloved feature, orphaned since 2022)
 
-### 5. Schema Registry (free)
+### 5. Schema Registry
 - Subject/version browse, create, delete; **side-by-side version diff**; compatibility mode viewing/setting; compatibility check before registration
 - Providers: Confluent SR, **Apicurio** (17👍 AKHQ ask), **AWS Glue Schema Registry**
 - References/nested schema resolution; per-message schema traceability (see §2)
 
-### 6. Kafka Connect (free)
+### 6. Kafka Connect
 - Full CRUD on connectors; config validation against plugin's config-def before submit; plugin discovery
 - Task status, restart (connector or task level), pause/resume; failure stack-trace surfacing
 - Multiple Connect clusters per Kafka connection
 
-### 7. Monitoring & alerting (free basics / premium history+alerts)
-- Free: point-in-time cluster health — broker status, URP count, controller, topic/partition counts, live lag
-- Premium: **throughput charts** (bytes/msgs in-out per topic/broker), **lag history** with retention, storage growth trends — via JMX/Prometheus endpoint scraping with graceful degradation when unreachable
-- Premium: **alert rules** (lag threshold, URP, offline partitions, throughput anomaly) → OS notifications; server routes to Slack/PagerDuty/webhook/email
-- Premium: **Kafka Streams topology visualization** (only Confluent C3 and kpow have this)
+### 7. Monitoring & alerting
+- Point-in-time cluster health — broker status, URP count, controller, topic/partition counts, live lag
+- **Throughput charts** (bytes/msgs in-out per topic/broker), **lag history** with retention, storage growth trends — via JMX/Prometheus endpoint scraping with graceful degradation when unreachable
+- **Alert rules** (lag threshold, URP, offline partitions, throughput anomaly) → OS notifications + optional user-configured webhooks (Slack-compatible incoming webhooks, generic HTTP) fired directly from the app
+- **Kafka Streams topology visualization** (only Confluent C3 and kpow have this)
 
-### 8. Desktop UX fundamentals (free)
+### 8. Desktop UX fundamentals
 - Modern UI; **dark mode** (a 5👍 open ask on Redpanda Console); command palette (⌘K); keyboard-first navigation
 - < 25 MB installer, < 2 s cold start, low idle memory (the anti-JVM pitch)
 - Multi-window/multi-tab; per-cluster workspaces; auto-update channel
 - Local action log: every mutating action you performed, timestamped, exportable
+- About panel with a quiet **"Support Kavka ☕" Buy Me a Coffee link** (also reachable from the command palette) — the app's only monetization surface, and it's a donation link, not a paywall
 
 ---
 
-## PREMIUM FEATURES (subscription)
+## POWER FEATURES (also free — later phases, see ROADMAP)
 
-### Desktop Pro (per-user subscription)
-- **SQL over topics** — Lenses-style queryable streams for non-Kafka-experts ("engineers could just query topics" is why teams pay $4k+/yr)
+Formerly sketched as a paid "Desktop Pro" tier; with the open-source pivot they are simply the later-phase features of the one free app.
+
+- **SQL over topics** — Lenses-style queryable streams for non-Kafka-experts ("engineers could just query topics" is why teams pay $4k+/yr elsewhere; here it's free)
 - **Cross-cluster tooling:** copy/replay messages between clusters (with optional transform), **topic config diff between environments**, consumer-offset migration
 - **DLQ replay workflows:** inspect dead-letter topics, edit, re-produce to source with provenance headers
-- Full monitoring history + alerting + Streams topology viz (per §7)
 - **AI assistant:** natural language → filter/SQL query generation; anomaly explanation; **MCP server** so Claude/Cursor can drive the app (2026's emerging differentiator — Kafbat/Conduktor/Lenses all advertise MCP now)
 - Session data masking (regex/field-based redaction for screen-sharing/demos)
 - Custom serde plugin API (WASM-based — safe, cross-platform, language-agnostic)
 
-### Team Server (per-seat or per-cluster subscription — recommend per-cluster to undercut Conduktor's resented per-seat model)
-- **SSO:** OIDC, SAML, LDAP/AD; SCIM provisioning
-- **RBAC:** role → cluster/topic-pattern/action policies enforced in desktop clients and web console; read-only roles; approval-required actions
-- **Central audit log:** every action by every user across all clients, searchable, exportable, SIEM-forwardable
-- Shared connection profiles (secrets held server-side or vault-referenced), shared saved filters/queries, shared serde plugins — pushed to all clients
-- **Governance workflows:** topic/ACL/schema change requests with approvals (Topic-as-a-Service — Conduktor's NPS-80 feature; OSS answer Klaw is in patch-mode)
-- **Web console** (read-mostly): browse topics/messages/lag from a browser for stakeholders without the desktop app
-- Centrally-enforced data masking policies (PII compliance — hard blocker for regulated shops using OSS tools)
-- Alert routing (Slack, PagerDuty, Teams, webhook, email); license/seat management; air-gapped license support
-
 ---
 
-## NICE-TO-HAVE FEATURES (differentiators, any tier)
+## NICE-TO-HAVE FEATURES (differentiators)
 
 - **Companion CLI** sharing the same connection profiles/config as the desktop app (Offset Explorer ships one; enables scripting + CI)
 - **Event tracing across topics** — follow a business key through a pipeline (Kouncil's unique WebSocket-tracing feature; no one else has it)
@@ -143,12 +136,23 @@
 ---
 
 ## Explicit non-goals
-- **Not a Kafka wire proxy** (Conduktor Gateway's model): adds latency, an HA-critical hop, and operational fear; our enforcement lives in clients + server policy instead
-- **Not a hosted SaaS** for v1 (Conduktor's SaaS attempt failed; self-hosted server matches enterprise trust posture)
+- **No server component, no SSO, no enterprise control plane** — dropped in the open-source pivot. SSO (OIDC/SAML/LDAP/SCIM), RBAC, central audit, governance/approval workflows, shared-profile sync, centrally-enforced masking policies, and the web console are all out of scope. The per-connection read-only mode and the local action log are the safety story; orgs that need governed access run a web tool alongside Kavka (the two-tool pattern the market already follows).
+- **Not a Kafka wire proxy** (Conduktor Gateway's model): adds latency, an HA-critical hop, and operational fear
+- **Not a hosted SaaS** — there is nothing to host; the product is the desktop app
+- **No paid tiers, license keys, or feature gates — ever.** Every feature is free; the license is AGPL-3.0; monetization is a donation button.
 - **No ZooKeeper-era support** below Kafka 2.x (CMAK died maintaining it)
 
-## Freemium line rationale
-Free tier must be genuinely better than Offset Explorer AND free for commercial use — that combination converts its entire resentful user base and the Conduktor-Desktop diaspora. Premium features are the ones with organizational (not individual) buyers: monitoring history, alerting, governance, SSO/RBAC/audit, cross-cluster ops, AI. Recommend per-cluster pricing for the server (kpow's beloved model, ~$4.5k/cluster/yr reference) and a modest per-user Desktop Pro (~$10–15/mo reference vs Kadeck's $25–32).
+## Open-source & sustainability model
+Fully open source under **AGPL-3.0** — strong copyleft, chosen deliberately: everyone can use Kavka free of charge, personally or commercially, but forks and modified versions must stay open source under the same license, and the network clause stops anyone from wrapping `kavka-core` into a closed SaaS. **No closed-source forks** (the Grafana/Mattermost licensing model). For users this changes nothing — using an AGPL app at work is unrestricted; the obligations bind only redistributors. It converts Offset Explorer's entire resentful user base (personal-use-only license), the Conduktor-Desktop diaspora, and the explicit "open source clone of Conduktor Desktop" demand — with zero adoption friction and no reason for anyone to pick a competitor on price or license.
+
+The repo stays **private until the Phase 6 launch**; the license governs from the first public release.
+
+Funding is by donation:
+- **Buy Me a Coffee** button ([buymeacoffee.com/sahilhirani](https://buymeacoffee.com/sahilhirani)) in the README and on the docs site
+- **GitHub Sponsor button** via `.github/FUNDING.yml` (points at the Buy Me a Coffee page)
+- In-app: a quiet **"Support Kavka ☕"** link in the About panel and command palette — shown, never pushed. No nag screens, no telemetry-driven prompts.
+
+Open source is also the distribution strategy: it removes procurement friction entirely, invites contributions (serdes, localization, auth providers), and makes engineer-to-engineer recommendation — the channel that made every incumbent — frictionless.
 
 ## Key sources
 - r/apachekafka: "The best Kafka management tool" (Feb 2026), kafkalet launch (Mar 2026), free-tools thread (Dec 2025), "Open source clone of Conduktor Desktop" (May 2026)

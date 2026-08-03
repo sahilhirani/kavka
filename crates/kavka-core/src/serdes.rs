@@ -1,6 +1,6 @@
 //! Serde pipeline (docs/ARCHITECTURE.md D4):
 //! bytes -> SR-framing detection (magic 0x00 + schema id) -> decoder ->
-//! canonical JSON + schema metadata. Custom serdes (Pro) arrive later as
+//! canonical JSON + schema metadata. Custom serdes arrive later (Phase 5) as
 //! sandboxed WASM modules.
 
 use serde::{Deserialize, Serialize};
