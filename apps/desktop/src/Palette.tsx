@@ -40,7 +40,13 @@ export interface PaletteCommands {
   about: () => void;
 }
 
-interface PaletteAction {
+/**
+ * One row. Exported because the app root contributes CONTEXTUAL rows — "Search
+ * in orders.v2", "Produce to orders.v2" — which only the view that owns the
+ * topic can build. They arrive as data with their handlers already bound, so
+ * the palette still knows nothing about topics, panes or produce panels.
+ */
+export interface PaletteAction {
   id: string;
   /** One mono glyph. Decoration — the label always carries the meaning. */
   glyph: string;
@@ -91,6 +97,8 @@ interface PaletteProps {
   connections: Record<string, ConnState>;
   selectedId: string | null;
   commands: PaletteCommands;
+  /** Rows for whatever is on screen right now. First, because they are. */
+  contextual?: PaletteAction[];
   onClose: () => void;
 }
 
@@ -99,6 +107,7 @@ export default function Palette({
   connections,
   selectedId,
   commands,
+  contextual,
   onClose,
 }: PaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -110,7 +119,10 @@ export default function Palette({
   const [unopened, setUnopened] = useState<string | null>(null);
 
   const actions = useMemo<PaletteAction[]>(() => {
-    const list: PaletteAction[] = [];
+    // What is on screen goes first: with no query the palette shows
+    // "Suggested", and the topic you are looking at is the most suggestible
+    // thing there is.
+    const list: PaletteAction[] = contextual ? [...contextual] : [];
 
     for (const p of profiles) {
       const status = connections[p.id]?.status ?? "disconnected";
@@ -236,7 +248,7 @@ export default function Palette({
     );
 
     return list;
-  }, [profiles, connections, selectedId, commands, onClose]);
+  }, [profiles, connections, selectedId, commands, contextual, onClose]);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();

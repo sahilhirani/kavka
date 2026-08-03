@@ -6,6 +6,8 @@
 //! - [`connection`]: authenticated cluster connections, read-only enforcement.
 //! - [`admin`]: topics, configs, ACLs, quotas, groups, reassignment.
 //! - [`consume`]: bounded fetch and live tail.
+//! - [`produce`]: single records and bulk generation; every path is
+//!   read-only-checked before it touches the network.
 //! - [`cancel`]: the cooperative stop flag long reads check.
 //! - [`serdes`]: bytes -> canonical JSON with schema metadata.
 //! - [`sr`]: Schema Registry clients.
@@ -15,6 +17,7 @@ pub mod admin;
 pub mod cancel;
 pub mod connection;
 pub mod consume;
+pub mod produce;
 pub mod profiles;
 pub mod search;
 pub mod serdes;

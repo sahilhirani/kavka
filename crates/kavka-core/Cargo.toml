@@ -81,6 +81,30 @@ apache-avro = { version = "0.21", default-features = false }
 rmpv = "1"
 ciborium = "0.2"
 
+# --- Search filters (src/search.rs, docs/ARCHITECTURE.md D3) ----------------
+# `cel` is cel-rust, the maintained crate: the `cel-interpreter` name D3 was
+# written against was renamed at 0.11 and stopped receiving releases at 0.10, so
+# this is the same project under its current name (github.com/cel-rust/cel-rust).
+#
+# `default-features = false` drops `chrono`, which exists to give CEL its
+# `timestamp`/`duration` types — and nothing in the search activation can
+# produce or consume one: a record's time reaches the expression as
+# `timestamp_ms`, a plain int, so the types would be unreachable while chrono's
+# `clock` feature pulled in platform time plumbing regardless.
+#
+# `regex` is kept, deliberately: `matches()` is CEL standard-library, it is the
+# one standard function a *message search* genuinely needs, and dropping it does
+# not produce "this build has no regex" — it produces "undeclared reference to
+# 'matches'", which reads as a broken expression rather than a missing feature.
+# The `json` feature (CEL value -> serde_json) is not enabled: the traffic here
+# is the other way, serde_json -> CEL, which `cel::to_value` does unfeatured.
+#
+# NOT optional, for the same reason as `apache-avro` and `ureq`: compiling a
+# filter has no librdkafka involvement, so it has to build on the bare
+# (feature-free) tier that tooling and clippy use. Pure Rust — antlr4rust, nom,
+# regex — so it adds no build-tool requirement.
+cel = { version = "0.14", default-features = false, features = ["regex"] }
+
 # `msk-iam` only. MSK IAM is hand-signed rather than via
 # `aws-msk-iam-sasl-signer`; see the dependency note at the top of
 # src/auth/msk.rs.

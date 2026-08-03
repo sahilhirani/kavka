@@ -2992,3 +2992,440 @@ select.input-invalid { border-color: var(--danger); }
   /* The affordance cannot rely on a hover colour change alone. */
   .row-affordance { color: LinkText; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 2 — SEARCH · PRODUCE · EXPORT · TOASTS
+   Additions only. Everything here composes the primitives above: the
+   search bar, the table, the banner, the modal, the chip and the form.
+   Nothing gains a card, a radius or a shadow that did not already have
+   one, and nothing inside .messages-scroll is touched (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The search bar (§5.7) ────────────────────────────────────────────
+   [⌕] [input, flex:1] [ƒx] [cheatsheet]. The ƒx toggle is VISIBLE so an
+   expert finds it in one second, and never the default so a junior never
+   faces it. The shell has no overflow:hidden — its children are square,
+   so nothing needs clipping and no focus ring can be eaten. */
+
+.searchbar-glyph {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-md);
+  line-height: 1;
+}
+
+/* The two trailing controls sit INSIDE the well, so they lose the well's
+   own height and keep the 24px hit floor. */
+.searchbar-fx,
+.searchbar-help {
+  flex-shrink: 0;
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+}
+
+.searchbar-fx { font-family: var(--font-mono); }
+
+/* "Same in CEL: …" — how a support engineer accidentally learns CEL. */
+.searchbar-hint {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+}
+
+/* ── Saved filters ───────────────────────────────────────────────────
+   A filter chip is --r-control, not a pill: pills read immutable, and
+   these are editable. The chip is a container of two operable children,
+   so the BORDER is --border-control, never a hairline. */
+
+.savedfilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-4);
+}
+
+.savedfilters-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.savedfilters-empty {
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.saved-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+}
+
+/* Latched: a saved filter that is currently IN the bar reads as ON. */
+.saved-chip-active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.saved-chip-apply,
+.saved-chip-del {
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.saved-chip-active .saved-chip-apply,
+.saved-chip-active .saved-chip-del { color: var(--accent); }
+
+.saved-chip-del {
+  padding: 0 var(--s-3);
+  border-left: 1px solid var(--hairline-strong);
+  color: var(--text-tertiary);
+}
+
+.saved-chip-apply:hover,
+.saved-chip-del:hover { background: var(--bg-row-hover); }
+
+.savefilter-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.savefilter-input {
+  width: 180px;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  font-size: var(--t-sm);
+}
+
+/* ── The seek bar's trailing actions ──────────────────────────────────
+   A blank label keeps the button on the same baseline as the fields it
+   sits beside, without pretending to name it. */
+.seekbar-actions { justify-content: flex-end; }
+
+/* ── Search progress ──────────────────────────────────────────────────
+   A sentence, then one bar per partition. Law 2: every bar carries its
+   two offsets as digits, so nothing here is legible by length alone. */
+
+.search-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.search-progress-line {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The honesty line under the progress sentence: which partitions stopped
+   because nothing more arrived rather than because they reached the end.
+   Prose, so it is capped at the measure and never mono. */
+.search-progress-note {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--t-xs);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+}
+
+.pbars {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--s-2) var(--s-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.pbar-label {
+  flex: 0 0 4ch;
+  font-family: var(--font-mono);
+}
+
+/* Same track token as the lag meter, so a bar's EXTENT is visible and
+   the fill clears 3:1 against it (accent 5.2, tertiary 3.5). */
+.pbar-track {
+  flex: 1;
+  min-width: 40px;
+  height: 3px;
+  background: var(--track-empty);
+}
+
+.pbar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;          /* a started partition never renders as zero */
+  background: var(--accent);
+}
+
+/* Accent means LIVE. A finished scan is not live, so it stops being teal. */
+.pbar-fill-done { background: var(--text-tertiary); }
+
+.pbar-num {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* A glyph, not a colour: this partition's bar is full like every other
+   finished one, and the difference is a claim about WHY (Law 2). */
+.pbar-assumed {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-family: var(--font-mono);
+}
+
+/* ── The disclosure popover (CEL cheatsheet, template placeholders) ────
+   A true overlay, so it is one of the four things allowed a shadow. */
+
+.help-pop {
+  position: fixed;
+  z-index: 80;
+  width: 380px;
+  max-width: calc(100vw - var(--s-6));
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--s-5);
+  border-radius: var(--r-popover);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  user-select: text;
+}
+
+.help-pop-title {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-sm);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.help-pop-lead {
+  margin: 0 0 var(--s-5);
+  color: var(--text-secondary);
+}
+
+.help-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin: 0;
+}
+
+.help-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* A CEL expression is a literal you could paste into the box above it. */
+.help-syntax {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-mono);
+  word-break: break-word;
+}
+
+.help-what {
+  margin: 0;
+  color: var(--text-tertiary);
+}
+
+.help-eg {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.help-trigger { flex-shrink: 0; }
+
+/* ── Toasts ───────────────────────────────────────────────────────────
+   The shell is in the OVERLAYS block above; these are its contents. */
+
+.toast-title {
+  margin: 0;
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.toast-detail {
+  margin: var(--s-2) 0 0;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* A path and an offset are literals someone may need to copy. */
+.toast-detail-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+/* The 1px progress hairline. It pauses with the timer — hover and focus
+   both stop the clock, so the bar can never disagree with the toast. */
+.toast-progress {
+  display: block;
+  height: 1px;
+  margin: var(--s-4) calc(var(--s-5) * -1) calc(var(--s-5) * -1);
+  background: var(--accent-quiet);
+  transform-origin: left center;
+  animation: toast-drain 5s linear forwards;
+}
+
+.toast-progress-paused { animation-play-state: paused; }
+
+@keyframes toast-drain {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+.toast-more {
+  margin: 0;
+  text-align: right;
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* ── Produce ──────────────────────────────────────────────────────────
+   Built from the modal, tab, field and banner primitives. The only new
+   metric is the value box, which is the loudest thing in the panel. */
+
+.produce-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.produce-value {
+  width: 100%;
+  min-height: calc(var(--control-h-lg) * 2);
+  max-height: 40vh;
+  white-space: pre;
+  overflow: auto;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.header-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  align-items: center;
+}
+
+/* The preview: three rendered rows in the ledger shape — an index in a
+   gutter, the rule, then the payload. Mono, because every character of
+   it is what will land on the broker. */
+.preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: var(--s-4) 0;
+  list-style: none;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+.preview-row { display: flex; }
+
+.preview-index {
+  width: var(--gutter-w-code);
+  min-width: var(--gutter-w-code);
+  padding-right: var(--s-4);
+  text-align: right;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+  user-select: none;
+}
+
+.preview-body {
+  padding-left: var(--s-5);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.preview-key { color: var(--syn-key); }
+
+.bulk-progress {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ── Forced colors — the Phase 2 additions ────────────────────────────
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning. No blanket border rule. */
+
+@media (forced-colors: active) {
+  /* A running scan is the "live" meaning, and Highlight is the OS's word
+     for it — matching the selected row and the active tab. */
+  .pbar-fill { background: Highlight; }
+  .pbar-fill-done { background: CanvasText; }
+  .pbar-track { background: Canvas; border: 1px solid CanvasText; }
+
+  /* A latched saved filter must stay tellable from an idle one when every
+     fill collapses to Canvas. */
+  .saved-chip-active { border-color: Highlight; }
+  .saved-chip-active .saved-chip-apply { color: Highlight; }
+
+  .toast-progress { background: Highlight; }
+}

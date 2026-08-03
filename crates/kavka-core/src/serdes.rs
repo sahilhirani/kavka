@@ -31,6 +31,8 @@
 //! (docs/DESIGN.md §5.10) re-runs a chosen decoder over the same bytes.
 
 use crate::sr::{RegisteredSchema, SchemaKind, SchemaRegistry};
+use crate::{Error, Result};
+use apache_avro::Schema as AvroSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -502,6 +504,215 @@ fn float_to_json(f: f64) -> serde_json::Value {
     )
 }
 
+// ---------------------------------------------------------------------------
+// The encode side (Phase 2 produce). The same framing constants as `decode`,
+// read in the other direction, so the two cannot drift apart.
+// ---------------------------------------------------------------------------
+
+/// Encodes `json` as a single Avro datum against `schema` and wraps it in the
+/// Confluent framing [`decode`] reads back: `[0x00][4-byte big-endian schema
+/// id][datum]`. Not an object-container file — the framing replaces the
+/// container's header, which is the whole point of the Confluent wire format.
+///
+/// # Why the mismatch check is hand-written rather than left to apache-avro
+///
+/// `Value::resolve` answers *whether* a value fits a schema, not *where* it
+/// stopped fitting: for a forty-field record its error names neither the field
+/// nor the value. Producing is a form the user is typing into, and "this JSON
+/// does not fit the schema" is the least actionable sentence Kavka could put
+/// under it (docs/DESIGN.md §7: what happened, then the next click).
+/// [`avro_mismatch`] walks the schema and the JSON together and names the path.
+///
+/// It also catches the one mistake resolution is *silent* about: a field the
+/// schema does not have. Avro drops unknown fields, so a typo'd `amont` would
+/// otherwise encode cleanly with `amount` left at its default — a message that
+/// is wrong in exactly the way nobody checks for.
+pub fn encode_avro(
+    schema: &AvroSchema,
+    schema_id: u32,
+    json: &serde_json::Value,
+) -> Result<Vec<u8>> {
+    if let Some(problem) = avro_mismatch(schema, json, "") {
+        return Err(Error::Other(problem));
+    }
+    let datum = apache_avro::types::Value::from(json.clone())
+        .resolve(schema)
+        .and_then(|value| apache_avro::to_avro_datum(schema, value))
+        // The fallback, for the shapes the walker leaves to apache-avro
+        // (fixed, decimals, wide unions, named references).
+        .map_err(|e| Error::Other(format!("this value does not fit the schema: {e}")))?;
+
+    let mut framed = Vec::with_capacity(CONFLUENT_HEADER_LEN + datum.len());
+    framed.push(CONFLUENT_MAGIC);
+    framed.extend_from_slice(&schema_id.to_be_bytes());
+    framed.extend_from_slice(&datum);
+    Ok(framed)
+}
+
+/// The first place `json` and `schema` disagree, named — or `None` when this
+/// walker can find nothing wrong, in which case apache-avro's own resolution
+/// gets the last word.
+///
+/// `path` is the dotted route to the value being checked, empty at the root.
+fn avro_mismatch(schema: &AvroSchema, json: &serde_json::Value, path: &str) -> Option<String> {
+    use serde_json::Value as J;
+
+    let expected = |what: &str| {
+        Some(format!(
+            "{} expects {what}, but the JSON has {}",
+            at_path(path),
+            json_shape(json)
+        ))
+    };
+
+    match schema {
+        AvroSchema::Null => match json {
+            J::Null => None,
+            _ => expected("null"),
+        },
+        AvroSchema::Boolean => match json {
+            J::Bool(_) => None,
+            _ => expected("a boolean"),
+        },
+        AvroSchema::Int | AvroSchema::Date | AvroSchema::TimeMillis => match json.as_i64() {
+            Some(n) if i32::try_from(n).is_ok() => None,
+            Some(n) => Some(format!(
+                "{} expects int, and {n} is outside the 32-bit range — that field needs to be a \
+                 long",
+                at_path(path)
+            )),
+            None => expected("a whole number (int)"),
+        },
+        AvroSchema::Long
+        | AvroSchema::TimeMicros
+        | AvroSchema::TimestampMillis
+        | AvroSchema::TimestampMicros
+        | AvroSchema::TimestampNanos
+        | AvroSchema::LocalTimestampMillis
+        | AvroSchema::LocalTimestampMicros
+        | AvroSchema::LocalTimestampNanos => match json.as_i64() {
+            Some(_) => None,
+            None => expected("a whole number (long)"),
+        },
+        AvroSchema::Float | AvroSchema::Double => match json.as_f64() {
+            Some(_) => None,
+            None => expected("a number"),
+        },
+        AvroSchema::String | AvroSchema::Uuid => match json {
+            J::String(_) => None,
+            _ => expected("a string"),
+        },
+        AvroSchema::Enum(enumeration) => match json {
+            J::String(symbol) if enumeration.symbols.contains(symbol) => None,
+            J::String(symbol) => Some(format!(
+                "{} is an enum and {symbol:?} is not one of its symbols: {}",
+                at_path(path),
+                enumeration.symbols.join(", ")
+            )),
+            _ => expected("a string"),
+        },
+        AvroSchema::Record(record) => {
+            let J::Object(map) = json else {
+                return expected(&format!("the record {}", record.name.name));
+            };
+            if let Some(unknown) = map
+                .keys()
+                .find(|key| !record.fields.iter().any(|field| field.name == **key))
+            {
+                let known: Vec<&str> = record.fields.iter().map(|f| f.name.as_str()).collect();
+                return Some(format!(
+                    "{} has no field {unknown:?} — {} takes: {}",
+                    at_path(path),
+                    record.name.name,
+                    known.join(", ")
+                ));
+            }
+            record.fields.iter().find_map(|field| {
+                let child = join_path(path, &field.name);
+                match map.get(&field.name) {
+                    Some(value) => avro_mismatch(&field.schema, value, &child),
+                    // A field with a default is optional; one without is not.
+                    None if field.default.is_none() => Some(format!(
+                        "{} is required by {} and the JSON has no such key",
+                        at_path(&child),
+                        record.name.name
+                    )),
+                    None => None,
+                }
+            })
+        }
+        AvroSchema::Array(array) => {
+            let J::Array(items) = json else {
+                return expected("an array");
+            };
+            items
+                .iter()
+                .enumerate()
+                .find_map(|(i, item)| avro_mismatch(&array.items, item, &format!("{path}[{i}]")))
+        }
+        AvroSchema::Map(map_schema) => {
+            let J::Object(entries) = json else {
+                return expected("an object");
+            };
+            entries.iter().find_map(|(key, value)| {
+                avro_mismatch(&map_schema.types, value, &join_path(path, key))
+            })
+        }
+        AvroSchema::Union(union) => {
+            let variants = union.variants();
+            if json.is_null() {
+                return if variants.iter().any(|v| matches!(v, AvroSchema::Null)) {
+                    None
+                } else {
+                    expected("a value, not null")
+                };
+            }
+            // The nullable idiom — `["null", T]` — is the only union whose
+            // intended branch is unambiguous, so it is the only one worth
+            // checking by hand. Anything wider is left to resolution, which
+            // tries every variant and is right to.
+            let mut real = variants.iter().filter(|v| !matches!(v, AvroSchema::Null));
+            match (real.next(), real.next()) {
+                (Some(only), None) => avro_mismatch(only, json, path),
+                _ => None,
+            }
+        }
+        // Bytes, fixed, decimals and named references have more than one legal
+        // JSON spelling; apache-avro's resolution knows them all and this
+        // walker would only guess.
+        _ => None,
+    }
+}
+
+fn at_path(path: &str) -> String {
+    if path.is_empty() {
+        "the value".to_string()
+    } else {
+        format!("field {path:?}")
+    }
+}
+
+fn join_path(path: &str, name: &str) -> String {
+    if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path}.{name}")
+    }
+}
+
+/// What the JSON actually is, in the words the error message needs.
+fn json_shape(json: &serde_json::Value) -> &'static str {
+    match json {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(n) if n.is_f64() => "a fractional number",
+        serde_json::Value::Number(_) => "a whole number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
 /// JSON object keys are strings; MessagePack and CBOR maps are keyed by
 /// arbitrary values. Strings pass through unquoted, everything else renders as
 /// its JSON literal (`1`, `true`, `[1,2]`).
@@ -879,5 +1090,214 @@ mod tests {
     fn non_finite_floats_do_not_produce_invalid_json() {
         assert_eq!(float_to_json(f64::NAN), serde_json::json!("NaN"));
         assert_eq!(float_to_json(1.5), serde_json::json!(1.5));
+    }
+
+    // -----------------------------------------------------------------------
+    // The encode side.
+    // -----------------------------------------------------------------------
+
+    /// The same Order the decode tests use, as a schema rather than as a
+    /// registry response.
+    const ORDER_AVRO: &str = r#"{"type":"record","name":"Order","fields":[{"name":"orderId","type":"int"},{"name":"status","type":"string"}]}"#;
+
+    /// One of everything the mismatch walker has an opinion about.
+    const RICH_AVRO: &str = r#"{
+        "type": "record",
+        "name": "Order",
+        "fields": [
+            {"name": "orderId", "type": "int"},
+            {"name": "status", "type": {"type": "enum", "name": "Status", "symbols": ["created", "paid"]}},
+            {"name": "customer", "type": {"type": "record", "name": "Customer", "fields": [
+                {"name": "name", "type": "string"},
+                {"name": "vip", "type": "boolean"}
+            ]}},
+            {"name": "tags", "type": {"type": "array", "items": "string"}},
+            {"name": "note", "type": ["null", "string"], "default": null},
+            {"name": "channel", "type": "string", "default": "web"}
+        ]
+    }"#;
+
+    fn order_schema() -> AvroSchema {
+        AvroSchema::parse_str(ORDER_AVRO).expect("the fixture schema parses")
+    }
+
+    fn rich_schema() -> AvroSchema {
+        AvroSchema::parse_str(RICH_AVRO).expect("the fixture schema parses")
+    }
+
+    fn rich_value() -> serde_json::Value {
+        serde_json::json!({
+            "orderId": 7,
+            "status": "created",
+            "customer": {"name": "Ada", "vip": true},
+            "tags": ["rush", "gift"],
+            "note": null,
+            "channel": "web",
+        })
+    }
+
+    fn encode_error(schema: &AvroSchema, json: &serde_json::Value) -> String {
+        encode_avro(schema, 1, json)
+            .expect_err("this value should not have encoded")
+            .to_string()
+    }
+
+    /// The framing is the contract between the two halves of this file, so it
+    /// is pinned byte for byte rather than merely round-tripped.
+    #[test]
+    fn encoding_produces_the_exact_confluent_framing() {
+        let bytes = encode_avro(
+            &order_schema(),
+            217,
+            &serde_json::json!({"orderId": 7, "status": "created"}),
+        )
+        .expect("encodes");
+
+        let mut expected = vec![0x00, 0x00, 0x00, 0x00, 0xd9];
+        expected.extend_from_slice(&ORDER_DATUM);
+        assert_eq!(bytes, expected);
+        assert_eq!(confluent_schema_id(&bytes), Some(217));
+        assert_eq!(&bytes[CONFLUENT_HEADER_LEN..], &ORDER_DATUM);
+    }
+
+    /// The decoder is the only judge that matters: bytes this function wrote,
+    /// read back by the ladder at the top of this file.
+    #[test]
+    fn what_encode_writes_decode_reads() {
+        let server = crate::sr::canned::CannedRegistry::start(vec![
+            ("/schemas/ids/217", 200, ORDER_SCHEMA),
+            ("/schemas/ids/217/versions", 200, ORDER_VERSIONS),
+        ]);
+        let registry = SchemaRegistry::new(&registry_config(server.url()));
+        let original = serde_json::json!({"orderId": 42, "status": "shipped"});
+
+        let bytes = encode_avro(&order_schema(), 217, &original).expect("encodes");
+        let decoded = decode(&bytes, Some(&registry), CAP);
+
+        assert_eq!(decoded.encoding, Encoding::Avro);
+        assert_eq!(decoded.json.unwrap(), original);
+        assert_eq!(decoded.schema.unwrap().schema_id, 217);
+    }
+
+    #[test]
+    fn every_shape_in_a_real_schema_encodes() {
+        let bytes = encode_avro(&rich_schema(), 5, &rich_value()).expect("encodes");
+        assert_eq!(confluent_schema_id(&bytes), Some(5));
+
+        let mut body = &bytes[CONFLUENT_HEADER_LEN..];
+        let value = apache_avro::from_avro_datum(&rich_schema(), &mut body, None).expect("decodes");
+        assert_eq!(
+            serde_json::Value::try_from(value).expect("json"),
+            rich_value()
+        );
+    }
+
+    /// A field with a default is optional; the encoder fills it in.
+    #[test]
+    fn fields_with_defaults_may_be_left_out() {
+        let mut sparse = rich_value();
+        let object = sparse.as_object_mut().unwrap();
+        object.remove("note");
+        object.remove("channel");
+
+        let bytes = encode_avro(&rich_schema(), 5, &sparse).expect("encodes");
+        let mut body = &bytes[CONFLUENT_HEADER_LEN..];
+        let value = apache_avro::from_avro_datum(&rich_schema(), &mut body, None).expect("decodes");
+        assert_eq!(
+            serde_json::Value::try_from(value).expect("json"),
+            rich_value(),
+            "the defaults are what came back"
+        );
+    }
+
+    #[test]
+    fn a_type_mismatch_names_the_field_and_both_types() {
+        let mut wrong = rich_value();
+        wrong["orderId"] = serde_json::json!("seven");
+        let err = encode_error(&rich_schema(), &wrong);
+        assert!(err.contains(r#"field "orderId""#), "got {err}");
+        assert!(err.contains("int"), "got {err}");
+        assert!(err.contains("a string"), "got {err}");
+    }
+
+    #[test]
+    fn a_mismatch_inside_a_nested_record_names_the_whole_path() {
+        let mut wrong = rich_value();
+        wrong["customer"]["vip"] = serde_json::json!("yes");
+        let err = encode_error(&rich_schema(), &wrong);
+        assert!(err.contains(r#"field "customer.vip""#), "got {err}");
+        assert!(err.contains("a boolean"), "got {err}");
+    }
+
+    #[test]
+    fn a_mismatch_inside_an_array_names_the_index() {
+        let mut wrong = rich_value();
+        wrong["tags"] = serde_json::json!(["rush", 7]);
+        let err = encode_error(&rich_schema(), &wrong);
+        assert!(err.contains(r#"field "tags[1]""#), "got {err}");
+    }
+
+    /// The mistake apache-avro is silent about: a typo'd field name would
+    /// otherwise encode cleanly, with the real field left at its default.
+    #[test]
+    fn an_unknown_field_is_named_rather_than_silently_dropped() {
+        let mut typo = rich_value();
+        let object = typo.as_object_mut().unwrap();
+        object.remove("channel");
+        object.insert("chanel".into(), serde_json::json!("web"));
+
+        let err = encode_error(&rich_schema(), &typo);
+        assert!(err.contains(r#"no field "chanel""#), "got {err}");
+        // ...and it says what the schema does take, so the fix is one glance.
+        assert!(err.contains("channel"), "got {err}");
+        assert!(err.contains("orderId"), "got {err}");
+    }
+
+    #[test]
+    fn a_missing_required_field_is_named() {
+        let mut missing = rich_value();
+        missing.as_object_mut().unwrap().remove("orderId");
+        let err = encode_error(&rich_schema(), &missing);
+        assert!(err.contains(r#"field "orderId""#), "got {err}");
+        assert!(err.contains("required"), "got {err}");
+    }
+
+    #[test]
+    fn an_enum_lists_the_symbols_it_would_have_accepted() {
+        let mut wrong = rich_value();
+        wrong["status"] = serde_json::json!("cancelled");
+        let err = encode_error(&rich_schema(), &wrong);
+        assert!(err.contains("cancelled"), "got {err}");
+        assert!(err.contains("created, paid"), "got {err}");
+    }
+
+    #[test]
+    fn a_nullable_field_takes_null_or_its_own_type_and_nothing_else() {
+        let mut with_note = rich_value();
+        with_note["note"] = serde_json::json!("gift wrap");
+        assert!(encode_avro(&rich_schema(), 5, &with_note).is_ok());
+
+        let mut wrong = rich_value();
+        wrong["note"] = serde_json::json!(7);
+        let err = encode_error(&rich_schema(), &wrong);
+        assert!(err.contains(r#"field "note""#), "got {err}");
+        assert!(err.contains("a string"), "got {err}");
+    }
+
+    #[test]
+    fn an_int_field_says_so_when_the_number_is_too_wide_for_one() {
+        let mut wide = rich_value();
+        wide["orderId"] = serde_json::json!(i64::from(i32::MAX) + 1);
+        let err = encode_error(&rich_schema(), &wide);
+        assert!(err.contains(r#"field "orderId""#), "got {err}");
+        assert!(err.contains("32-bit"), "got {err}");
+        assert!(err.contains("long"), "got {err}");
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_shape_entirely_says_what_the_schema_wanted() {
+        let err = encode_error(&rich_schema(), &serde_json::json!("just a string"));
+        assert!(err.contains("the value"), "got {err}");
+        assert!(err.contains("Order"), "got {err}");
     }
 }

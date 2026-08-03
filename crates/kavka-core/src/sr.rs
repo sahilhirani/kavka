@@ -1,21 +1,33 @@
 //! Confluent-compatible Schema Registry client (docs/ARCHITECTURE.md D4).
 //!
-//! Read-only in Phase 1: resolve a schema id off a message's framing, and the
-//! subject/version to display next to it. Apicurio and AWS Glue arrive behind
-//! the same shape later; Apicurio ships a Confluent-compatible API surface, so
-//! this client already reaches it.
+//! Two directions, and they are deliberately not symmetric:
 //!
-//! # Degradation is the design, not the error path
+//! - **Decode** ([`SchemaRegistry::lookup`]) resolves a schema id off a
+//!   message's framing, plus the subject/version shown beside it.
+//! - **Encode** ([`SchemaRegistry::latest_schema`]) resolves a subject's latest
+//!   schema, which is what a produce writes against (Phase 2).
+//!
+//! Apicurio and AWS Glue arrive behind the same shape later; Apicurio ships a
+//! Confluent-compatible API surface, so this client already reaches it.
+//!
+//! # Degradation is the design of the decode path, not of both paths
 //!
 //! A registry the app cannot reach must not stop a user browsing a topic. Every
-//! failure here returns `None` from [`SchemaRegistry::lookup`], the caller
-//! falls back to hex **with the schema id still attached**, and the reason is
-//! recorded once per session ([`SchemaRegistry::note_error`]) rather than once
-//! per message — a 2000-message fetch against a wedged registry is one line in
-//! the log, not two thousand.
+//! failure in `lookup` returns `None`, the caller falls back to hex **with the
+//! schema id still attached**, and the reason is recorded once per session
+//! ([`SchemaRegistry::note_error`]) rather than once per message — a
+//! 2000-message fetch against a wedged registry is one line in the log, not two
+//! thousand.
 //!
 //! Failures are cached alongside successes for the same reason: without that,
 //! every message in the fetch pays a fresh 10-second connect timeout.
+//!
+//! **`latest_schema` errors instead.** There is no honest degradation for
+//! "encode this against a schema I could not fetch": guessing would put bytes
+//! on a topic that no consumer of that subject can read, which is worse than
+//! not producing at all. Its failures are also not cached — a produce is one
+//! call, not two thousand, and the user who fixes the registry and presses
+//! send again must not be answered from a cache of the outage.
 //!
 //! Secret discipline (D5): the password is resolved from the OS keychain here,
 //! is folded immediately into an `Authorization` header value, never appears in
@@ -24,11 +36,13 @@
 
 use crate::profiles::SchemaRegistryConfig;
 use crate::secrets;
+use crate::Error;
 use apache_avro::Schema as AvroSchema;
 use base64::Engine as _;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use ureq::tls::{RootCerts, TlsConfig};
@@ -47,6 +61,7 @@ const ERROR_BODY_LIMIT: usize = 200;
 /// What a schema id turned out to be. Only Avro needs the schema itself to
 /// decode a payload; a JSON-Schema subject frames plain JSON, and Protobuf
 /// needs a descriptor pool this build does not carry yet.
+#[derive(Debug)]
 pub enum SchemaKind {
     Avro(Box<AvroSchema>),
     Json,
@@ -60,6 +75,19 @@ pub enum SchemaKind {
 pub struct RegisteredSchema {
     pub subject: Option<String>,
     pub version: Option<i32>,
+    pub kind: SchemaKind,
+}
+
+/// A subject's latest registered schema: what a produce encodes against, and
+/// the id that goes into the framing so a consumer can find it again.
+///
+/// Every field is known here, unlike [`RegisteredSchema`] — the lookup went the
+/// other way, from a subject the user named to the id the registry assigned.
+#[derive(Debug)]
+pub struct SubjectSchema {
+    pub subject: String,
+    pub schema_id: u32,
+    pub version: i32,
     pub kind: SchemaKind,
 }
 
@@ -77,6 +105,9 @@ pub struct SchemaRegistry {
     /// failing registry costs one round trip per id rather than one per
     /// message.
     cache: Mutex<HashMap<u32, Option<Arc<RegisteredSchema>>>>,
+    /// The encode side's cache, keyed by subject. Successes only — see the
+    /// module docs.
+    subjects: Mutex<HashMap<String, Arc<SubjectSchema>>>,
     first_error: Mutex<Option<String>>,
 }
 
@@ -112,6 +143,7 @@ impl SchemaRegistry {
             base_url: url.trim_end_matches('/').to_string(),
             authorization: None,
             cache: Mutex::new(HashMap::new()),
+            subjects: Mutex::new(HashMap::new()),
             first_error: Mutex::new(None),
         }
     }
@@ -125,6 +157,66 @@ impl SchemaRegistry {
         let resolved = self.fetch(schema_id).map(Arc::new);
         self.cache().insert(schema_id, resolved.clone());
         resolved
+    }
+
+    /// The schema a produce should encode against: `GET
+    /// /subjects/{subject}/versions/latest`.
+    ///
+    /// **Errors rather than degrading**, unlike [`lookup`](Self::lookup) — see
+    /// the module docs. The message always names the subject and, when the
+    /// registry answered at all, quotes what it said, so "the registry is
+    /// down" and "there is no such subject" are never the same sentence.
+    ///
+    /// "Latest" is read once per registry instance and then cached. A produce
+    /// builds its own registry, so a run never encodes against a schema that
+    /// was superseded before it started — and a bulk run never re-fetches per
+    /// record.
+    pub fn latest_schema(&self, subject: &str) -> crate::Result<Arc<SubjectSchema>> {
+        if let Some(cached) = self.subjects().get(subject) {
+            return Ok(Arc::clone(cached));
+        }
+        let path = format!("/subjects/{}/versions/latest", path_segment(subject));
+        let body = self.get(&path).map_err(|cause| {
+            Error::Other(format!(
+                "schema registry at {} could not give Kavka the latest schema for {subject}: \
+                 {cause}{}",
+                self.base_url,
+                // A keychain failure recorded at construction is the real
+                // cause of an HTTP 401, and the only one the user can act on.
+                self.error()
+                    .map_or_else(String::new, |noted| format!(" — {noted}"))
+            ))
+        })?;
+
+        let response: VersionResponse = serde_json::from_str(&body).map_err(|e| {
+            Error::Other(format!(
+                "schema registry at {} returned an unexpected body for {subject}: {e}",
+                self.base_url
+            ))
+        })?;
+        let kind = match response.schema_type.as_deref() {
+            // `schemaType` is omitted for Avro (Confluent's default).
+            None | Some("AVRO") => SchemaKind::Avro(Box::new(
+                AvroSchema::parse_str(&response.schema).map_err(|e| {
+                    Error::Other(format!(
+                        "{subject} version {} is registered as Avro but did not parse: {e}",
+                        response.version
+                    ))
+                })?,
+            )),
+            Some("JSON") => SchemaKind::Json,
+            Some(other) => SchemaKind::Unsupported(other.to_string()),
+        };
+
+        let resolved = Arc::new(SubjectSchema {
+            subject: response.subject,
+            schema_id: response.id,
+            version: response.version,
+            kind,
+        });
+        self.subjects()
+            .insert(subject.to_string(), Arc::clone(&resolved));
+        Ok(resolved)
     }
 
     /// Records the session's first failure. Later ones are dropped: the first
@@ -262,6 +354,10 @@ impl SchemaRegistry {
         self.cache.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn subjects(&self) -> MutexGuard<'_, HashMap<String, Arc<SubjectSchema>>> {
+        self.subjects.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn first_error(&self) -> MutexGuard<'_, Option<String>> {
         self.first_error.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -309,6 +405,39 @@ struct SchemaResponse {
 struct SubjectVersion {
     subject: String,
     version: i32,
+}
+
+/// `GET /subjects/{subject}/versions/latest`.
+#[derive(Deserialize)]
+struct VersionResponse {
+    subject: String,
+    id: u32,
+    version: i32,
+    schema: String,
+    #[serde(rename = "schemaType")]
+    schema_type: Option<String>,
+}
+
+/// Percent-encodes one path segment (RFC 3986 unreserved set).
+///
+/// A subject name is user data — Confluent allows very nearly anything in one,
+/// and the `TopicNameStrategy` default puts a *topic* name in it. A subject
+/// with a `/`, a space or a `#` in it would otherwise be pasted straight into
+/// the URL and either 404 against the wrong path or silently drop everything
+/// after the fragment.
+fn path_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            other => {
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
 }
 
 fn describe_error(body: &str) -> String {
@@ -697,5 +826,171 @@ mod tests {
     fn trailing_slashes_in_the_configured_url_do_not_double_up() {
         let registry = SchemaRegistry::unauthenticated("http://registry.example/");
         assert_eq!(registry.base_url, "http://registry.example");
+    }
+
+    // -----------------------------------------------------------------------
+    // The encode side.
+    // -----------------------------------------------------------------------
+
+    const ORDER_LATEST: &str = r#"{"subject":"orders-value","version":4,"id":217,"schema":"{\"type\":\"record\",\"name\":\"Order\",\"fields\":[{\"name\":\"orderId\",\"type\":\"int\"},{\"name\":\"status\",\"type\":\"string\"}]}"}"#;
+
+    #[test]
+    fn the_latest_schema_of_a_subject_carries_the_id_the_framing_needs() {
+        let server = CannedRegistry::start(vec![(
+            "/subjects/orders-value/versions/latest",
+            200,
+            ORDER_LATEST,
+        )]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+
+        let latest = registry.latest_schema("orders-value").expect("resolves");
+        assert_eq!(latest.subject, "orders-value");
+        assert_eq!(latest.schema_id, 217);
+        assert_eq!(latest.version, 4);
+        assert!(matches!(latest.kind, SchemaKind::Avro(_)));
+        assert_eq!(
+            server.seen()[0].path,
+            "/subjects/orders-value/versions/latest"
+        );
+        // The decode side's `first_error` is untouched by a success.
+        assert_eq!(registry.error(), None);
+    }
+
+    #[test]
+    fn a_subject_is_fetched_once_per_registry() {
+        let server = CannedRegistry::start(vec![(
+            "/subjects/orders-value/versions/latest",
+            200,
+            ORDER_LATEST,
+        )]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+
+        for _ in 0..5 {
+            assert_eq!(
+                registry
+                    .latest_schema("orders-value")
+                    .expect("resolves")
+                    .schema_id,
+                217
+            );
+        }
+        assert_eq!(server.seen().len(), 1, "cached after the first lookup");
+    }
+
+    /// The asymmetry that matters: producing cannot fall back to "show it as
+    /// hex", so this path errors where `lookup` returns `None`.
+    #[test]
+    fn an_unreachable_registry_is_an_error_on_the_encode_side() {
+        // Port 1 is never listening; the connection is refused immediately.
+        let registry = SchemaRegistry::new(&config("http://127.0.0.1:1"));
+        let err = registry
+            .latest_schema("orders-value")
+            .expect_err("nothing to encode against")
+            .to_string();
+
+        assert!(err.contains("orders-value"), "got {err}");
+        assert!(err.contains("schema registry at"), "got {err}");
+    }
+
+    #[test]
+    fn an_unknown_subject_quotes_what_the_registry_said() {
+        let server = CannedRegistry::start(vec![]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+        let err = registry
+            .latest_schema("no-such-value")
+            .expect_err("404")
+            .to_string();
+
+        assert!(err.contains("no-such-value"), "got {err}");
+        assert!(err.contains("HTTP 404"), "got {err}");
+        assert!(err.contains("Schema not found"), "got {err}");
+    }
+
+    /// A failure is not cached: the user who fixes the registry and presses
+    /// send again must reach it, not a memory of the outage.
+    #[test]
+    fn a_failed_subject_lookup_is_retried() {
+        let server = CannedRegistry::start(vec![]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+
+        assert!(registry.latest_schema("orders-value").is_err());
+        assert!(registry.latest_schema("orders-value").is_err());
+        assert_eq!(server.seen().len(), 2, "asked again, not remembered");
+    }
+
+    #[test]
+    fn a_keychain_failure_is_carried_into_the_encode_side_error() {
+        let registry = SchemaRegistry::new(&SchemaRegistryConfig {
+            url: "http://127.0.0.1:1".into(),
+            username: Some("alice".into()),
+            password: Some(SecretRef {
+                entry: format!("kavka-unit-test/absent-encode/{}", std::process::id()),
+            }),
+        });
+        let err = registry
+            .latest_schema("orders-value")
+            .expect_err("no credentials, no registry")
+            .to_string();
+        assert!(err.contains("schema registry credentials"), "got {err}");
+    }
+
+    #[test]
+    fn a_non_avro_subject_is_named_rather_than_parsed_as_avro() {
+        let server = CannedRegistry::start(vec![
+            (
+                "/subjects/events-value/versions/latest",
+                200,
+                r#"{"subject":"events-value","version":2,"id":8,"schema":"{\"type\":\"object\"}","schemaType":"JSON"}"#,
+            ),
+            (
+                "/subjects/traces-value/versions/latest",
+                200,
+                r#"{"subject":"traces-value","version":1,"id":9,"schema":"syntax = \"proto3\";","schemaType":"PROTOBUF"}"#,
+            ),
+        ]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+
+        assert!(matches!(
+            registry
+                .latest_schema("events-value")
+                .expect("resolves")
+                .kind,
+            SchemaKind::Json
+        ));
+        match &registry
+            .latest_schema("traces-value")
+            .expect("resolves")
+            .kind
+        {
+            SchemaKind::Unsupported(kind) => assert_eq!(kind, "PROTOBUF"),
+            _ => panic!("protobuf must not be read as avro"),
+        }
+    }
+
+    #[test]
+    fn an_unparseable_avro_subject_names_itself() {
+        let server = CannedRegistry::start(vec![(
+            "/subjects/broken-value/versions/latest",
+            200,
+            r#"{"subject":"broken-value","version":1,"id":3,"schema":"{\"type\":\"nonsense\"}"}"#,
+        )]);
+        let registry = SchemaRegistry::new(&config(server.url()));
+        let err = registry
+            .latest_schema("broken-value")
+            .expect_err("not a schema")
+            .to_string();
+        assert!(err.contains("broken-value version 1"), "got {err}");
+        assert!(err.contains("did not parse"), "got {err}");
+    }
+
+    /// A subject name is user data, and `TopicNameStrategy` puts a topic name
+    /// in it — so it has to survive the trip into a URL path.
+    #[test]
+    fn subject_names_are_percent_encoded_into_the_path() {
+        assert_eq!(path_segment("orders-value"), "orders-value");
+        assert_eq!(path_segment("a/b"), "a%2Fb");
+        assert_eq!(path_segment("with space"), "with%20space");
+        assert_eq!(path_segment("q?x=1#frag"), "q%3Fx%3D1%23frag");
+        assert_eq!(path_segment("héllo"), "h%C3%A9llo");
     }
 }

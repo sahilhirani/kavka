@@ -5,7 +5,7 @@ import GroupsTab from "./GroupsTab";
 import { Term } from "./Glossary";
 import { EnvChip } from "./Sidebar";
 import { lsGet, lsSet } from "./storage";
-import TopicsTab from "./TopicsTab";
+import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
 
 /**
  * THE CLUSTER WORKSPACE.
@@ -33,35 +33,48 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
 interface Placement {
   tab: TabKey;
   topic: string | null;
-  browsing: boolean;
+  pane: TopicPane;
   group: string | null;
 }
 
 const EMPTY_PLACEMENT: Placement = {
   tab: "overview",
   topic: null,
-  browsing: false,
+  pane: "detail",
   group: null,
 };
+
+const PANES: readonly TopicPane[] = ["detail", "messages", "search"];
 
 function placementKey(profileId: string): string {
   return `kavka.cluster.${profileId}.view`;
 }
 
+/**
+ * MIGRATION. Phase 1 persisted `browsing: boolean`; Phase 2 needs three
+ * states, so the record now carries `pane`. A stored Phase 1 placement is read
+ * through its old field rather than discarded — the whole point of persisting
+ * where you were is that an upgrade does not move you.
+ */
 function readPlacement(profileId: string): Placement {
   const raw = lsGet(placementKey(profileId));
   if (raw === null) return EMPTY_PLACEMENT;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return EMPTY_PLACEMENT;
-    const value = parsed as Partial<Record<keyof Placement, unknown>>;
+    const value = parsed as Partial<Record<string, unknown>>;
     const tab = TABS.some((t) => t.key === value.tab)
       ? (value.tab as TabKey)
       : "overview";
+    const pane = PANES.includes(value.pane as TopicPane)
+      ? (value.pane as TopicPane)
+      : value.browsing === true
+        ? "messages"
+        : "detail";
     return {
       tab,
       topic: typeof value.topic === "string" ? value.topic : null,
-      browsing: value.browsing === true,
+      pane,
       group: typeof value.group === "string" ? value.group : null,
     };
   } catch {
@@ -78,6 +91,14 @@ interface ClusterViewProps {
    * the app root, or a prod cluster paints a coral rule behind a coral banner.
    */
   onDangerChange: (danger: boolean) => void;
+  /**
+   * The two contextual palette commands ("Search in x", "Produce to x").
+   * They are reported UP, with their handlers, rather than the palette
+   * reaching down into a view it knows nothing about — and they are cleared
+   * whenever there is no topic on screen, so ⌘K never offers to search
+   * something that isn't open.
+   */
+  onTopicActions?: (actions: TopicActions | null) => void;
 }
 
 export default function ClusterView({
@@ -85,6 +106,7 @@ export default function ClusterView({
   overview,
   onDisconnect,
   onDangerChange,
+  onTopicActions,
 }: ClusterViewProps) {
   const [place, setPlace] = useState<Placement>(() => readPlacement(profile.id));
   const tabRefs = useRef<Partial<Record<TabKey, HTMLButtonElement | null>>>({});
@@ -112,6 +134,10 @@ export default function ClusterView({
   // dampened. Belt and braces: the children clear their own source too.
   useEffect(() => () => onDangerChange(false), [onDangerChange]);
 
+  // Same shape, same reason: a palette that still offers "Produce to
+  // orders.v2" after the cluster was disconnected is offering a dead command.
+  useEffect(() => () => onTopicActions?.(null), [onTopicActions]);
+
   const goTab = useCallback((tab: TabKey) => {
     setPlace((prev) => ({ ...prev, tab }));
   }, []);
@@ -120,13 +146,13 @@ export default function ClusterView({
     setPlace((prev) => ({
       ...prev,
       topic,
-      // Leaving a topic always leaves its message browser too.
-      browsing: topic === null ? false : prev.browsing,
+      // Leaving a topic always leaves its browser and its search too.
+      pane: topic === null ? "detail" : prev.pane,
     }));
   }, []);
 
-  const setBrowsing = useCallback((browsing: boolean) => {
-    setPlace((prev) => ({ ...prev, browsing }));
+  const setPane = useCallback((pane: TopicPane) => {
+    setPlace((prev) => ({ ...prev, pane }));
   }, []);
 
   const selectGroup = useCallback((group: string | null) => {
@@ -151,10 +177,12 @@ export default function ClusterView({
     [goTab],
   );
 
-  // The message browser is the one view that owns the full height of the
-  // workspace: it has its own scrollport, its own status line and a docked
-  // inspector, none of which can live inside a page that scrolls as a whole.
-  const full = place.tab === "topics" && place.topic !== null && place.browsing;
+  // The message browser and search are the two views that own the full height
+  // of the workspace: each has its own scrollport, its own status line and a
+  // docked inspector, none of which can live inside a page that scrolls as a
+  // whole.
+  const full =
+    place.tab === "topics" && place.topic !== null && place.pane !== "detail";
 
   return (
     <div className={`cluster-view${full ? " cluster-view-full" : ""}`}>
@@ -224,10 +252,11 @@ export default function ClusterView({
             profile={profile}
             brokerCount={overview.brokers.length}
             topic={place.topic}
-            browsing={place.browsing}
+            pane={place.pane}
             onSelectTopic={selectTopic}
-            onBrowse={setBrowsing}
+            onPane={setPane}
             onDanger={reportDanger}
+            onActions={onTopicActions}
           />
         )}
 

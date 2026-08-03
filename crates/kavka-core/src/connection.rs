@@ -213,6 +213,38 @@ impl ClusterConnection {
         config.create_with_context(context).map_err(client_error)
     }
 
+    /// A fresh producer for one produce action or one bulk session.
+    ///
+    /// The write-side twin of [`new_session_consumer`](Self::new_session_consumer),
+    /// and for the same reasons: a session owns its client, secrets are
+    /// re-resolved at creation, and the client is dropped with the session
+    /// rather than cached on the connection (the justification for *not*
+    /// caching it lives in src/produce.rs, where the trade-off is).
+    ///
+    /// `tune` receives the profile's fully-mapped config so every producer
+    /// property — acks, timeouts, queue bounds — is decided in `produce`,
+    /// where it can be justified next to the code that depends on it, rather
+    /// than here among the auth mapping.
+    #[cfg(feature = "kafka")]
+    pub fn new_producer(
+        &self,
+        tune: impl FnOnce(&mut ClientConfig),
+    ) -> Result<rdkafka::producer::BaseProducer<KavkaClientContext>> {
+        let (mut config, context) = client_config(&self.profile)?;
+        tune(&mut config);
+        let producer: rdkafka::producer::BaseProducer<KavkaClientContext> =
+            config.create_with_context(context).map_err(client_error)?;
+        // Same reason as `service_events`: nothing else polls this client, so
+        // drain once to let the token callback run before the first send.
+        if rdkafka::producer::Producer::client(&producer)
+            .context()
+            .needs_oauth_token()
+        {
+            producer.poll(EVENT_DRAIN_TIMEOUT);
+        }
+        Ok(producer)
+    }
+
     #[cfg(not(feature = "kafka"))]
     pub fn connect(_profile: ConnectionProfile) -> Result<Self> {
         Err(Error::Other(

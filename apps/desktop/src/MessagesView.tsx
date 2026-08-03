@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MAX_FETCH_MESSAGES,
   errorMessage,
@@ -17,33 +10,36 @@ import {
   type FetchSpec,
   type MessageRecord,
   type PartitionDetail,
-  type SeekSpec,
   type TailPayload,
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
-import { formatClock, fromDatetimeLocal, groupDigits, toDatetimeLocal } from "./format";
+import ExportButton from "./ExportButton";
+import { groupDigits } from "./format";
 import { Term } from "./Glossary";
+import MessageGrid, { rowKey, type MessageGridHandle } from "./MessageGrid";
 import MessageInspector from "./MessageInspector";
-import { previewText } from "./payload";
 import { ErrorBanner } from "./ProfileEditor";
-import {
-  isPinnedToBottom,
-  scrollIndexIntoView,
-  useRowHeightAssertion,
-  useVirtualRows,
-} from "./virtual";
+import SeekBar, {
+  buildSeek,
+  initialSeekState,
+  parsePartitionFilter,
+  type SeekError,
+  type SeekField,
+  type SeekState,
+} from "./SeekBar";
+import type { ToastSpec } from "./Toast";
 
 /**
- * THE MESSAGE BROWSER
+ * THE MESSAGE BROWSER.
  *
  * Two things are worth reading before changing anything here.
  *
- * 1. THE TABLE IS VIRTUALIZED, so it carries `role="grid"`, `aria-rowcount`
- *    (the TOTAL, including the header) and `aria-rowindex` on every row —
- *    docs/DESIGN.md §5.2 says all three land in the same change as the
- *    virtualizer and not before, because the rendered count no longer matches
- *    the real one. `role="grid"` is a promise of an interactive widget, so
- *    j/k, the arrows, Home/End and ⏎ actually walk and open rows.
+ * 1. THE TABLE AND THE SEEK BAR ARE NOT THIS FILE'S ANY MORE. Phase 2 gave
+ *    search the same grid and the same "where to read from" controls, so both
+ *    moved to MessageGrid and SeekBar — including the virtualization, the
+ *    `role="grid"` keyboard contract and the partition-filter parsing. What is
+ *    left here is what is genuinely the BROWSER's: a fetch, a live tail, and
+ *    the honesty the tail owes about what it dropped.
  *
  * 2. THE TAIL STATE MODEL. One session at a time, owned by one effect keyed on
  *    `tailing` plus the identity of what is being tailed. The effect starts
@@ -67,57 +63,6 @@ const TAIL_BUFFER = 5000;
 /** A tail with nothing arriving for this long is "quiet", and says so. */
 const QUIET_AFTER_MS = 30_000;
 
-type SeekMode = "earliest" | "latest" | "offset" | "timestamp";
-
-type SeekField = "count" | "offset" | "timestamp" | "filter";
-
-interface SeekError {
-  field: SeekField;
-  message: string;
-}
-
-function rowKey(record: MessageRecord): string {
-  return `${record.partition}:${record.offset}`;
-}
-
-/**
- * The DOM id `aria-activedescendant` points at.
- *
- * Keyed by the record's address rather than its row index: a live tail appends
- * rows and trims the head, so an index-keyed id would name a different record
- * from one frame to the next and the announced row would drift.
- */
-function rowDomId(record: MessageRecord): string {
-  return `mv-row-${record.partition}-${record.offset}`;
-}
-
-/** `0, 3, 7` → [0,3,7]; empty or "all" → null (every partition). */
-function parsePartitionFilter(
-  raw: string,
-  known: Set<number>,
-): { partitions: number[] | null } | { message: string } {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0 || trimmed.toLowerCase() === "all")
-    return { partitions: null };
-  const out: number[] = [];
-  for (const piece of trimmed.split(/[,\s]+/)) {
-    if (piece.length === 0) continue;
-    const n = Number.parseInt(piece, 10);
-    if (!Number.isInteger(n) || n < 0 || String(n) !== piece)
-      return {
-        message: `“${piece}” isn't a partition number. List them with commas — e.g. 0, 3, 7`,
-      };
-    if (known.size > 0 && !known.has(n))
-      return {
-        message: `This topic has no partition ${n}. It has ${known.size}, numbered 0 to ${
-          known.size - 1
-        }.`,
-      };
-    if (!out.includes(n)) out.push(n);
-  }
-  return out.length === 0 ? { partitions: null } : { partitions: out };
-}
-
 interface MessagesViewProps {
   profile: ConnectionProfile;
   topic: string;
@@ -125,6 +70,16 @@ interface MessagesViewProps {
   partitions: PartitionDetail[];
   onBack: () => void;
   onDanger: DangerReport;
+  /** Toasts belong to the topic view, so one stack serves every child. */
+  push: (spec: ToastSpec) => void;
+  onSearch: () => void;
+  onProduce: () => void;
+  /**
+   * Land on a specific record instead of the newest — "View it" on the toast
+   * a produce just raised. Read once, on mount, by the keyed remount that
+   * brings it in.
+   */
+  initialSeek?: { partition: number; offset: number } | null;
 }
 
 export default function MessagesView({
@@ -133,14 +88,23 @@ export default function MessagesView({
   partitions,
   onBack,
   onDanger,
+  push,
+  onSearch,
+  onProduce,
+  initialSeek = null,
 }: MessagesViewProps) {
   // ── Seek bar ───────────────────────────────────────────────────────────
-  const [mode, setMode] = useState<SeekMode>("latest");
-  const [count, setCount] = useState("100");
-  const [seekPartition, setSeekPartition] = useState("0");
-  const [seekOffset, setSeekOffset] = useState("0");
-  const [when, setWhen] = useState(() => toDatetimeLocal(Date.now() - 3_600_000));
-  const [filter, setFilter] = useState("");
+  const [seek, setSeek] = useState<SeekState>(() => {
+    const base = initialSeekState("latest", "100");
+    if (initialSeek === null) return base;
+    return {
+      ...base,
+      mode: "offset",
+      partition: String(initialSeek.partition),
+      offset: String(initialSeek.offset),
+      count: "100",
+    };
+  });
   const [seekError, setSeekError] = useState<SeekError | null>(null);
 
   // ── Results ────────────────────────────────────────────────────────────
@@ -155,18 +119,20 @@ export default function MessagesView({
   const [tailing, setTailing] = useState(false);
   const [dropped, setDropped] = useState(0);
   const [trimmed, setTrimmed] = useState(false);
+  /** Records this tail session has delivered, whether or not they are still on
+      screen — the denominator the export note needs. */
+  const [seen, setSeen] = useState(0);
   const [tailEnded, setTailEnded] = useState(false);
   const [tailError, setTailError] = useState<string | null>(null);
   const [unseen, setUnseen] = useState(0);
   const [quiet, setQuiet] = useState(false);
+  /** The grid owns the scrollport, so it owns this; here it is only mirrored. */
   const pinnedRef = useRef(true);
-  const tailingRef = useRef(false);
   const lastRecordAt = useRef(0);
   /** Total records this tail session has delivered, buffer cap included. */
   const received = useRef(0);
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const firstRowRef = useRef<HTMLTableRowElement | null>(null);
+  const gridRef = useRef<MessageGridHandle | null>(null);
 
   const known = useMemo(
     () => new Set(partitions.map((p) => p.partition)),
@@ -181,71 +147,30 @@ export default function MessagesView({
     [partitions],
   );
 
-  const { win, onScroll, remeasure } = useVirtualRows(scrollRef, rows.length);
-  useRowHeightAssertion(firstRowRef, win.rowH, rows.length > 0);
   useDangerSignal(error !== null || tailError !== null, onDanger);
 
-  const selectedIndex = useMemo(
-    () =>
-      selectedKey === null
-        ? -1
-        : rows.findIndex((r) => rowKey(r) === selectedKey),
+  const selected = useMemo(
+    () => rows.find((r) => rowKey(r) === selectedKey) ?? null,
     [rows, selectedKey],
   );
-  const selected = selectedIndex >= 0 ? rows[selectedIndex] : null;
 
   // ── Fetching ───────────────────────────────────────────────────────────
 
   const buildSpec = useCallback((): FetchSpec | SeekError => {
-    const parsedFilter = parsePartitionFilter(filter, known);
-    if ("message" in parsedFilter)
-      return { field: "filter", message: parsedFilter.message };
-
-    const n = Number.parseInt(count, 10);
-    if (!Number.isFinite(n) || n < 1)
-      return { field: "count", message: "Ask for at least one message." };
-    const capped = Math.min(n, MAX_FETCH_MESSAGES);
-
-    let seek: SeekSpec;
-    if (mode === "earliest") {
-      seek = { kind: "earliest" };
-    } else if (mode === "latest") {
-      seek = { kind: "latest", last_n: capped };
-    } else if (mode === "offset") {
-      const p = Number.parseInt(seekPartition, 10);
-      const o = Number.parseInt(seekOffset, 10);
-      if (!Number.isInteger(p) || !known.has(p))
-        return {
-          field: "offset",
-          message: `Pick a partition this topic has — 0 to ${
-            Math.max(1, known.size) - 1
-          }.`,
-        };
-      if (!Number.isInteger(o) || o < 0)
-        return {
-          field: "offset",
-          message: "An offset counts from 0 — e.g. 8412",
-        };
-      seek = { kind: "offset", partition: p, offset: o };
-    } else {
-      const ms = fromDatetimeLocal(when);
-      if (ms === null)
-        return {
-          field: "timestamp",
-          message: "Pick a date and time to start from.",
-        };
-      seek = { kind: "timestamp", timestamp_ms: ms };
-    }
-
+    const built = buildSeek(seek, known, {
+      maxCount: MAX_FETCH_MESSAGES,
+      needCount: true,
+    });
+    if ("field" in built) return built;
     return {
       topic,
-      seek,
-      partitions: parsedFilter.partitions,
-      max_messages: capped,
+      seek: built.seek,
+      partitions: built.partitions,
+      max_messages: built.count,
       // null = the core's own display cap. The inspector says when it bit.
       max_value_bytes: null,
     };
-  }, [filter, known, count, mode, seekPartition, seekOffset, when, topic]);
+  }, [seek, known, topic]);
 
   const runFetch = useCallback(async () => {
     const spec = buildSpec();
@@ -263,9 +188,13 @@ export default function MessagesView({
       setRows(records);
       setSelectedKey(null);
       setTrimmed(false);
+      // A fetched range replaces whatever a previous tail session showed;
+      // its drop/seen counters must not haunt this complete result set.
+      setDropped(0);
+      setSeen(0);
       setFetched(true);
       // A fetch is a range, not a stream: start the user at its beginning.
-      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+      gridRef.current?.scrollToTop();
     } catch (err) {
       if (fetchSeq.current === seq) setError(errorMessage(err));
     } finally {
@@ -306,6 +235,7 @@ export default function MessagesView({
       // about and StrictMode would run twice.
       received.current += payload.records.length;
       if (received.current > TAIL_BUFFER) setTrimmed(true);
+      setSeen(received.current);
       setRows((prev) => {
         const next = prev.concat(payload.records);
         return next.length > TAIL_BUFFER
@@ -322,10 +252,9 @@ export default function MessagesView({
     }
   }, []);
 
-  const filterKey = filter.trim();
+  const filterKey = seek.filter.trim();
   useEffect(() => {
     if (!tailing) return;
-    tailingRef.current = true;
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
     let started: string | null = null;
@@ -353,7 +282,6 @@ export default function MessagesView({
 
     return () => {
       cancelled = true;
-      tailingRef.current = false;
       unsubscribe?.();
       // Idempotent on the Rust side, so the `ended` case costs nothing.
       if (started !== null) void tailStop(started);
@@ -364,7 +292,7 @@ export default function MessagesView({
     // The partition filter applies to the tail too, so a filter Kavka can't
     // parse must stop here — starting a tail on EVERY partition when the user
     // asked for three is the quiet kind of wrong.
-    const parsed = parsePartitionFilter(filter, known);
+    const parsed = parsePartitionFilter(seek.filter, known);
     if ("message" in parsed) {
       setSeekError({ field: "filter", message: parsed.message });
       return;
@@ -376,6 +304,7 @@ export default function MessagesView({
     setRows([]);
     setSelectedKey(null);
     setTrimmed(false);
+    setSeen(0);
     setUnseen(0);
     setDropped(0);
     setTailEnded(false);
@@ -385,7 +314,7 @@ export default function MessagesView({
     received.current = 0;
     pinnedRef.current = true;
     setTailing(true);
-  }, [filter, known]);
+  }, [seek.filter, known]);
 
   const stopTail = useCallback(() => setTailing(false), []);
 
@@ -402,122 +331,19 @@ export default function MessagesView({
     return () => window.clearInterval(timer);
   }, [tailing]);
 
-  // Pinned-to-bottom, and only while tailing: a fetched range must not scroll
-  // itself away from the row the user is reading.
-  useLayoutEffect(() => {
-    if (!tailingRef.current || !pinnedRef.current) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    // Re-window in the same commit. The spacers always add up to the full
-    // list height, so scrollHeight is already correct — but the RENDERED
-    // slice is still the one from before the jump, and waiting for the
-    // scroll event to arrive would paint one frame of blank rows.
-    onScroll();
-  }, [rows, onScroll]);
-
-  const handleScroll = useCallback(() => {
-    onScroll();
-    const atBottom = isPinnedToBottom(scrollRef.current);
-    if (atBottom !== pinnedRef.current) pinnedRef.current = atBottom;
-    if (atBottom && unseen !== 0) setUnseen(0);
-  }, [onScroll, unseen]);
+  const onPinnedChange = useCallback((pinned: boolean) => {
+    pinnedRef.current = pinned;
+    if (pinned) setUnseen(0);
+  }, []);
 
   const jumpToNewest = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    pinnedRef.current = true;
+    gridRef.current?.scrollToNewest();
     setUnseen(0);
-    remeasure();
-  }, [remeasure]);
-
-  // ── Keyboard: the promise `role="grid"` makes ──────────────────────────
-
-  const moveTo = useCallback(
-    (index: number) => {
-      const clamped = Math.max(0, Math.min(rows.length - 1, index));
-      const record = rows[clamped];
-      if (!record) return;
-      setSelectedKey(rowKey(record));
-      scrollIndexIntoView(scrollRef.current, clamped, win);
-      // Re-window in this same commit rather than waiting for the scroll event
-      // to come back around. `aria-activedescendant` may only name a row that
-      // is actually in the DOM, and the row we just scrolled to is outside the
-      // rendered slice until the window catches up.
-      onScroll();
-      // Walking rows means the user is reading, not following the stream.
-      pinnedRef.current = isPinnedToBottom(scrollRef.current);
-    },
-    [rows, win, onScroll],
-  );
-
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (rows.length === 0) return;
-      const cur = selectedIndex;
-      switch (e.key) {
-        case "ArrowDown":
-        case "j":
-          e.preventDefault();
-          moveTo(cur < 0 ? win.start : cur + 1);
-          break;
-        case "ArrowUp":
-        case "k":
-          e.preventDefault();
-          moveTo(cur < 0 ? win.start : cur - 1);
-          break;
-        case "Home":
-          e.preventDefault();
-          moveTo(0);
-          break;
-        case "End":
-          e.preventDefault();
-          moveTo(rows.length - 1);
-          break;
-        case "Enter":
-          e.preventDefault();
-          if (cur < 0) moveTo(win.start);
-          break;
-        case "Escape":
-          if (selectedKey !== null) {
-            e.preventDefault();
-            setSelectedKey(null);
-          }
-          break;
-        default:
-          break;
-      }
-    },
-    [rows.length, selectedIndex, selectedKey, moveTo, win.start],
-  );
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  const visible = rows.slice(win.start, win.end);
-  /**
-   * The row `aria-activedescendant` names, or nothing.
-   *
-   * Keyboard navigation is invisible to assistive technology without it: focus
-   * never leaves the scrollport, so a screen reader has no way to know which
-   * row `j`/`k` just moved to. `moveTo` scrolls the active row into view and
-   * re-windows in the same commit, so on the keyboard path the id is always
-   * rendered. It is dropped when the user scrolls the selected row out of the
-   * window with the mouse — pointing at an element that is not in the DOM is
-   * worse than pointing at nothing, and the selection is still announced by
-   * `aria-selected` when the row comes back.
-   */
-  const activeDescendant =
-    selected !== null && selectedIndex >= win.start && selectedIndex < win.end
-      ? rowDomId(selected)
-      : undefined;
   const topicIsEmpty = partitions.length > 0 && totalMessages === 0;
-  const seekMessage = (field: SeekField) =>
-    seekError?.field === field ? (
-      <span className="field-error" id={`mv-${field}-error`}>
-        {seekError.message}
-      </span>
-    ) : null;
 
   const busyReason = fetching
     ? "Kavka is asking the cluster for messages"
@@ -562,168 +388,79 @@ export default function MessagesView({
                   below, where it is plain text. */}
               Live tail
             </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={onSearch}
+              title="Scan the whole topic for messages that match"
+            >
+              Search
+            </button>
+            <button
+              type="button"
+              className={`btn ${
+                profile.environment === "prod" ? "btn-danger" : ""
+              }`}
+              disabled={profile.read_only}
+              title={
+                profile.read_only
+                  ? "This connection is read-only. Turn that off in the connection's settings to produce or edit."
+                  : "Send a message to this topic"
+              }
+              onClick={onProduce}
+            >
+              Produce
+            </button>
+            {/* A tail's window rolls: what is on screen can be less than what
+                the session delivered, and a file that quietly holds the last
+                5 000 of 40 000 is the same lie as a truncated search. */}
+            <ExportButton
+              records={rows}
+              topic={topic}
+              capped={
+                trimmed || dropped > 0
+                  ? { shown: rows.length, total: seen + dropped, kind: "tail" }
+                  : null
+              }
+              push={push}
+            />
           </div>
         </div>
 
-        {/* The seek bar. Plain-language modes; the Kafka word is never hidden
-            — it is in the option text and in the hint under the control. */}
-        <div className="seekbar" role="group" aria-label="Where to read from">
-          <label className="seekbar-field">
-            <span className="seekbar-label">Read from</span>
-            <select
-              value={mode}
-              onChange={(e) => {
-                setMode(e.target.value as SeekMode);
-                setSeekError(null);
-              }}
+        <SeekBar
+          idPrefix="mv"
+          label="Where to read from"
+          state={seek}
+          onChange={(patch) => {
+            setSeek((prev) => ({ ...prev, ...patch }));
+            if (patch.mode !== undefined) setSeekError(null);
+          }}
+          partitions={partitions}
+          error={seekError}
+          onClearError={(field: SeekField) =>
+            setSeekError((prev) => (prev?.field === field ? null : prev))
+          }
+          countMax={MAX_FETCH_MESSAGES}
+        >
+          <div className="seekbar-field seekbar-actions">
+            <span className="seekbar-label" aria-hidden="true">
+              &nbsp;
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={fetching || tailing}
+              aria-busy={fetching || undefined}
+              title={busyReason}
+              onClick={() => void runFetch()}
             >
-              <option value="latest">The newest messages</option>
-              <option value="earliest">The beginning of the topic</option>
-              <option value="offset">A specific offset</option>
-              <option value="timestamp">A point in time</option>
-            </select>
-          </label>
-
-          {mode === "offset" && (
-            <>
-              <label className="seekbar-field">
-                <span className="seekbar-label">
-                  <Term name="partition">Partition</Term>
-                </span>
-                <select
-                  value={seekPartition}
-                  onChange={(e) => {
-                    setSeekPartition(e.target.value);
-                    setSeekError(null);
-                  }}
-                >
-                  {partitions.map((p) => (
-                    <option key={p.partition} value={String(p.partition)}>
-                      {p.partition}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="seekbar-field">
-                {/* The gloss for `offset` lives on the table's column head —
-                    one gloss per term per view (§7). */}
-                <span className="seekbar-label">Offset</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  className={`input-num${
-                    seekError?.field === "offset" ? " input-invalid" : ""
-                  }`}
-                  value={seekOffset}
-                  aria-invalid={seekError?.field === "offset" ? true : undefined}
-                  aria-describedby={
-                    seekError?.field === "offset" ? "mv-offset-error" : undefined
-                  }
-                  onChange={(e) => {
-                    setSeekOffset(e.target.value);
-                    setSeekError((prev) =>
-                      prev?.field === "offset" ? null : prev,
-                    );
-                  }}
-                />
-              </label>
-            </>
-          )}
-
-          {mode === "timestamp" && (
-            <label className="seekbar-field">
-              <span className="seekbar-label">From</span>
-              <input
-                type="datetime-local"
-                step={1}
-                className={`input-time${
-                  seekError?.field === "timestamp" ? " input-invalid" : ""
-                }`}
-                value={when}
-                aria-invalid={
-                  seekError?.field === "timestamp" ? true : undefined
-                }
-                aria-describedby={
-                  seekError?.field === "timestamp"
-                    ? "mv-timestamp-error"
-                    : undefined
-                }
-                onChange={(e) => {
-                  setWhen(e.target.value);
-                  setSeekError((prev) =>
-                    prev?.field === "timestamp" ? null : prev,
-                  );
-                }}
-              />
-            </label>
-          )}
-
-          <label className="seekbar-field">
-            <span className="seekbar-label">
-              {mode === "latest" ? "How many" : "At most"}
-            </span>
-            <input
-              type="number"
-              min={1}
-              max={MAX_FETCH_MESSAGES}
-              step={1}
-              className={`input-num${
-                seekError?.field === "count" ? " input-invalid" : ""
-              }`}
-              value={count}
-              aria-invalid={seekError?.field === "count" ? true : undefined}
-              aria-describedby={
-                seekError?.field === "count" ? "mv-count-error" : undefined
-              }
-              onChange={(e) => {
-                setCount(e.target.value);
-                setSeekError((prev) => (prev?.field === "count" ? null : prev));
-              }}
-            />
-          </label>
-
-          <label className="seekbar-field seekbar-field-wide">
-            <span className="seekbar-label">Partitions</span>
-            <input
-              type="text"
-              className={`input-mono${
-                seekError?.field === "filter" ? " input-invalid" : ""
-              }`}
-              value={filter}
-              placeholder="all"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={seekError?.field === "filter" ? true : undefined}
-              aria-describedby={
-                seekError?.field === "filter" ? "mv-filter-error" : undefined
-              }
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setSeekError((prev) => (prev?.field === "filter" ? null : prev));
-              }}
-            />
-          </label>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={fetching || tailing}
-            aria-busy={fetching || undefined}
-            title={busyReason}
-            onClick={() => void runFetch()}
-          >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {fetching ? <span className="spinner" /> : null}
-            </span>
-            Fetch
-          </button>
-        </div>
-
-        {seekMessage("count")}
-        {seekMessage("offset")}
-        {seekMessage("timestamp")}
-        {seekMessage("filter")}
+              <span className="btn-busy-slot" aria-hidden="true">
+                {fetching ? <span className="spinner" /> : null}
+              </span>
+              Fetch
+            </button>
+          </div>
+        </SeekBar>
 
         {error !== null && (
           <ErrorBanner raw={error} onDismiss={() => setError(null)} />
@@ -758,202 +495,74 @@ export default function MessagesView({
       </div>
 
       <div className="messages-main">
-        <div className="table-wrap messages-table-wrap">
-          {fetching && <div className="table-loading" role="presentation" />}
-
-          {/* THE VIRTUALIZED GRID. Two spacer rows carry the height of
-              everything not rendered, so the scrollbar, the keyboard
-              navigation and aria-rowindex all describe the same list. */}
-          <div
-            className="messages-scroll"
-            ref={scrollRef}
-            // The grid's focus target. role="group" so the label is actually
-            // exposed — aria-label on a generic element is not guaranteed to
-            // reach assistive technology.
-            role="group"
-            aria-label={`Messages in ${topic}`}
-            tabIndex={0}
-            aria-activedescendant={activeDescendant}
-            onScroll={handleScroll}
-            onKeyDown={onKeyDown}
-          >
-            <table
-              className="data-table messages-table"
-              role="grid"
-              aria-rowcount={rows.length + 1}
-            >
-              <caption className="sr-only">
-                Messages in {topic}
-                {tailing ? ", live" : ""}
-              </caption>
-              <colgroup>
-                <col className="mcol-offset" />
-                <col className="mcol-part" />
-                <col className="mcol-ts" />
-                <col className="mcol-key" />
-                <col className="mcol-value" />
-              </colgroup>
-              <thead>
-                <tr aria-rowindex={1}>
-                  <th scope="col" className="ledger-gutter">
-                    <Term name="offset">Offset</Term>
-                  </th>
-                  <th scope="col" className="col-num">
-                    Part.
-                  </th>
-                  <th scope="col">Time</th>
-                  <th scope="col">Key</th>
-                  <th scope="col">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {win.padTop > 0 && (
-                  <tr aria-hidden="true" className="row-pad">
-                    <td colSpan={5} style={{ height: win.padTop, padding: 0 }} />
-                  </tr>
-                )}
-                {visible.map((record, i) => {
-                  const index = win.start + i;
-                  const key = rowKey(record);
-                  const tombstone = record.value === null;
-                  return (
-                    <tr
-                      key={key}
-                      // The id is what `aria-activedescendant` points at; the
-                      // rowindex is the row's place in the WHOLE list, not in
-                      // the rendered slice.
-                      id={rowDomId(record)}
-                      ref={i === 0 ? firstRowRef : undefined}
-                      aria-rowindex={index + 2}
-                      aria-selected={key === selectedKey}
-                      className={[
-                        key === selectedKey ? "row-selected" : "",
-                        tombstone ? "row-tombstone" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                      onClick={() => setSelectedKey(key)}
-                    >
-                      <td className="ledger-gutter">
-                        {tombstone && (
-                          <span className="tomb-tick" aria-hidden="true">
-                            •
-                          </span>
-                        )}
-                        {groupDigits(record.offset)}
-                      </td>
-                      <td className="col-num cell-num">{record.partition}</td>
-                      <td className="cell-mono">
-                        {record.timestamp_ms === null ? (
-                          <span
-                            className="absent"
-                            title="This message carries no timestamp."
-                          >
-                            ∅
-                          </span>
-                        ) : (
-                          formatClock(record.timestamp_ms)
-                        )}
-                      </td>
-                      <td className="cell-mono cell-preview">
-                        {record.key === null ? (
-                          <span
-                            className="absent"
-                            title="No key — Kafka spread this message across partitions."
-                          >
-                            ∅
-                          </span>
-                        ) : (
-                          previewText(record.key)
-                        )}
-                      </td>
-                      <td className="cell-mono cell-preview">
-                        {tombstone ? (
-                          <>
-                            <span className="absent">∅</span>
-                            <span className="cell-tag"> tombstone</span>
-                          </>
-                        ) : (
-                          previewText(record.value)
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {win.padBottom > 0 && (
-                  <tr aria-hidden="true" className="row-pad">
-                    <td
-                      colSpan={5}
-                      style={{ height: win.padBottom, padding: 0 }}
-                    />
-                  </tr>
-                )}
-              </tbody>
-            </table>
-
-            {rows.length === 0 && !fetching && (
-              <div className="messages-empty">
-                {!fetched ? (
-                  <p className="empty-hint">
-                    Asking the cluster for messages in{" "}
-                    <code>{topic}</code>…
-                  </p>
-                ) : tailing ? (
-                  <p className="empty-hint">
-                    Listening. Nothing has been produced to{" "}
-                    <code>{topic}</code> since the tail started.
-                  </p>
-                ) : topicIsEmpty ? (
-                  <>
-                    <p className="empty-hint">
-                      No messages in <code>{topic}</code> yet. Start{" "}
-                      <Term name="live-tail">live tail</Term> and Kavka will
-                      show them as they arrive.
-                    </p>
-                    <div className="empty-actions">
-                      <button type="button" className="btn" onClick={startTail}>
-                        Start live tail
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="empty-hint">
-                      Nothing in that range. <code>{topic}</code> holds about{" "}
-                      {groupDigits(totalMessages)} messages — try reading from
-                      the beginning, or widen the partition filter.
-                    </p>
-                    <div className="empty-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => {
-                          setMode("earliest");
-                          setFilter("");
-                        }}
-                      >
-                        Read from the beginning
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-
+        <MessageGrid
+          ref={gridRef}
+          records={rows}
+          label={`Messages in ${topic}${tailing ? ", live" : ""}`}
+          idPrefix="mv"
+          selectedKey={selectedKey}
+          onSelect={setSelectedKey}
+          follow={tailing}
+          onPinnedChange={onPinnedChange}
+          loading={fetching}
+          empty={
+            fetching ? null : !fetched ? (
+              <p className="empty-hint">
+                Asking the cluster for messages in <code>{topic}</code>…
+              </p>
+            ) : tailing ? (
+              <p className="empty-hint">
+                Listening. Nothing has been produced to <code>{topic}</code>{" "}
+                since the tail started.
+              </p>
+            ) : topicIsEmpty ? (
+              <>
+                <p className="empty-hint">
+                  No messages in <code>{topic}</code> yet. Start{" "}
+                  <Term name="live-tail">live tail</Term> and Kavka will show
+                  them as they arrive.
+                </p>
+                <div className="empty-actions">
+                  <button type="button" className="btn" onClick={startTail}>
+                    Start live tail
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="empty-hint">
+                  Nothing in that range. <code>{topic}</code> holds about{" "}
+                  {groupDigits(totalMessages)} messages — try reading from the
+                  beginning, or widen the partition filter.
+                </p>
+                <div className="empty-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      setSeek((prev) => ({
+                        ...prev,
+                        mode: "earliest",
+                        filter: "",
+                      }))
+                    }
+                  >
+                    Read from the beginning
+                  </button>
+                </div>
+              </>
+            )
+          }
+        >
           {/* The chip only exists while the user is behind the stream — it is
               an offer to catch up, never a thing that moves the view for them. */}
           {unseen > 0 && (
-            <button
-              type="button"
-              className="newmsg-chip"
-              onClick={jumpToNewest}
-            >
-              {groupDigits(unseen)} new{" "}
-              {unseen === 1 ? "message" : "messages"} — jump to newest
+            <button type="button" className="newmsg-chip" onClick={jumpToNewest}>
+              {groupDigits(unseen)} new {unseen === 1 ? "message" : "messages"} —
+              jump to newest
             </button>
           )}
-        </div>
+        </MessageGrid>
 
         {selected !== null && (
           <MessageInspector

@@ -553,6 +553,34 @@ second, never the default so a junior never faces it. A plain-text search shows
 the equivalent CEL as a hint underneath; that is how a support engineer
 accidentally learns CEL.
 
+**The placeholder is a promise about the engine, not a label.** "key, value or
+headers" means the raw-byte prefilter reads all three — header **names** and
+header **values** included. It was written before the prefilter did, and for one
+phase it read two of the three: the records it silently skipped were
+indistinguishable from records that never matched, which is the kind of wrong no
+screenshot catches. If the copy and the engine ever disagree again, the engine
+is what changes.
+
+**The cheatsheet teaches `value_text`, never `string(value)`.** The CEL
+activation binds `value` with the *shape* of the payload — a map for JSON, a
+string for text — which is what makes `value.status == "failed"` possible and
+what makes `string(value)` an **error** on every JSON record, because CEL has no
+map→string conversion. The cheatsheet's "look anywhere in the body" line taught
+exactly that broken expression. `value_text` is bound for every record whatever
+its shape (a tombstone's is `""`), and it holds the same text the table is
+showing, so the filter matches what the user is looking at. The full activation
+is documented once, on `CelFilter` in `crates/kavka-core/src/search.rs`; the
+cheatsheet is a view of it and must not grow a second opinion.
+
+**Search says what it could not judge, and where it stopped early.** Two counts
+ride the progress contract for the same reason the buffer cap does (§7 rule 5,
+and the phase's "never silently truncates" gate): `unevaluated` is records the
+expression could not be evaluated against — read, not judged, and not matches —
+and `assumed_complete` names the partitions that finished because nothing more
+arrived rather than because they reached the end offset captured at the start.
+Both render as one honest sentence apiece; neither is folded into `scanned` or
+into a bar's length.
+
 ### 5.8 Banners, toasts, modals — the three-surface rule
 
 > **Toast** = something you did, finished.

@@ -9,15 +9,19 @@ use kavka_core::admin::{
 use kavka_core::cancel::CancelToken;
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
 use kavka_core::consume::{self, FetchSpec, TailSession};
+use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
 use kavka_core::profiles::{
     export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
 };
+use kavka_core::search::{SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// How long a tail's reader waits for records before looking at the world
@@ -26,16 +30,57 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// quiet".
 const TAIL_POLL: Duration = Duration::from_millis(500);
 
+/// How often a search or a bulk run is allowed to tell the UI where it is.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+/// How long a session's emitter waits for the UI to say it is listening before
+/// emitting anyway.
+///
+/// The UI can only register its listeners after `search_start` / `produce_bulk`
+/// resolves, because the id is what the events are addressed to — so anything
+/// emitted in that window is lost, and a lost `done` is a progress bar that
+/// never finishes while a lost result batch is rows the UI counts but cannot
+/// show. A sleep long enough to *probably* cover an IPC round trip is not a
+/// fix, it is a bet: the emitter now WAITS for `session_ready`, which the UI
+/// calls the moment its listeners are up, so delivery is deterministic rather
+/// than probable.
+///
+/// The timeout is the fallback for the one case the handshake cannot cover — a
+/// window that never calls `session_ready` at all (an old build, a UI that
+/// threw between subscribing and confirming). It emits anyway rather than
+/// leaving a session running with nobody watching it forever.
+///
+/// **Nothing is lost while it waits.** Matches sit in the core's result buffer
+/// until the first read, and progress is a snapshot of counters, not a stream.
+const READY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long a search's reader waits for matches before looking at the world
+/// again. Also the worst-case latency of `search_stop` and of the final
+/// progress event.
+const SEARCH_POLL: Duration = Duration::from_millis(250);
+
+/// A bulk run reports by snapshot rather than by blocking read, so this is only
+/// how promptly its `done` becomes an event; `PROGRESS_EVERY` still bounds how
+/// often everything before it does.
+const BULK_POLL: Duration = Duration::from_millis(50);
+
 struct AppState {
     store: Arc<ProfileStore>,
     connections: Mutex<HashMap<String, Arc<ClusterConnection>>>,
-    /// Live tails, keyed by the id their events are addressed to. Each entry
-    /// remembers the profile it belongs to, so disconnecting a cluster — or
-    /// deleting it — takes its tails down with it instead of leaving a
-    /// consumer fetching from a cluster nobody is looking at any more.
-    tails: Mutex<HashMap<String, TailHandleEntry>>,
-    tail_seq: AtomicU64,
-    tail_epoch: u64,
+    /// Live tails, keyed by the id their events are addressed to.
+    tails: SessionMap<TailSession>,
+    /// Running searches and bulk produce runs, on the same books for the same
+    /// reason as tails: each owns a librdkafka client, and a cluster the user
+    /// disconnects — or deletes — must not leave one working.
+    searches: SessionMap<SearchSession>,
+    bulks: SessionMap<BulkSession>,
+    id_seq: AtomicU64,
+    id_epoch: u64,
+    /// The subscribe handshake of every session that has not started emitting
+    /// yet, keyed by the same id its events are addressed to (see
+    /// [`READY_TIMEOUT`]). Searches and bulk runs share it because they share
+    /// the id namespace and the race.
+    ready: Mutex<HashMap<String, Arc<ReadyGate>>>,
     /// The in-flight `messages_fetch` of each profile, so a newer browse can
     /// stop the one it replaces. A fetch is interactive and can hold a
     /// blocking-pool slot for the core's full 30s deadline: the moment the
@@ -44,9 +89,155 @@ struct AppState {
     fetches: Mutex<HashMap<String, CancelToken>>,
 }
 
-struct TailHandleEntry {
+/// What the shell needs from a core session: ask it to finish, idempotently,
+/// from a thread that is not the one draining it.
+///
+/// Every session in the core already has exactly this method. The trait is what
+/// lets one [`SessionMap`] keep the books for tails, searches and bulk runs
+/// instead of three copies of the same bookkeeping drifting apart — and the
+/// lifecycle rules here (stop before removing, drop off the event loop, take a
+/// profile's sessions with the profile) are the ones that must not drift.
+trait Stoppable: Send + Sync + 'static {
+    fn stop(&self);
+}
+
+impl Stoppable for TailSession {
+    fn stop(&self) {
+        TailSession::stop(self);
+    }
+}
+
+impl Stoppable for SearchSession {
+    fn stop(&self) {
+        SearchSession::stop(self);
+    }
+}
+
+impl Stoppable for BulkSession {
+    fn stop(&self) {
+        BulkSession::stop(self);
+    }
+}
+
+/// The "I am listening" handshake for one session.
+///
+/// A condvar rather than a channel because the emitter is a plain OS thread and
+/// there is exactly one thing to hear, once; the flag is what makes a `ready`
+/// that arrives *before* the emitter reaches the gate still work.
+#[derive(Default)]
+struct ReadyGate {
+    subscribed: Mutex<bool>,
+    signal: std::sync::Condvar,
+}
+
+impl ReadyGate {
+    /// The UI's side: idempotent, and safe to call for a session that has
+    /// already started emitting.
+    fn open(&self) {
+        *self.subscribed.lock().unwrap() = true;
+        self.signal.notify_all();
+    }
+
+    /// The emitter's side. `true` when the UI confirmed, `false` when the
+    /// fallback timeout ran out — the caller emits either way, so the answer is
+    /// only worth a log line.
+    fn wait(&self, timeout: Duration) -> bool {
+        let subscribed = self.subscribed.lock().unwrap();
+        let (subscribed, wait) = self
+            .signal
+            .wait_timeout_while(subscribed, timeout, |ready| !*ready)
+            .unwrap_or_else(|e| e.into_inner());
+        *subscribed && !wait.timed_out()
+    }
+}
+
+/// One kind of running session, keyed by the id its events are addressed to.
+///
+/// Each entry remembers the profile it belongs to, so disconnecting a cluster —
+/// or deleting it — takes its sessions down with it instead of leaving a client
+/// working for a view nobody can open again.
+struct SessionMap<T> {
+    entries: Mutex<HashMap<String, SessionEntry<T>>>,
+}
+
+struct SessionEntry<T> {
     profile_id: String,
-    session: Arc<TailSession>,
+    session: Arc<T>,
+}
+
+impl<T: Stoppable> SessionMap<T> {
+    fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn insert(&self, id: String, profile_id: &str, session: &Arc<T>) {
+        self.entries.lock().unwrap().insert(
+            id,
+            SessionEntry {
+                profile_id: profile_id.to_string(),
+                session: Arc::clone(session),
+            },
+        );
+    }
+
+    /// Removes one session and asks it to finish. The handle comes back so the
+    /// caller can destroy it off the event loop: the last reference joins the
+    /// core's worker thread.
+    fn take(&self, id: &str) -> Option<Arc<T>> {
+        let entry = self.entries.lock().unwrap().remove(id)?;
+        entry.session.stop();
+        Some(entry.session)
+    }
+
+    /// Same, for every session belonging to one profile.
+    fn take_of(&self, profile_id: &str) -> Vec<Arc<T>> {
+        let mut taken = Vec::new();
+        self.entries.lock().unwrap().retain(|_, entry| {
+            if entry.profile_id != profile_id {
+                return true;
+            }
+            entry.session.stop();
+            // Cloned before the entry goes: dropping the last reference here
+            // would join a worker thread while holding this lock, and the
+            // worker takes the same lock to retire itself.
+            taken.push(Arc::clone(&entry.session));
+            false
+        });
+        taken
+    }
+
+    /// A session retiring itself, from its own emitter thread.
+    fn forget(&self, id: &str) {
+        let retired = self.entries.lock().unwrap().remove(id);
+        // Dropped after the guard, deliberately: a last-reference drop joins a
+        // worker thread, and this thread's own handle is still alive anyway.
+        drop(retired);
+    }
+
+    /// Sets every live session's stop flag and joins nothing. This runs on the
+    /// way out of the event loop, where waiting on a broker is the one thing
+    /// that must not happen — the worker threads are detached and the process
+    /// is about to end regardless.
+    fn stop_all(&self) {
+        for entry in self.entries.lock().unwrap().values() {
+            entry.session.stop();
+        }
+    }
+}
+
+/// Everything one profile had running, taken off the books in one go.
+struct ProfileSessions {
+    tails: Vec<Arc<TailSession>>,
+    searches: Vec<Arc<SearchSession>>,
+    bulks: Vec<Arc<BulkSession>>,
+}
+
+impl ProfileSessions {
+    fn is_empty(&self) -> bool {
+        self.tails.is_empty() && self.searches.is_empty() && self.bulks.is_empty()
+    }
 }
 
 impl AppState {
@@ -60,38 +251,58 @@ impl AppState {
     }
 
     /// Unique for the life of the process, which is exactly the life of the
-    /// event names it addresses — a tail id never leaves this machine or
+    /// event names it addresses — a session id never leaves this machine or
     /// outlives the app, so a counter plus the start time answers "keep two
-    /// browsers of the same topic apart" without a uuid dependency.
-    fn next_tail_id(&self) -> String {
-        let seq = self.tail_seq.fetch_add(1, Ordering::Relaxed);
-        format!("{:x}-{seq:x}", self.tail_epoch)
+    /// browsers of the same topic apart" without a uuid dependency. One counter
+    /// serves all three kinds: they share a namespace, so a mixed-up id is a
+    /// miss rather than a collision.
+    fn next_id(&self) -> String {
+        let seq = self.id_seq.fetch_add(1, Ordering::Relaxed);
+        format!("{:x}-{seq:x}", self.id_epoch)
     }
 
-    /// Removes one tail and asks it to finish. The handle comes back so the
-    /// caller can destroy it off the event loop: the last reference joins the
-    /// core's reader thread.
-    fn take_tail(&self, tail_id: &str) -> Option<Arc<TailSession>> {
-        let entry = self.tails.lock().unwrap().remove(tail_id)?;
-        entry.session.stop();
-        Some(entry.session)
+    /// Stops everything one profile has running — every tail, search and bulk
+    /// run, plus its in-flight fetch — and hands the sessions back so the
+    /// caller can destroy them off the event loop.
+    ///
+    /// A session that outlives its cluster is a client reading (or writing) for
+    /// a view that can never be opened again; the fetch is cancelled for the
+    /// same reason, and it is holding a blocking-pool slot besides.
+    fn take_sessions_of(&self, profile_id: &str) -> ProfileSessions {
+        self.cancel_fetch(profile_id);
+        ProfileSessions {
+            tails: self.tails.take_of(profile_id),
+            searches: self.searches.take_of(profile_id),
+            bulks: self.bulks.take_of(profile_id),
+        }
     }
 
-    /// Same, for every tail belonging to one profile.
-    fn take_tails_of(&self, profile_id: &str) -> Vec<Arc<TailSession>> {
-        let mut taken = Vec::new();
-        self.tails.lock().unwrap().retain(|_, entry| {
-            if entry.profile_id != profile_id {
-                return true;
-            }
-            entry.session.stop();
-            // Cloned before the entry goes: dropping the last reference here
-            // would join a reader thread while holding this lock, and the
-            // reader takes the same lock to retire itself.
-            taken.push(Arc::clone(&entry.session));
-            false
-        });
-        taken
+    /// Opens a session's subscribe handshake. Called **before** the id is
+    /// handed to the UI, so a `session_ready` that arrives while the emitter is
+    /// still starting has something to set.
+    fn arm_ready(&self, id: &str) -> Arc<ReadyGate> {
+        let gate = Arc::new(ReadyGate::default());
+        self.ready
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), Arc::clone(&gate));
+        gate
+    }
+
+    /// The UI is listening. An id with no gate is not an error: the session has
+    /// already started emitting (or is over), and this call is exactly as
+    /// harmless as it looks.
+    fn open_ready(&self, id: &str) {
+        let gate = self.ready.lock().unwrap().get(id).map(Arc::clone);
+        if let Some(gate) = gate {
+            gate.open();
+        }
+    }
+
+    /// Retires a handshake once its emitter has passed the gate — including the
+    /// spawn-failure path, where nothing will ever pass it.
+    fn disarm_ready(&self, id: &str) {
+        self.ready.lock().unwrap().remove(id);
     }
 
     /// Registers a fetch for one profile and cancels whatever it replaces:
@@ -130,14 +341,11 @@ impl AppState {
         }
     }
 
-    /// Sets every live tail's stop flag and joins nothing. This runs on the way
-    /// out of the event loop, where waiting on a broker is the one thing that
-    /// must not happen — the reader threads are detached and the process is
-    /// about to end regardless.
-    fn stop_all_tails(&self) {
-        for entry in self.tails.lock().unwrap().values() {
-            entry.session.stop();
-        }
+    /// Asks every live session of every kind to finish, on the way out.
+    fn stop_all_sessions(&self) {
+        self.tails.stop_all();
+        self.searches.stop_all();
+        self.bulks.stop_all();
     }
 }
 
@@ -155,12 +363,27 @@ where
 }
 
 /// Destroys a stopped session off the event loop. Dropping the last reference
-/// joins the core's reader thread, which is a librdkafka client teardown.
-async fn retire_tail(session: Arc<TailSession>) -> CmdResult<()> {
+/// joins the core's worker thread, which is a librdkafka client teardown — and
+/// for a bulk run it is also the flush that makes the final counts true.
+async fn retire<T: Stoppable>(session: Arc<T>) -> CmdResult<()> {
     session.stop();
     tauri::async_runtime::spawn_blocking(move || drop(session))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Spawns a session's emitter thread, detached.
+///
+/// Detached because these threads live as long as their session does, and
+/// `stop` unblocks every one of them — so quitting never waits on a broker. A
+/// dedicated OS thread rather than the blocking pool for the same reason: a
+/// pool slot held for the length of a tail (or a search over a large topic) is
+/// a slot every keychain read and metadata fetch queues behind.
+fn spawn_emitter(name: &str, body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(body)
+        .map(|_detached| ())
 }
 
 /// The event name a session's batches are addressed to. Batches go to every
@@ -187,13 +410,7 @@ fn is_false(flag: &bool) -> bool {
     !*flag
 }
 
-/// One live tail's reader loop.
-///
-/// Runs on a dedicated OS thread rather than the blocking pool: this loop lives
-/// for as long as someone watches the topic, and a pool slot held for an hour
-/// is a slot every keychain read and metadata fetch queues behind. The thread
-/// is detached and never joined at exit, and `TailSession::stop` unblocks
-/// `next_batch`, so shutting down is never a wait.
+/// One live tail's reader loop. Runs on its own thread — see [`spawn_emitter`].
 fn pump_tail(app: &AppHandle, tail_id: &str, session: &TailSession) {
     let event = tail_event(tail_id);
     let mut reported_drops = 0;
@@ -226,10 +443,7 @@ fn pump_tail(app: &AppHandle, tail_id: &str, session: &TailSession) {
     // claims to be, then say so once. The drop counter is read before the
     // handle goes anywhere: it is still meaningful on the final payload.
     if let Some(state) = app.try_state::<AppState>() {
-        let retired = state.tails.lock().unwrap().remove(tail_id);
-        // Dropped after the guard, deliberately: a last-reference drop joins a
-        // reader thread, and this thread's own handle is still alive anyway.
-        drop(retired);
+        state.tails.forget(tail_id);
     }
     let _ = app.emit(
         &event,
@@ -260,14 +474,13 @@ async fn profiles_save(state: State<'_, AppState>, profile: ConnectionProfile) -
 
 #[tauri::command]
 async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdResult<()> {
-    // A tail that outlives the profile it belongs to is a consumer reading a
+    // A session that outlives the profile it belongs to is a client working a
     // cluster the user just deleted, feeding a view that can never be reopened.
-    let tails = state.take_tails_of(&profile_id);
-    state.cancel_fetch(&profile_id);
+    let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
     let store = state.store.clone();
     blocking(move || {
-        drop(tails); // joins each reader thread, off the event loop
+        drop(sessions); // joins each worker thread, off the event loop
         drop(conn); // librdkafka client destroy, off the event loop
         store.delete(&profile_id)?;
         // Best-effort purge: an orphaned keychain entry is harmless, a ghost
@@ -353,15 +566,15 @@ async fn cluster_connect(
 
 #[tauri::command]
 async fn cluster_disconnect(state: State<'_, AppState>, profile_id: String) -> CmdResult<()> {
-    // Tails first: each owns its own consumer, so disconnecting without them
-    // leaves live sessions emitting into a UI that thinks it is offline. The
-    // same argument applies to a fetch that is still polling.
-    let tails = state.take_tails_of(&profile_id);
-    state.cancel_fetch(&profile_id);
+    // Sessions first: each owns its own client, so disconnecting without them
+    // leaves tails emitting into a UI that thinks it is offline, searches
+    // fetching, and bulk runs still writing. The same argument applies to a
+    // fetch that is still polling.
+    let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
-    if !tails.is_empty() || conn.is_some() {
+    if !sessions.is_empty() || conn.is_some() {
         tauri::async_runtime::spawn_blocking(move || {
-            drop(tails);
+            drop(sessions);
             drop(conn);
         })
         .await
@@ -499,25 +712,17 @@ async fn tail_start(
     })
     .await?;
 
-    let tail_id = state.next_tail_id();
-    state.tails.lock().unwrap().insert(
-        tail_id.clone(),
-        TailHandleEntry {
-            profile_id,
-            session: Arc::clone(&session),
-        },
-    );
+    let tail_id = state.next_id();
+    state.tails.insert(tail_id.clone(), &profile_id, &session);
 
-    let spawned = std::thread::Builder::new()
-        .name("kavka-tail-emit".into())
-        .spawn({
-            let tail_id = tail_id.clone();
-            move || pump_tail(&app, &tail_id, &session)
-        });
+    let spawned = spawn_emitter("kavka-tail-emit", {
+        let tail_id = tail_id.clone();
+        move || pump_tail(&app, &tail_id, &session)
+    });
     if let Err(e) = spawned {
         // Nothing will ever drain this session, so it must not be left running.
-        if let Some(orphan) = state.take_tail(&tail_id) {
-            retire_tail(orphan).await?;
+        if let Some(orphan) = state.tails.take(&tail_id) {
+            retire(orphan).await?;
         }
         return Err(format!("starting the live tail reader: {e}"));
     }
@@ -529,24 +734,462 @@ async fn tail_start(
 /// mistake worth an error.
 #[tauri::command]
 async fn tail_stop(state: State<'_, AppState>, tail_id: String) -> CmdResult<()> {
-    match state.take_tail(&tail_id) {
-        Some(session) => retire_tail(session).await,
+    match state.tails.take(&tail_id) {
+        Some(session) => retire(session).await,
         None => Ok(()),
     }
+}
+
+// ── Search ─────────────────────────────────────────────────────────────────
+
+/// The two event names one search's payloads are addressed to. Both go to every
+/// window, so the id in the name is what keeps two searches of the same topic
+/// apart.
+fn search_results_event(search_id: &str) -> String {
+    format!("kavka://search/{search_id}/results")
+}
+
+fn search_progress_event(search_id: &str) -> String {
+    format!("kavka://search/{search_id}/progress")
+}
+
+/// One batch of matches. Only ever emitted while the core still has room in its
+/// result buffer — past `max_buffered` the search keeps scanning and keeps
+/// counting, which is what `SearchProgress` is for.
+#[derive(Clone, Serialize)]
+struct SearchResults {
+    records: Vec<MessageRecord>,
+}
+
+/// Blocks until this session's window has confirmed its listeners, or until
+/// [`READY_TIMEOUT`] gives up on it. Shared by both emitters, because both have
+/// the same race and the same answer to it.
+fn await_subscriber(app: &AppHandle, session_id: &str, what: &str) {
+    let gate = app
+        .try_state::<AppState>()
+        .and_then(|state| state.ready.lock().unwrap().get(session_id).map(Arc::clone));
+    // No gate at all means the state is gone (shutdown) — emit and let the
+    // emit itself fail, rather than inventing a wait nobody will end.
+    if let Some(gate) = gate {
+        if !gate.wait(READY_TIMEOUT) {
+            tracing::warn!(
+                "{what} {session_id}: no window confirmed its listeners within {READY_TIMEOUT:?}; \
+                 reporting anyway"
+            );
+        }
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        state.disarm_ready(session_id);
+    }
+}
+
+/// One search's reader loop. Runs on its own thread — see [`spawn_emitter`].
+fn pump_search(app: &AppHandle, search_id: &str, session: &SearchSession) {
+    let results_event = search_results_event(search_id);
+    let progress_event = search_progress_event(search_id);
+
+    // Nothing at all is emitted until the UI says its listeners are up — see
+    // READY_TIMEOUT. The clock starts before the wait so a search whose window
+    // never confirmed still reports on the first pass rather than 250ms later.
+    let mut last_progress = Instant::now();
+    await_subscriber(app, search_id, "search");
+
+    // `None` is the end of the search; `Some(empty)` is a scan that has not
+    // matched anything yet, which is a state the UI has to be able to say out
+    // loud (docs/DESIGN.md §7: never "no results" while a search is running).
+    while let Some(records) = session.next_results(SEARCH_POLL) {
+        if !records.is_empty() {
+            if let Err(e) = app.emit(&results_event, SearchResults { records }) {
+                // Nobody can receive this search any more; don't keep scanning.
+                tracing::warn!("search {search_id}: {e}");
+                session.stop();
+                break;
+            }
+        }
+        if last_progress.elapsed() < PROGRESS_EVERY {
+            continue;
+        }
+        last_progress = Instant::now();
+        if let Err(e) = app.emit(&progress_event, session.progress()) {
+            tracing::warn!("search {search_id}: {e}");
+            session.stop();
+            break;
+        }
+    }
+
+    // Forgotten first, so a `search_stop` racing the last event is the no-op it
+    // claims to be, then the one event the UI cannot do without: the final
+    // counts, the per-partition cursors that show where a cancel stopped, and
+    // the error if the search died rather than finished.
+    if let Some(state) = app.try_state::<AppState>() {
+        state.searches.forget(search_id);
+    }
+    let mut final_progress = session.progress();
+    // Forced rather than read, for the one case where it would be false: a loop
+    // that left early because the emit failed. As far as anything downstream is
+    // concerned this search is over, and the contract is that the last progress
+    // event says so.
+    final_progress.done = true;
+    let _ = app.emit(&progress_event, final_progress);
+}
+
+/// Starts a search and answers with the id its two channels are named for.
+///
+/// Everything a user can get wrong fails here rather than as a search that ends
+/// a moment later having found nothing: `SearchSession::start` compiles the CEL
+/// expression before it makes a single broker call, then resolves partitions
+/// and creates every consumer on the calling thread — which is the blocking
+/// pool, because all of that talks to librdkafka.
+#[tauri::command]
+async fn search_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    spec: SearchSpec,
+) -> CmdResult<String> {
+    let conn = state.connection(&profile_id)?;
+    let session = blocking(move || {
+        // The registry is the profile's, not a global: two clusters can have
+        // different registries, and one of them can have none.
+        SearchSession::start(&conn, conn.profile().schema_registry.as_ref(), &spec).map(Arc::new)
+    })
+    .await?;
+
+    let search_id = state.next_id();
+    state
+        .searches
+        .insert(search_id.clone(), &profile_id, &session);
+    // Armed before the id leaves this function, so a `session_ready` racing the
+    // emitter's own start has a gate to open.
+    state.arm_ready(&search_id);
+
+    let spawned = spawn_emitter("kavka-search-emit", {
+        let search_id = search_id.clone();
+        move || pump_search(&app, &search_id, &session)
+    });
+    if let Err(e) = spawned {
+        // Nothing will ever drain this session, and a search nobody drains is
+        // eight consumers fetching at full speed.
+        state.disarm_ready(&search_id);
+        if let Some(orphan) = state.searches.take(&search_id) {
+            retire(orphan).await?;
+        }
+        return Err(format!("starting the search reader: {e}"));
+    }
+    Ok(search_id)
+}
+
+/// The other half of the subscribe handshake: the window calling this has its
+/// listeners registered, so the session may start emitting (see
+/// [`READY_TIMEOUT`]).
+///
+/// Idempotent, and an unknown id is `Ok(())` — the session may already be
+/// emitting, or already over, and neither is a mistake worth an error. One
+/// command serves searches and bulk runs because both are keyed by the same id
+/// namespace and both have the same race.
+#[tauri::command]
+async fn session_ready(state: State<'_, AppState>, session_id: String) -> CmdResult<()> {
+    state.open_ready(&session_id);
+    Ok(())
+}
+
+/// Idempotent: an unknown id is `Ok(())`. The UI stops a search when the view
+/// unmounts, when `Esc` cancels it, and again when the final progress says
+/// `done` — none of those is a mistake worth an error.
+#[tauri::command]
+async fn search_stop(state: State<'_, AppState>, search_id: String) -> CmdResult<()> {
+    match state.searches.take(&search_id) {
+        Some(session) => retire(session).await,
+        None => Ok(()),
+    }
+}
+
+// ── Produce ────────────────────────────────────────────────────────────────
+
+/// Mutating: `produce::send` calls `ensure_writable` before it encodes a value,
+/// asks a Schema Registry anything or opens a socket, so read-only is enforced
+/// in core and not here (D5).
+#[tauri::command]
+async fn produce_send(
+    state: State<'_, AppState>,
+    profile_id: String,
+    topic: String,
+    record: ProduceRecordSpec,
+) -> CmdResult<Delivery> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || {
+        produce::send(
+            &conn,
+            conn.profile().schema_registry.as_ref(),
+            &topic,
+            &record,
+        )
+    })
+    .await
+}
+
+/// The event name one bulk run's progress is addressed to.
+fn bulk_event(bulk_id: &str) -> String {
+    format!("kavka://bulk/{bulk_id}")
+}
+
+/// One bulk run's reporter loop. Runs on its own thread — see [`spawn_emitter`].
+fn pump_bulk(app: &AppHandle, bulk_id: &str, session: &BulkSession) {
+    let event = bulk_event(bulk_id);
+
+    // The same handshake as a search, and it matters more here: 500 records at
+    // interval 0 finish long before the panel has subscribed, and a `done`
+    // emitted into that window leaves it counting forever.
+    let mut last = Instant::now();
+    await_subscriber(app, bulk_id, "bulk produce");
+
+    // A poll, not a blocking read: progress is a snapshot of counters the
+    // delivery callbacks write.
+    loop {
+        let progress = session.progress();
+        if progress.done {
+            break;
+        }
+        if last.elapsed() >= PROGRESS_EVERY {
+            last = Instant::now();
+            if let Err(e) = app.emit(&event, progress) {
+                // Nobody can receive this run any more. It is a run that WRITES,
+                // so it stops rather than finishing unobserved.
+                tracing::warn!("bulk produce {bulk_id}: {e}");
+                session.stop();
+                break;
+            }
+        }
+        std::thread::sleep(BULK_POLL);
+    }
+
+    // Forgotten first, so a `bulk_stop` racing the last payload is the no-op it
+    // claims to be, then the final counts — which are the acknowledged ones,
+    // because `stop` flushes what librdkafka already accepted.
+    if let Some(state) = app.try_state::<AppState>() {
+        state.bulks.forget(bulk_id);
+    }
+    let mut final_progress = session.progress();
+    final_progress.done = true;
+    let _ = app.emit(&event, final_progress);
+}
+
+/// Mutating. Answers with the id its progress events are addressed to.
+///
+/// Read-only, both templates, the topic and the partition are all checked in
+/// `BulkSession::start`, on this side of the id: a run that returns an id is a
+/// run that has begun. A template that only failed on record 40 000 would leave
+/// 39 999 records of garbage in a topic.
+#[tauri::command]
+async fn produce_bulk(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    topic: String,
+    spec: BulkSpec,
+) -> CmdResult<String> {
+    let conn = state.connection(&profile_id)?;
+    let session = blocking(move || BulkSession::start(&conn, &topic, &spec).map(Arc::new)).await?;
+
+    let bulk_id = state.next_id();
+    state.bulks.insert(bulk_id.clone(), &profile_id, &session);
+    state.arm_ready(&bulk_id);
+
+    let spawned = spawn_emitter("kavka-bulk-emit", {
+        let bulk_id = bulk_id.clone();
+        move || pump_bulk(&app, &bulk_id, &session)
+    });
+    if let Err(e) = spawned {
+        // Nobody would ever report this run, and it is a run that writes.
+        state.disarm_ready(&bulk_id);
+        if let Some(orphan) = state.bulks.take(&bulk_id) {
+            retire(orphan).await?;
+        }
+        return Err(format!("starting the bulk produce reporter: {e}"));
+    }
+    Ok(bulk_id)
+}
+
+/// Idempotent. Stopping flushes what librdkafka has already accepted so the
+/// final counts are true rather than merely prompt — and that flush happens in
+/// `retire`, on the blocking pool, never on the event loop.
+#[tauri::command]
+async fn bulk_stop(state: State<'_, AppState>, bulk_id: String) -> CmdResult<()> {
+    match state.bulks.take(&bulk_id) {
+        Some(session) => retire(session).await,
+        None => Ok(()),
+    }
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+enum ExportFormat {
+    Csv,
+    Json,
+    Ndjson,
+}
+
+fn export_format(format: &str) -> kavka_core::Result<ExportFormat> {
+    match format {
+        "csv" => Ok(ExportFormat::Csv),
+        "json" => Ok(ExportFormat::Json),
+        "ndjson" => Ok(ExportFormat::Ndjson),
+        other => Err(kavka_core::Error::Other(format!(
+            "Kavka can't export as {other:?} — it writes csv, json and ndjson."
+        ))),
+    }
+}
+
+/// Writes the records the user is looking at to the file they picked.
+///
+/// The path is trusted: it came from the OS save dialog, which is the user's own
+/// consent, and the dialog has already asked about overwriting. Nothing else is
+/// trusted — the format is parsed **before** the file is opened, so a bad format
+/// cannot truncate a file the user already had.
+#[tauri::command]
+async fn export_records(
+    path: String,
+    format: String,
+    records: Vec<MessageRecord>,
+) -> CmdResult<()> {
+    blocking(move || write_export(&path, &format, &records)).await
+}
+
+fn write_export(path: &str, format: &str, records: &[MessageRecord]) -> kavka_core::Result<()> {
+    let format = export_format(format)?;
+    let file = std::fs::OpenOptions::new()
+        // Spelled out rather than `File::create`: this command overwrites what
+        // the user pointed it at, and that is worth saying in the code that
+        // does it.
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|e| file_trouble(path, &e))?;
+
+    let mut out = std::io::BufWriter::new(file);
+    let written = match format {
+        ExportFormat::Csv => write_csv(&mut out, records),
+        ExportFormat::Json => write_json(&mut out, records),
+        ExportFormat::Ndjson => write_ndjson(&mut out, records),
+    };
+    // Flushed explicitly: a `BufWriter` that fails while flushing in `drop`
+    // fails silently, and "Kavka said it exported, and the file is half a record
+    // short" is the one outcome this command must not have.
+    written
+        .and_then(|()| out.flush())
+        .map_err(|e| file_trouble(path, &e))
+}
+
+/// RFC 4180, one column per thing a user can act on: the address, the time, the
+/// two payloads exactly as they were rendered on screen, and the headers.
+fn write_csv(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
+    out.write_all(b"partition,offset,timestamp_ms,key_text,value_text,headers_json\r\n")?;
+    for record in records {
+        // Absent is an empty field, never the word "null" (docs/DESIGN.md §7):
+        // a tombstone's value and a keyless record's key are both blank here,
+        // and the JSON formats keep the distinction for anything that needs it.
+        let key = record
+            .key
+            .as_ref()
+            .map_or("", |payload| payload.text.as_str());
+        let value = record
+            .value
+            .as_ref()
+            .map_or("", |payload| payload.text.as_str());
+        // The header LIST, not an object: Kafka allows the same header key
+        // twice, and an object would silently keep one of them.
+        let headers = serde_json::to_string(&record.headers)?;
+        let timestamp = record
+            .timestamp_ms
+            .map(|ms| ms.to_string())
+            .unwrap_or_default();
+        write!(
+            out,
+            "{},{},{},{},{},{}",
+            record.partition,
+            record.offset,
+            timestamp,
+            csv_field(key),
+            csv_field(value),
+            csv_field(&headers),
+        )?;
+        out.write_all(b"\r\n")?;
+    }
+    Ok(())
+}
+
+/// RFC 4180: a field is wrapped in quotes when it contains a comma, a quote or
+/// a line break, and an embedded quote is doubled. Everything else is written
+/// bare, so a column of offsets stays a column of offsets.
+fn csv_field(field: &str) -> Cow<'_, str> {
+    if !field.contains([',', '"', '\n', '\r']) {
+        return Cow::Borrowed(field);
+    }
+    let mut quoted = String::with_capacity(field.len() + 2);
+    quoted.push('"');
+    for character in field.chars() {
+        if character == '"' {
+            quoted.push('"');
+        }
+        quoted.push(character);
+    }
+    quoted.push('"');
+    Cow::Owned(quoted)
+}
+
+/// The whole selection as one array, pretty-printed — this is the format people
+/// read and diff, and `ndjson` is the one they pipe.
+fn write_json(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(&mut *out, records)?;
+    out.write_all(b"\n")
+}
+
+fn write_ndjson(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
+    for record in records {
+        serde_json::to_writer(&mut *out, record)?;
+        out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+/// What went wrong with the file, in the shape docs/DESIGN.md §7 asks for: what
+/// happened, then the next click. The OS message is kept for everything Kavka
+/// does not recognise — it usually names the path or the process holding the
+/// file.
+fn file_trouble(path: &str, cause: &std::io::Error) -> kavka_core::Error {
+    let detail = match cause.kind() {
+        std::io::ErrorKind::PermissionDenied => format!(
+            "Kavka isn't allowed to write {path}. Pick another folder, or close whatever has that file open, then export again."
+        ),
+        std::io::ErrorKind::NotFound => format!(
+            "There's no folder for {path} any more. Pick another location and export again."
+        ),
+        _ => format!("Kavka couldn't write {path}: {cause}"),
+    };
+    kavka_core::Error::Other(detail)
 }
 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // The Rust half of @tauri-apps/plugin-dialog. Only the save dialog is
+        // granted (capabilities/default.json): the shell writes files the user
+        // named, and nothing in Kavka opens one.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             app.manage(AppState {
                 store: Arc::new(ProfileStore::new(dir)),
                 connections: Mutex::new(HashMap::new()),
-                tails: Mutex::new(HashMap::new()),
+                tails: SessionMap::new(),
+                searches: SessionMap::new(),
+                bulks: SessionMap::new(),
+                ready: Mutex::new(HashMap::new()),
                 fetches: Mutex::new(HashMap::new()),
-                tail_seq: AtomicU64::new(0),
-                tail_epoch: std::time::SystemTime::now()
+                id_seq: AtomicU64::new(0),
+                id_epoch: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(0)),
             });
@@ -574,18 +1217,206 @@ pub fn run() {
             messages_fetch,
             tail_start,
             tail_stop,
+            search_start,
+            search_stop,
+            session_ready,
+            produce_send,
+            produce_bulk,
+            bulk_stop,
+            export_records,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Kavka");
 
     app.run(|handle, event| {
-        // Ask every live tail to finish on the way out. Nothing is joined here:
-        // the reader threads are detached, `stop` unblocks them, and quitting
-        // the app must never wait on a broker.
+        // Ask every live session to finish on the way out. Nothing is joined
+        // here: the worker threads are detached, `stop` unblocks them, and
+        // quitting the app must never wait on a broker.
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(state) = handle.try_state::<AppState>() {
-                state.stop_all_tails();
+                state.stop_all_sessions();
             }
         }
     });
+}
+
+/// The shell is a bridge, so there is almost nothing here to test — every
+/// command hands its arguments to the core and its answer back. The exception
+/// is the export writer, which is the one place the shell decides what bytes a
+/// user ends up with, and a quoting bug there is a corrupted file rather than a
+/// visible error.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kavka_core::serdes::{DecodedPayload, Encoding, HeaderEntry};
+
+    fn payload(text: &str) -> DecodedPayload {
+        DecodedPayload {
+            encoding: Encoding::Utf8,
+            text: text.to_string(),
+            json: None,
+            raw_len: text.len(),
+            truncated: false,
+            schema: None,
+        }
+    }
+
+    fn record(offset: i64) -> MessageRecord {
+        MessageRecord {
+            partition: 3,
+            offset,
+            timestamp_ms: Some(1_700_000_000_000),
+            key: Some(payload("order-7")),
+            value: Some(payload("{\"id\":7}")),
+            headers: Vec::new(),
+        }
+    }
+
+    fn csv_of(records: &[MessageRecord]) -> String {
+        let mut out = Vec::new();
+        write_csv(&mut out, records).expect("a Vec never fails to write");
+        String::from_utf8(out).expect("the writer only ever emits UTF-8")
+    }
+
+    #[test]
+    fn a_plain_field_is_written_bare() {
+        assert_eq!(csv_field("order-7"), "order-7");
+        assert_eq!(csv_field(""), "");
+    }
+
+    #[test]
+    fn a_field_is_quoted_only_when_rfc4180_requires_it() {
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("line\nbreak"), "\"line\nbreak\"");
+        assert_eq!(csv_field("carriage\rreturn"), "\"carriage\rreturn\"");
+        // The doubling rule — and the reason a naive writer corrupts JSON.
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn csv_leads_with_the_agreed_columns() {
+        let csv = csv_of(&[]);
+        assert_eq!(
+            csv,
+            "partition,offset,timestamp_ms,key_text,value_text,headers_json\r\n"
+        );
+    }
+
+    #[test]
+    fn a_csv_row_carries_the_address_the_time_and_both_payloads() {
+        let csv = csv_of(&[record(8412)]);
+        let row = csv.lines().nth(1).expect("a record produces a row");
+        assert_eq!(row, "3,8412,1700000000000,order-7,\"{\"\"id\"\":7}\",[]");
+        // CRLF, not LF: RFC 4180's line ending, and Excel's.
+        assert!(csv.ends_with("\r\n"), "rows end with CRLF: {csv:?}");
+    }
+
+    #[test]
+    fn an_absent_key_value_or_timestamp_is_an_empty_field() {
+        let mut tombstone = record(12);
+        tombstone.key = None;
+        tombstone.value = None;
+        tombstone.timestamp_ms = None;
+        let row = csv_of(&[tombstone])
+            .lines()
+            .nth(1)
+            .expect("a record produces a row")
+            .to_string();
+        // Never the word "null" (docs/DESIGN.md §7). The JSON formats keep the
+        // distinction between "no value" and "an empty value" for anything that
+        // needs it.
+        assert_eq!(row, "3,12,,,,[]");
+    }
+
+    #[test]
+    fn headers_are_a_json_list_so_a_repeated_key_survives() {
+        let mut repeated = record(1);
+        repeated.headers = vec![
+            HeaderEntry {
+                key: "trace".into(),
+                value: Some("a".into()),
+                is_text: true,
+            },
+            HeaderEntry {
+                key: "trace".into(),
+                value: Some("b".into()),
+                is_text: true,
+            },
+        ];
+        let csv = csv_of(&[repeated]);
+        assert!(
+            csv.contains(
+                "\"[{\"\"key\"\":\"\"trace\"\",\"\"value\"\":\"\"a\"\",\"\"is_text\"\":true},"
+            ),
+            "both headers, quoted per RFC 4180: {csv}"
+        );
+        assert!(csv.contains("\"\"value\"\":\"\"b\"\""), "{csv}");
+    }
+
+    #[test]
+    fn ndjson_is_one_record_per_line() {
+        let mut out = Vec::new();
+        write_ndjson(&mut out, &[record(1), record(2)]).expect("a Vec never fails to write");
+        let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            let parsed: serde_json::Value = serde_json::from_str(line).expect("each line is JSON");
+            assert_eq!(parsed["partition"], 3);
+        }
+    }
+
+    #[test]
+    fn json_is_one_array_of_records() {
+        let mut out = Vec::new();
+        write_json(&mut out, &[record(1), record(2)]).expect("a Vec never fails to write");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&out).expect("the whole file is one JSON document");
+        let array = parsed.as_array().expect("an array");
+        assert_eq!(array.len(), 2);
+        assert_eq!(array[1]["offset"], 2);
+    }
+
+    #[test]
+    fn an_unknown_format_names_the_three_kavka_writes() {
+        let refused = export_format("parquet").expect_err("not a format Kavka writes");
+        let message = refused.to_string();
+        assert!(message.contains("parquet"), "{message}");
+        assert!(message.contains("csv"), "{message}");
+        assert!(message.contains("ndjson"), "{message}");
+    }
+
+    /// The reason the format is parsed before the file is opened: a typo must
+    /// not cost the user a file they already had.
+    #[test]
+    fn a_bad_format_never_touches_the_file() {
+        let path = std::env::temp_dir().join(format!(
+            "kavka-export-{}.txt",
+            std::process::id() as u64 * 31 + 7
+        ));
+        std::fs::write(&path, b"not Kavka's").expect("the temp dir is writable");
+        let path_text = path.to_string_lossy().to_string();
+
+        write_export(&path_text, "parquet", &[record(1)]).expect_err("not a format Kavka writes");
+        let after = std::fs::read(&path).expect("the file is still there");
+        assert_eq!(after, b"not Kavka's");
+
+        write_export(&path_text, "ndjson", &[record(1)]).expect("ndjson is a format Kavka writes");
+        let written = std::fs::read_to_string(&path).expect("the file is still there");
+        assert!(written.starts_with('{'), "{written}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn writing_into_a_folder_that_isnt_there_says_so() {
+        let missing = std::env::temp_dir()
+            .join("kavka-no-such-folder-2f9c")
+            .join("export.csv");
+        let refused = write_export(&missing.to_string_lossy(), "csv", &[])
+            .expect_err("there is no such folder");
+        let message = refused.to_string();
+        assert!(message.contains("export.csv"), "{message}");
+        // What to do next, not just what failed (docs/DESIGN.md §7).
+        assert!(message.contains("Pick another location"), "{message}");
+    }
 }

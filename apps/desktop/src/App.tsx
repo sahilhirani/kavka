@@ -11,9 +11,14 @@ import {
 import Sidebar from "./Sidebar";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
 import ClusterView from "./ClusterView";
-import Palette, { paletteKeyLabel, type PaletteCommands } from "./Palette";
+import Palette, {
+  paletteKeyLabel,
+  type PaletteAction,
+  type PaletteCommands,
+} from "./Palette";
 import AboutDialog from "./AboutDialog";
 import ImportExportDialog, { type TransferTab } from "./ImportExportDialog";
+import type { TopicActions } from "./TopicsTab";
 
 const SELECTED_KEY = "kavka.selectedProfileId";
 
@@ -78,6 +83,10 @@ export default function App() {
   // component; until it exposes one, a remount is the whole of the behaviour
   // and none of the coupling. Swap it the day ClusterView owns a ref.
   const [topicsNonce, setTopicsNonce] = useState(0);
+  // What the cluster workspace is showing, so ⌘K can act on it. Reported up
+  // by ClusterView with its handlers already bound — the palette never
+  // reaches down into a view (§5.9).
+  const [topicActions, setTopicActions] = useState<TopicActions | null>(null);
   // Profile ids with a cluster_connect in flight (double-click guard).
   const connectsInFlight = useRef(new Set<string>());
   // Mirror of `profiles` for use after awaits without stale closures.
@@ -285,6 +294,7 @@ export default function App() {
         overview={conn.overview}
         onDisconnect={disconnect}
         onDangerChange={setViewDanger}
+        onTopicActions={setTopicActions}
       />
     );
   } else if (selected) {
@@ -377,6 +387,37 @@ export default function App() {
   // colours the ledger rule — and the substrate — everywhere below here.
   const env = selected?.environment ?? "dev";
   const bootstrap = selected?.bootstrap_servers.join(", ") ?? "";
+
+  // The two contextual rows. Bilingual keywords like every other action
+  // (§5.9): `cel`, `filter` and `scan` all find "Search in orders.v2".
+  const contextualCommands = useMemo<PaletteAction[]>(() => {
+    if (topicActions === null || selected === null) return [];
+    return [
+      {
+        id: "topic-search",
+        glyph: "⌕",
+        label: `Search in ${topicActions.topic}`,
+        context: selected.name,
+        keywords: "find filter cel scan query messages grep",
+        env: selected.environment,
+        run: topicActions.search,
+      },
+      {
+        id: "topic-produce",
+        glyph: "↑",
+        label: `Produce to ${topicActions.topic}`,
+        context:
+          selected.environment === "prod"
+            ? `${selected.name} · asks for confirmation`
+            : selected.name,
+        keywords: "send write publish message record bulk producer",
+        env: selected.environment,
+        danger: selected.environment === "prod",
+        disabledReason: topicActions.produceBlocked,
+        run: topicActions.produce,
+      },
+    ];
+  }, [topicActions, selected]);
 
   return (
     <div
@@ -502,6 +543,7 @@ export default function App() {
           // so "Refresh topics" must not claim there is one.
           selectedId={selected?.id ?? null}
           commands={paletteCommands}
+          contextual={contextualCommands}
           onClose={closePalette}
         />
       )}
