@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-test:
+    name: Lint, test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # keyring's secret-service backend links against libdbus on Linux.
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # The crate must lint clean BOTH without the kafka feature (the
+      # no-CMake tooling build) and with it.
+      - name: Clippy (no default features)
+        run: cargo clippy -p kavka-core -- -D warnings
+
+      - name: Clippy (kafka)
+        run: cargo clippy -p kavka-core --features kafka -- -D warnings
+
+      - name: Start local Kafka (KRaft)
+        run: docker compose -f dev/docker-compose.yml up -d --wait
+
+      - name: Unit + integration tests
+        run: cargo test -p kavka-core --features kafka
+        env:
+          KAVKA_IT: "1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Frontend typecheck + build
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+  check-windows:
+    name: Check (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # tauri's generate_context! wants the frontend dist to exist.
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check workspace (builds librdkafka via CMake)
+        run: cargo check --workspace

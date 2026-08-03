@@ -1,0 +1,81 @@
+# Builds installers and publishes a GitHub Release whenever a version tag is
+# pushed to main:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
+# Intel. Users download from the Releases page and install — no toolchain
+# needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
+# macOS users need right-click → Open the first time.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-13
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: Windows x64
+            platform: windows-latest
+            target: ""
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Kavka ${{ github.ref_name }}"
+          releaseBody: |
+            Downloads:
+            - **Windows:** `.exe` (NSIS installer) or `.msi`
+            - **macOS:** `.dmg` — Apple Silicon (`aarch64`) or Intel (`x64`)
+
+            Binaries are not yet code-signed; on macOS use right-click → Open
+            on first launch.
+
+            Kavka is free and open source (AGPL-3.0). If it saves you time:
+            https://buymeacoffee.com/sahilhirani ☕
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
