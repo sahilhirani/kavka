@@ -1,6 +1,7 @@
 {
   "name": "kavka-desktop",
   "private": true,
+  "license": "AGPL-3.0-only",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -11,6 +12,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

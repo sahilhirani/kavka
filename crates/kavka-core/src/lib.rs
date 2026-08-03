@@ -1,5 +1,5 @@
 //! Kavka core: everything that talks to Kafka lives here. The Tauri shell and
-//! (later) the Team Server web console are thin frontends over this crate.
+//! (later) the companion CLI are thin frontends over this crate.
 //!
 //! Layout mirrors docs/ARCHITECTURE.md:
 //! - [`profiles`]: connection profiles; secrets live in the OS keychain only.
@@ -13,6 +13,33 @@ pub mod connection;
 pub mod profiles;
 pub mod search;
 pub mod serdes;
+
+/// OS-keychain access (macOS Keychain / Windows Credential Manager). The only
+/// place secret VALUES ever pass through; everything else holds
+/// [`profiles::SecretRef`]s.
+pub mod secrets {
+    use crate::profiles::SecretRef;
+    use crate::Result;
+
+    const SERVICE: &str = "kavka";
+
+    pub fn set(entry: &str, value: &str) -> Result<()> {
+        keyring::Entry::new(SERVICE, entry)?.set_password(value)?;
+        Ok(())
+    }
+
+    pub fn resolve(secret: &SecretRef) -> Result<String> {
+        Ok(keyring::Entry::new(SERVICE, &secret.entry)?.get_password()?)
+    }
+
+    /// Idempotent: deleting a missing entry is not an error.
+    pub fn delete(entry: &str) -> Result<()> {
+        match keyring::Entry::new(SERVICE, entry)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

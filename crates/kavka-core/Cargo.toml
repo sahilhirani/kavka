@@ -8,9 +8,13 @@ repository.workspace = true
 
 [features]
 default = []
-# Enabled in Phase 0 once CMake + MSVC Build Tools are available (see docs/ARCHITECTURE.md D2).
-# rdkafka is compiled with cmake-build + vendored OpenSSL for reproducible cross-platform builds.
+# Base Kafka support (PLAINTEXT + SASL_PLAINTEXT). librdkafka is compiled via
+# cmake-build (see docs/ARCHITECTURE.md D2) — requires CMake + MSVC Build Tools.
 kafka = ["dep:rdkafka"]
+# TLS/SASL_SSL: vendored OpenSSL build. On Windows this additionally requires
+# Strawberry Perl + NASM. Kerberos/GSSAPI is added per-platform later (SSPI is
+# built into librdkafka's Windows cmake build; cyrus-sasl on unix via CI).
+kafka-ssl = ["kafka", "rdkafka/ssl-vendored"]
 
 [dependencies]
 serde.workspace = true
@@ -18,6 +22,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-keyring = "3"
+# One native backend per target OS — without these keyring silently uses an
+# in-memory mock store.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
-rdkafka = { version = "0.37", features = ["cmake-build", "ssl-vendored", "gssapi"], optional = true }
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio"], optional = true }
