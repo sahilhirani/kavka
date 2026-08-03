@@ -9,7 +9,7 @@ import {
   type ConnState,
 } from "./api";
 import Sidebar from "./Sidebar";
-import ProfileEditor from "./ProfileEditor";
+import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
 import ClusterView from "./ClusterView";
 
 const SELECTED_KEY = "kavka.selectedProfileId";
@@ -37,6 +37,12 @@ function lsRemove(key: string) {
     /* best-effort */
   }
 }
+
+const STATUS_WORD = {
+  disconnected: "Not connected",
+  connecting: "Connecting…",
+  connected: "Connected",
+} as const;
 
 export default function App() {
   // null = still loading
@@ -130,8 +136,11 @@ export default function App() {
       } catch (err) {
         const msg = errorMessage(err);
         if (profilesRef.current?.some((p) => p.id === profile.id)) {
+          // Stored on the connection, NOT raised as a global banner: this
+          // error belongs beside the form whose fields have to change, and
+          // two copies of the same sentence is one copy too many. It clears
+          // when the next attempt sets status back to "connecting".
           setConn(profile.id, { status: "disconnected", error: msg });
-          setError(msg);
         }
       } finally {
         connectsInFlight.current.delete(profile.id);
@@ -186,9 +195,12 @@ export default function App() {
 
   let main: React.ReactNode;
   if (profiles === null) {
+    // Never a full-screen spinner. A sentence says what we are waiting for.
     main = (
       <div className="empty-state">
-        <p className="empty-hint">Loading profiles…</p>
+        <div className="empty-block">
+          <p className="empty-hint">Reading your saved connections…</p>
+        </div>
       </div>
     );
   } else if (creating) {
@@ -197,6 +209,7 @@ export default function App() {
         key="new"
         profile={null}
         connStatus="disconnected"
+        connError={undefined}
         onSaved={handleSaved}
         onConnect={connect}
         onDeleted={handleDeleted}
@@ -220,6 +233,7 @@ export default function App() {
         key={selected.id}
         profile={selected}
         connStatus={conn.status}
+        connError={conn.error}
         onSaved={handleSaved}
         onConnect={connect}
         onDeleted={handleDeleted}
@@ -227,59 +241,174 @@ export default function App() {
         onError={showError}
       />
     );
-  } else if (loadFailed && profiles !== null && profiles.length === 0) {
+  } else if (loadFailed && profiles.length === 0) {
     main = (
       <div className="empty-state">
-        <div className="empty-mark">Kavka</div>
-        <p className="empty-hint">Profiles could not be loaded.</p>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => void reloadProfiles()}
-        >
-          Retry
-        </button>
+        <div className="empty-block">
+          <h1 className="empty-title">Kavka couldn't read its connection file</h1>
+          <p className="empty-hint">
+            Your connections are still on disk — nothing was lost. Kavka stores
+            them in its config directory, alongside this app's settings.
+          </p>
+          <div className="empty-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void reloadProfiles()}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  } else if (profiles.length === 0) {
+    // First launch. The one screen that has to teach.
+    main = (
+      <div className="empty-state">
+        <div className="empty-block">
+          <h1 className="empty-title">Point Kavka at a broker</h1>
+          <p className="empty-hint">
+            A connection is a saved address for one Kafka cluster — a name, one
+            broker to start from, and how to sign in. Kavka finds the rest of
+            the cluster from there.
+          </p>
+          <p className="empty-hint">
+            A bootstrap server usually looks like{" "}
+            <code>kafka-1.internal:9092</code>. Running this repo's dev cluster?
+            Use <code>localhost:9092</code>.
+          </p>
+          <div className="empty-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={startCreating}
+            >
+              Add connection
+            </button>
+          </div>
+          <p className="empty-footnote">
+            Passwords go to your operating system's keychain. Nothing about your
+            clusters leaves this machine.
+          </p>
+        </div>
       </div>
     );
   } else {
     main = (
       <div className="empty-state">
-        <div className="empty-mark">Kavka</div>
-        <p className="empty-hint">
-          Select a connection from the sidebar, or create a new one to get
-          started.
-        </p>
+        <div className="empty-block">
+          <h1 className="empty-title">Pick a connection</h1>
+          <p className="empty-hint">
+            Choose a cluster on the left to see its brokers and topics, or add
+            another connection.
+          </p>
+          <div className="empty-actions">
+            <button type="button" className="btn" onClick={startCreating}>
+              Add connection
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
+  // Prod guardrail layer 1 + 5: the environment of the selected cluster
+  // colours the ledger rule — and the substrate — everywhere below here.
+  const env = selected?.environment ?? "dev";
+  const bootstrap = selected?.bootstrap_servers.join(", ") ?? "";
+
   return (
-    <div className="app">
-      <Sidebar
-        profiles={profiles}
-        selectedId={creating ? null : selectedId}
-        connections={connections}
-        creating={creating}
-        version={version}
-        onSelect={select}
-        onNew={startCreating}
+    <div
+      className="app"
+      data-env={env}
+      // Prod de-collision (§5.8): the env rule dampens while ANY danger is on
+      // screen, including the inline connect failure in the editor. Miss the
+      // inline case and a prod cluster shows a coral rule behind a coral
+      // banner, which is the one composition the guardrail must not produce.
+      data-alert={error !== null || conn.error ? "danger" : undefined}
+    >
+      {/* Prod guardrail layer 2: a 2px wire under the native title bar.
+          Transparent outside prod. Do not remove it because the substrate
+          "already says prod" — the substrate is the bonus, this is load-bearing. */}
+      <div
+        className="app-wire"
+        aria-hidden="true"
+        data-env-label={env === "prod" ? "PROD" : undefined}
       />
-      <main className="main">
-        {error !== null && (
-          <div className="error-banner" role="alert">
-            <span className="error-text">{error}</span>
-            <button
-              type="button"
-              className="error-dismiss"
-              aria-label="Dismiss error"
-              onClick={() => setError(null)}
-            >
-              ×
-            </button>
-          </div>
-        )}
-        <div className="main-body">{main}</div>
-      </main>
+
+      <div className="app-shell">
+        <Sidebar
+          profiles={profiles}
+          selectedId={creating ? null : selectedId}
+          connections={connections}
+          creating={creating}
+          onSelect={select}
+          onNew={startCreating}
+        />
+
+        <main className="workspace">
+          {/* Banner, not toast: this is a condition you are in, and an error
+              the user must act on is never a toast. The raw librdkafka string
+              is never the title — errors.ts turns it into "what happened" plus
+              "the next click", and keeps the verbatim text under Show details
+              for whoever actually wants it. */}
+          {error !== null && (
+            <ErrorBanner raw={error} onDismiss={() => setError(null)} />
+          )}
+
+          <div className="workspace-body">{main}</div>
+
+          <footer className="statusbar">
+            <div className="statusbar-left">
+              {selected ? (
+                <>
+                  <span
+                    className={`status-dot status-${conn.status}`}
+                    aria-hidden="true"
+                  />
+                  {/* Law 2: the dot never carries the meaning on its own. */}
+                  <span className="statusbar-item">
+                    {STATUS_WORD[conn.status]}
+                  </span>
+                  <span className="statusbar-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="statusbar-item">{selected.name}</span>
+                  <span className="statusbar-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  {/* Prod guardrail layer 3: the address is always on screen.
+                      Most prod accidents are right-action-wrong-cluster. */}
+                  <span
+                    className="statusbar-item statusbar-mono"
+                    title={bootstrap}
+                  >
+                    {bootstrap}
+                  </span>
+                  {selected.read_only && (
+                    <span
+                      className="readonly-chip"
+                      title="This connection is read-only. Turn that off in the connection's settings to produce or edit."
+                    >
+                      read-only
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="statusbar-item">
+                  {creating ? "New connection — not saved yet" : "No connection selected"}
+                </span>
+              )}
+            </div>
+            <div className="statusbar-right">
+              <span className="statusbar-item statusbar-mono">
+                core v{version || "…"}
+              </span>
+            </div>
+          </footer>
+        </main>
+      </div>
     </div>
   );
 }

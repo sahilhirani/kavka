@@ -1,58 +1,301 @@
-/* Kavka — dark-first desktop shell */
+/* ══════════════════════════════════════════════════════════════════════════
+   KAVKA — LEDGER design system
+   See docs/DESIGN.md for the rules this file implements. Three laws:
+
+   1. Elevation is colour and one hairline. Shadows exist only on true
+      overlays (modal, palette, popover, toast). There are two shadow tokens.
+   2. No state is ever encoded by colour alone. Every dot has a word.
+   3. Nothing inside a scrolling table gets a transition, filter,
+      backdrop-filter, border-radius or box-shadow. --row-h is a fixed token
+      the virtualizer reads at runtime.
+
+   Dark ships. Light is specced and audited but must not be user-toggleable
+   until every component composition is verified in it (Phase 6).
+   Environment substrate swaps via [data-env] on the app root.
+   No color-mix(): macOS 12 ships WKWebView/Safari 15.6.
+   ══════════════════════════════════════════════════════════════════════════ */
 
 :root {
   color-scheme: dark;
 
-  --bg: #111418;
-  --bg-sidebar: #0d1013;
-  --bg-panel: #161b21;
-  --bg-inset: #0e1114;
-  --bg-hover: #1a2028;
+  /* ── SURFACES ─────────────────────────────────────────────────────── */
+  --bg-rail:         #090B0D;  /* sidebar — recedes behind the stage      */
+  --bg-canvas:       #0F1317;  /* the stage; all data lives here          */
+  --bg-raised:       #161B20;  /* palette, modals, toasts, popovers ONLY  */
+  --bg-sunken:       #0A0D10;  /* inputs, payload inspector, code         */
+  --bg-row-hover:    #161C22;
+  --bg-row-selected: #152227;  /* teal-tinted; primary text 13.57:1       */
+  /* Prod sidebar rows (guardrail layer 6). Named, not inlined, so the
+     theme blocks can move them. Primary text 13.80:1 on the lightest.    */
+  --bg-row-prod-hover:    #241816;
+  --bg-row-prod-selected: #2A1B18;
+  --bg-scrim:        rgba(5, 7, 9, 0.55);       /* no blur — perf         */
+  --selection:       rgba(79, 195, 176, 0.28);  /* precomputed, not color-mix */
+  --skeleton:        #28313A;  /* 1.41:1 — a placeholder, never content   */
 
-  --border: #232a33;
-  --border-soft: #1c2229;
+  /* ── TEXT — six values; hierarchy lives here, not in boxes ────────── */
+  --text-primary:   #E6EBF0;   /* 15.55:1  values, headings, topic names  */
+  --text-secondary: #A2AEBB;   /*  8.27:1  prose, help text               */
+  --text-tertiary:  #808D9A;   /*  5.50:1  labels, column heads, metadata */
+  --text-disabled:  #657280;   /*  3.79:1  :disabled controls ONLY. Never
+                                  a placeholder — a placeholder is text a
+                                  sighted user is expected to read.       */
+  /* Placeholders and ∅ are different ROLES that the contrast floor puts on
+     the same value: §9 sweeps every --text-* token against all twelve
+     dark+prod surfaces at 4.5:1, and 4.5:1 on a selected row is the binding
+     constraint for both. They stay two tokens because they are two
+     decisions — a future theme can separate them; a shared literal must not
+     let one drift by accident.                                           */
+  --text-placeholder: #7E8A97; /*  4.63:1 worst (selected row)            */
+  --text-absent:    #7E8A97;   /*  4.63:1 worst (selected row) — the ∅
+                                  glyph is TEXT that carries meaning, so
+                                  it clears 4.5:1, not merely 3:1.        */
+  --text-mono:      #C9D4DF;   /* 12.41:1  literals copied out of Kafka   */
+  --text-inverse:   #0B0E11;   /* 16.13:1  on the near-white primary fill */
 
-  --text: #d6dde6;
-  --text-muted: #8b94a1;
-  --text-faint: #5b6470;
+  /* ── LINES ────────────────────────────────────────────────────────── */
+  --hairline:        #1B2127;  /* decorative separation — 1.4.11 exempt   */
+  --hairline-strong: #262E36;  /* header underline, dock edges            */
+  --border-control:  #636F7C;  /* REQUIRED on every operable boundary.
+                                  Clears 3:1 on ALL 12 dark+prod surfaces,
+                                  worst 3.17 on a selected row. The sunken
+                                  fill is only 1.13:1 against canvas, so
+                                  this border is the ONLY thing satisfying
+                                  SC 1.4.11.                              */
 
-  --accent: #2dd4bf;
-  --accent-strong: #0d9488;
-  --accent-dim: rgba(45, 212, 191, 0.14);
+  /* ── ACCENT — means LIVE, and nothing else ────────────────────────── */
+  --accent:       #4FC3B0;     /*  8.67:1  connected · live tail · selected */
+  --accent-quiet: #3C9788;     /*  5.31:1  hairline-weight accent         */
+  --accent-tint:  #12241F;     /*          chip bg; accent on it 7.52:1   */
+  --focus:        #6FE3CD;     /* 12.03:1 — always with outline-offset    */
+  --fill-primary-hover: #FFFFFF; /* the primary button's hover fill       */
 
-  --green: #34d399;
-  --amber: #fbbf24;
-  --red: #f87171;
-  --red-dim: rgba(248, 113, 113, 0.1);
+  /* ── SEMANTIC ─────────────────────────────────────────────────────── */
+  --ok:          #56C08A;      /*  8.26:1 */
+  --warn:        #D9A441;      /*  8.29:1 */
+  --danger:      #E5786B;      /*  6.42:1 */
+  --danger-fill: #A63C31;      /*  6.34:1 with --on-danger-fill           */
+  --danger-fill-hover: #B84439;/*  5.35:1 with --on-danger-fill           */
+  --on-danger-fill: #FFFFFF;
+  /* The outlined danger button's boundary is operable, so SC 1.4.11
+     applies. Precomputed and OPAQUE: an rgba() border composites against
+     whatever is behind it and collapsed to 2.20:1 on the canvas.         */
+  --danger-border: #A85C50;    /*  3.34:1 worst, on a selected dark row
+                                  (3.56 on --bg-raised, 3.83 on canvas)   */
+  --ok-tint:     #101E18;
+  --warn-tint:   #241D0F;
+  --danger-tint: #1B1315;      /*  --danger on it = 6.28:1               */
 
-  --font-ui:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  --font-mono:
-    ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  /* Empty half of a lag meter. The FILL is the meaningful indicator and
+     clears 3:1 on every surface; this is the adjacent colour inside the
+     meter, so every fill must also clear 3:1 against IT (ok 4.96, warn
+     4.98, danger 3.86). --hairline-strong was 1.36:1 on canvas: the
+     meter's extent was invisible, so "proportional" meant nothing.       */
+  --track-empty: #333C46;
+
+  /* ── ENVIRONMENT — the ledger rule carries the signal ─────────────── */
+  --rule:      #242B33;        /* dev: decorative (1.30:1) BY DESIGN — dev
+                                  has no warning to give, and the absence
+                                  of a coloured rule is itself the signal. */
+  --env-ink:   var(--accent);
+  --env-tint:  var(--accent-tint);
+  --env-wire:  transparent;    /* 2px bar under the native title bar      */
+  /* Prod is the only FILLED env chip, so it reads as a badge, not a tag. */
+  --env-chip-prod-ink:  #FFE4DF;   /* 6.22:1 on the fill below           */
+  --env-chip-prod-fill: #8E3A31;
+
+  /* ── DATA SERIES — one lightness band, so no series shouts ────────── */
+  --series-1: #4FC3B0;  --series-2: #6FA8DC;  --series-3: #B99BD4;
+  --series-4: #D9A441;  --series-5: #E5786B;  --series-6: #86C98A;
+  --grid-line: var(--hairline);
+
+  /* ── PAYLOAD SYNTAX — all AA on --bg-sunken AND on --syn-match ────── */
+  --syn-key:    #8FA6BC;       /*  7.74:1 */
+  --syn-string: #9FD5A8;       /* 11.65:1 */
+  --syn-number: #E0B36A;       /* 10.04:1 */
+  --syn-atom:   #B99BD4;       /*  8.07:1  true / false / null           */
+  --syn-punct:  #7B8899;       /*  5.40:1  braces carry structure = AA   */
+  --syn-match:  #132028;       /* search hit — neutral-cool, so the WORST
+                                  syntax token still clears 4.60:1. Always
+                                  paired with a 2px --accent underline:
+                                  the hit must not be colour-only.       */
+
+  /* ── TYPE ─────────────────────────────────────────────────────────── */
+  --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+             Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+               Menlo, Consolas, monospace;
+
+  --t-micro:   10.5px;  --lh-micro:   14px;  /* uppercase eyebrow, tracked */
+  --t-xs:      11px;    --lh-xs:      15px;  /* kbd, footnotes, status bar */
+  --t-sm:      12px;    --lh-sm:      17px;  /* secondary UI, chips        */
+  --t-base:    13px;    --lh-base:    19px;  /* DEFAULT — all data         */
+  --t-md:      15px;    --lh-md:      21px;  /* panel + modal titles       */
+  --t-lg:      19px;    --lh-lg:      25px;  /* page title                 */
+  --t-xl:      24px;    --lh-xl:      30px;  /* empty-state headline       */
+  --t-display: 30px;    --lh-display: 36px;  /* hero stat numerals         */
+  --lh-prose:  1.55;                          /* banners, hints, empties   */
+
+  --w-normal: 400;  --w-medium: 500;  --w-semi: 600;  --w-bold: 700;
+  --track-eyebrow: 0.08em;     /* uppercase micro labels ONLY             */
+  --track-tight:  -0.011em;    /* >= 19px only                            */
+  --nums-tabular: tabular-nums lining-nums;
+
+  /* ── SPACE (4px base) ─────────────────────────────────────────────── */
+  --s-1:  2px;  --s-2:  4px;  --s-3:  6px;  --s-4:  8px;
+  --s-5: 12px;  --s-6: 16px;  --s-7: 20px;  --s-8: 24px;
+  --s-9: 32px;  --s-10:40px;  --s-11:56px;  --s-12:72px;
+
+  /* ── METRICS ──────────────────────────────────────────────────────── */
+  --rail-w:        240px;   /* resizable 200–360, Ctrl/Cmd+B             */
+  --topbar-h:       44px;
+  --tabstrip-h:     30px;
+  --statusbar-h:    24px;
+  --row-h:          30px;   /* virtualizer reads this token at runtime   */
+  --row-h-head:     28px;
+  --control-h:      28px;
+  --control-h-lg:   32px;   /* search bar, primary form inputs           */
+  --gutter-w:       72px;   /* THE LEDGER GUTTER                         */
+  --gutter-w-code:  40px;   /* inspector line numbers                    */
+  --inspector-w:   480px;   /* resizable 320–60%, Ctrl/Cmd+I             */
+  --palette-w:     580px;
+  --measure:        62ch;   /* max width of ANY prose block              */
+  --hit-min:        24px;   /* nothing operable may be smaller — SC 2.5.8 */
+
+  /* ── SHAPE ────────────────────────────────────────────────────────── */
+  --r-control:  4px;
+  --r-popover:  6px;
+  --r-overlay: 10px;
+  --r-pill:   999px;
+  /* Tables, panels, page sections, stat blocks and banners have NO radius
+     and NO border by design. If you are reaching for a card, use space.  */
+
+  /* ── ELEVATION — exactly two, both overlay-only ───────────────────── */
+  --shadow-popover: 0 6px 20px -6px rgba(0, 0, 0, 0.6),
+                    0 0 0 1px var(--hairline-strong);
+  --shadow-overlay: 0 20px 56px -16px rgba(0, 0, 0, 0.75),
+                    0 0 0 1px var(--hairline-strong);
+
+  /* ── MOTION ───────────────────────────────────────────────────────── */
+  --dur-instant:   0ms;   /* row hover, cell select — data answers NOW   */
+  --dur-fast:    120ms;   /* buttons, chips, checkboxes, chevrons        */
+  --dur-base:    180ms;   /* banners, toasts, tab crossfade              */
+  --dur-slow:    260ms;   /* inspector slide, sidebar collapse           */
+  --ease:        cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-settle: cubic-bezier(0.34, 1.26, 0.64, 1); /* PALETTE + TOAST ONLY */
+
+  /* ── FOCUS (SC 2.4.11 / 1.4.11) ───────────────────────────────────── */
+  --focus-ring:   2px solid var(--focus);
+  --focus-offset: 2px;    /* always offset — the ring must never sit on a
+                             light fill, where it would drop to 1.29:1   */
 }
 
-* {
-  box-sizing: border-box;
+/* ══ DENSITY — 3 steps, persisted. The message browser defaults ONE step
+   denser than the app; the app-level toggle sets the preference, the
+   browser's default is only its initial value, never a lock. ══════════ */
+[data-density="compact"] { --row-h: 24px; --t-base: 12px; --gutter-w: 64px; }
+[data-density="relaxed"] { --row-h: 34px; --row-h-head: 32px; }
+
+/* ══ STAGING — neutral substrate, amber rule ══════════════════════════ */
+[data-env="staging"] {
+  --rule:      #8C7036;    /* 3.98:1 — meaningful, so it clears 3:1      */
+  --env-ink:   var(--warn);
+  --env-tint:  var(--warn-tint);
 }
+
+/* ══ PROD — warm substrate, coral rule, top wire ══════════════════════
+   Verified on the warm canvas: primary 15.82 · secondary 8.41 ·
+   tertiary 5.60 · mono 12.62 · danger 6.53 · accent 8.82 · ok 8.41 ·
+   warn 8.44 · border-control 3.70. Across all six prod surfaces the
+   syntax tokens span 4.64 (punct on a selected row) to 11.81.          */
+[data-env="prod"] {
+  --bg-rail:          #0D0B0A;
+  --bg-canvas:        #12100F;
+  --bg-raised:        #1B1715;
+  --bg-sunken:        #0C0A09;
+  --bg-row-hover:     #1E1815;
+  --bg-row-selected:  #241C18;
+  --hairline:         #241B19;
+  --hairline-strong:  #332724;
+  --skeleton:         #332924;   /* 1.34:1 on the warm canvas            */
+  --rule:      #A65246;    /* 3.54 canvas · 3.68 sunken · 3.32 raised ·
+                              3.27 row-hover · 3.12 row-selected · 3.09
+                              on a selected prod SIDEBAR row, which is
+                              the binding figure of the fourteen §9
+                              sweeps: there is no DARKER coral that still
+                              clears 3:1, which is why the danger-banner
+                              damper below moves chroma, not lightness.  */
+  --env-ink:   var(--danger);
+  --env-tint:  var(--danger-tint);
+  --env-wire:  #B8453A;    /* 3.57:1 — the bar is a MEANINGFUL indicator,
+                              so it must clear 3:1. (--danger-fill would
+                              have been 2.99 here.)                      */
+}
+
+/* Escape hatch for anyone who finds the warm substrate fatiguing:
+   Settings → Environment colour → "Rule only". The rule, chip, wire and
+   window title all remain, so SC 1.4.1 is still satisfied. */
+[data-env-intensity="rule-only"] {
+  --bg-rail: #090B0D; --bg-canvas: #0F1317; --bg-raised: #161B20;
+  --bg-sunken: #0A0D10; --bg-row-hover: #161C22; --bg-row-selected: #152227;
+  --hairline: #1B2127; --hairline-strong: #262E36; --skeleton: #28313A;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --ease-settle: linear; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* A 1ms spin is worse than no spin. */
+  .spinner { animation: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BASE
+   ══════════════════════════════════════════════════════════════════════ */
+
+* { box-sizing: border-box; }
 
 html,
 body,
-#root {
-  height: 100%;
-  margin: 0;
-}
+#root { height: 100%; margin: 0; }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.45;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font: var(--w-normal) var(--t-base) / var(--lh-base) var(--font-ui);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
 }
+
+/* Quantities Kavka computed line up. Literals from Kafka are mono. */
+.num,
+.stat-value,
+.ledger-gutter,
+.cell-num,
+time,
+.offset { font-variant-numeric: var(--nums-tabular); }
+
+/* ONE focus rule for the whole app. outline, not box-shadow — box-shadow
+   rings are clipped by overflow:hidden on scroll wells. .table-scroll
+   reserves 2px of inner padding so the ring survives on edge rows.
+   The brief's `border-radius` on this rule is deliberately omitted: it
+   would round table rows and panels the moment they take focus. Controls
+   carry their own radius, so the ring already follows it. */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: var(--selection); }
 
 input,
 textarea,
@@ -64,19 +307,58 @@ button {
 }
 
 input,
-textarea {
+textarea { user-select: text; }
+
+/* A <code> span is always a literal someone may need to copy. Selectable at
+   the base, so no component has to opt in one class at a time. */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  color: var(--text-mono);
   user-select: text;
 }
 
-/* ------------------------------------------------------------------ layout */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SHELL — wire · rail · workspace · status bar
+   ══════════════════════════════════════════════════════════════════════ */
 
 .app {
   display: flex;
+  flex-direction: column;
   height: 100%;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+/* Prod guardrail layer 2. Painted inside the webview, under the native
+   title bar. Zero vertical cost, permanently peripheral, no text to
+   habituate to. If a future PR proposes removing this "because the
+   substrate already does it", that PR is wrong. */
+.app-wire {
+  flex: 0 0 auto;
+  height: 2px;
+  background: var(--env-wire);
+}
+
+.app-shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
   overflow: hidden;
 }
 
-.main {
+.workspace {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -84,84 +366,167 @@ textarea {
   overflow: hidden;
 }
 
-.main-body {
+.workspace-body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px 32px;
+  padding: var(--s-7) var(--s-8) var(--s-10);
 }
 
-/* ----------------------------------------------------------------- sidebar */
+/* Status bar — the permanent home for progressive search progress, tail
+   rate, connection latency, the read-only chip, the alert counter and the
+   two most relevant shortcuts. Phase 2's "search never silently truncates"
+   acceptance gate depends on this existing. */
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: var(--statusbar-h);
+  padding: 0 var(--s-5) 0 var(--s-8);
+  border-top: 1px solid var(--hairline);
+  background: var(--bg-rail);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.statusbar-right { margin-left: auto; flex-shrink: 0; }
+
+.statusbar-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-mono {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  user-select: text;
+}
+
+/* The separator is decorative and aria-hidden, but it is still a glyph a
+   sighted user parses the status line by. --hairline-strong put it at
+   1.43:1 on the rail, i.e. gone. 4.01:1 dark / 3.99:1 prod. */
+.statusbar-sep { color: var(--text-disabled); }
+
+/* Tab strip — multi-topic browsing from Phase 1. */
+.tabstrip {
+  display: flex;
+  align-items: stretch;
+  height: var(--tabstrip-h);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--bg-canvas);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-5);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.tab-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RAIL (sidebar)
+   ══════════════════════════════════════════════════════════════════════ */
 
 .sidebar {
-  width: 248px;
+  width: var(--rail-w);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border-soft);
+  background: var(--bg-rail);
+  border-right: 1px solid var(--hairline);
 }
 
-.sidebar-header {
-  padding: 14px 14px 8px;
-}
+.sidebar-header { padding: var(--s-5) var(--s-5) var(--s-3); }
 
-.sidebar-title {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
+.sidebar-title,
+.eyebrow {
+  display: block;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-tertiary);
 }
 
 .profile-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  /* 4px top so the first row's focus ring (2px + 2px offset) survives the
+     scroll well — same reason .table-scroll pads (DESIGN.md §5.3). */
+  padding: 4px var(--s-3) var(--s-3);
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--s-1);
 }
 
 .sidebar-note {
-  padding: 8px 8px;
-  color: var(--text-faint);
-  font-size: 12.5px;
+  padding: var(--s-3) var(--s-4) var(--s-5);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
 }
 
 .profile-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--s-3) var(--s-4);
   border: none;
   border-left: 2px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--r-control);
   background: transparent;
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
 }
 
-.profile-row:hover {
-  background: var(--bg-hover);
-}
+.profile-row:hover { background: var(--bg-row-hover); }
 
 .profile-row-selected,
 .profile-row-selected:hover {
-  background: var(--accent-dim);
+  background: var(--bg-row-selected);
+  border-left-color: var(--accent);
 }
 
+/* Prod guardrail layer 6 — prod rows stay tinted whether selected or not. */
 .profile-row-prod {
-  border-left-color: var(--red);
-  background: var(--red-dim);
+  border-left-color: var(--danger);
+  background: var(--danger-tint);
 }
 
-.profile-row-prod:hover {
-  background: rgba(248, 113, 113, 0.16);
-}
+.profile-row-prod:hover { background: var(--bg-row-prod-hover); }
 
 .profile-row-prod.profile-row-selected {
-  background: rgba(248, 113, 113, 0.18);
+  background: var(--bg-row-prod-selected);
+  border-left-color: var(--danger);
+}
+
+.profile-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
 }
 
 .profile-name {
@@ -170,12 +535,27 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--t-base);
+  color: var(--text-primary);
 }
 
 .profile-name-draft {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-style: italic;
+}
+
+/* Prod guardrail layer 3 — the bootstrap address is always on screen.
+   Most prod accidents are right-action-wrong-cluster. */
+.profile-meta {
+  display: block;
+  margin-top: var(--s-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
 }
 
 .status-dot {
@@ -185,625 +565,1594 @@ textarea {
   border-radius: 50%;
 }
 
+/* Law 2: every dot is accompanied by a word somewhere in its row. */
 .status-disconnected {
   background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--text-faint);
+  box-shadow: inset 0 0 0 1.5px var(--text-tertiary);
 }
 
 .status-connecting {
-  background: var(--amber);
+  background: var(--warn);
   animation: pulse 1.1s ease-in-out infinite;
 }
 
-.status-connected {
-  background: var(--green);
-}
+.status-connected { background: var(--accent); }
 
-@keyframes pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
+@keyframes pulse { 50% { opacity: 0.35; } }
 
+/* Operable boundary → --border-control, not --hairline-strong (1.18:1 on a
+   selected row). SC 1.4.11 does not care that the button looks quieter. */
 .new-connection-btn {
-  margin: 8px;
-  padding: 7px 10px;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
+  margin: 0 var(--s-3) var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  min-height: var(--control-h);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
   background: transparent;
-  color: var(--text-muted);
-  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
   text-align: left;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .new-connection-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-dim);
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
 }
 
 .sidebar-footer {
-  padding: 10px 14px 12px;
-  border-top: 1px solid var(--border-soft);
+  padding: var(--s-4) var(--s-5) var(--s-5);
+  border-top: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.app-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  gap: var(--s-2);
 }
 
 .app-name {
-  font-weight: 650;
-  font-size: 13px;
-  letter-spacing: 0.02em;
+  font-weight: var(--w-semi);
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
 }
 
-.app-version {
-  font-size: 11px;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-}
-
+/* Operable, so it may not be smaller than --hit-min (SC 2.5.8). */
 .support-link {
-  font-size: 11.5px;
-  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--hit-min);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
   text-decoration: none;
   width: fit-content;
+  border-radius: var(--r-control);
 }
 
 .support-link:hover {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-decoration: underline;
 }
 
-/* --------------------------------------------------------------- env chips */
+/* ══════════════════════════════════════════════════════════════════════
+   THE LEDGER RULE — the device everything inherits
+   A fixed left gutter carrying the row's address in Kafka's own
+   vocabulary — offset, broker id, partition index, line number — then a
+   1px vertical rule running the full height of the data, then the
+   payload. The rule is coloured by environment, so prod is visible in
+   every data view in the app without a single banner.
+   The rule is ALWAYS present, even when the gutter is empty.
+   ══════════════════════════════════════════════════════════════════════ */
 
-.env-chip {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.env-dev {
-  color: var(--green);
-  background: rgba(52, 211, 153, 0.12);
-}
-
-.env-staging {
-  color: var(--amber);
-  background: rgba(251, 191, 36, 0.12);
-}
-
-.env-prod {
-  color: var(--red);
-  background: rgba(248, 113, 113, 0.14);
-}
-
-.readonly-chip {
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-}
-
-/* ------------------------------------------------------------ error banner */
-
-.error-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 12px 24px 0;
-  padding: 8px 12px;
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  border-radius: 6px;
-  background: var(--red-dim);
-  color: #fca5a5;
-  font-size: 12.5px;
-}
-
-.error-text {
-  flex: 1;
-  user-select: text;
-  word-break: break-word;
-}
-
-.error-dismiss {
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-  color: #fca5a5;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 2px;
-  cursor: pointer;
-}
-
-.error-dismiss:hover {
-  color: #fecaca;
-}
-
-/* ------------------------------------------------------------- empty state */
-
-.empty-state {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-}
-
-.empty-mark {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text-faint);
-}
-
-.empty-hint {
-  max-width: 340px;
-  margin: 0;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 12.5px;
-}
-
-/* ------------------------------------------------------------------ editor */
-
-.editor {
-  max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.editor-header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-bottom: 4px;
-}
-
-.editor-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-}
-
-.editor-subtitle {
-  color: var(--text-faint);
-  font-size: 12px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.field-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.field-label-sub {
-  color: var(--text-faint);
-}
-
-.field-hint {
-  font-size: 11.5px;
-  color: var(--text-faint);
-}
-
-.field-hint-indent {
-  margin: -8px 0 0 24px;
-}
-
-input[type="text"],
-input[type="password"],
-textarea,
-select {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-inset);
-  outline: none;
-}
-
-textarea {
-  resize: vertical;
+.ledger-gutter {
+  width: var(--gutter-w);
+  min-width: var(--gutter-w);
+  padding-right: var(--s-5);
+  text-align: right;
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
 }
 
-input:focus,
-textarea:focus,
-select:focus {
-  border-color: var(--accent-strong);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+/* Tables whose rows have no address of their own (topics, groups, ACLs,
+   connectors, subjects): --gutter-w is 0 and the rule sits flush at the
+   table's left edge. It is still the app's constant. */
+.data-table-flush th:first-child,
+.data-table-flush td:first-child {
+  border-left: 1px solid var(--rule);
+  padding-left: var(--s-5);
 }
 
-input::placeholder,
-textarea::placeholder {
-  color: var(--text-faint);
+/* Collapse rule: below 1100px of AVAILABLE TABLE WIDTH the gutter folds to
+   zero and the address becomes a normal first column. The trigger is the
+   table's own container, not the viewport — the rail, the inspector dock
+   and a split view all steal width without the window changing size, and a
+   viewport query cannot see any of them. */
+.table-wrap {
+  container-type: inline-size;
+  container-name: ledger;
 }
 
-select option:disabled {
-  color: var(--text-faint);
+@container ledger (max-width: 1100px) {
+  .data-table { --gutter-w: 0px; }
+  .ledger-gutter { padding-right: var(--s-5); padding-left: var(--s-3); }
 }
 
-.auth-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0;
-  padding: 12px 14px 14px;
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: var(--bg-panel);
+/* Safari 15.6 (macOS 12, the same floor that rules out color-mix()) has no
+   container queries. Fall back to the viewport there — less accurate, but
+   the signature element still never breaks the layout. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 1100px) {
+    :root { --gutter-w: 0px; }
+    .ledger-gutter { padding-right: var(--s-5); padding-left: var(--s-3); }
+  }
 }
 
-.auth-section > legend {
-  padding: 0 6px;
-  margin-left: -6px;
+/* ══════════════════════════════════════════════════════════════════════
+   TABLES — the load-bearing component
+   No card, no radius, no outer border, no shadow, no zebra, no row
+   separators. Leading alone separates rows; the gutter rule anchors
+   the eye.
+
+   PERFORMANCE CONTRACT (law 3) — nothing below tbody may carry
+   box-shadow, filter, backdrop-filter, transition, border-radius or
+   transform. At 10k rows a 120ms hover transition is visible jank.
+   `contain` is feature-detected; degrade to plain virtualization.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.table-wrap { position: relative; }
+
+.table-scroll {
+  overflow: auto;
+  /* 2px so a focus ring on an edge row is not clipped by the scroll well */
+  padding: 2px 0;
 }
 
-.env-picker {
-  display: inline-flex;
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-  width: fit-content;
-}
-
-.env-option {
-  padding: 5px 16px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: pointer;
-  border-right: 1px solid var(--border);
-}
-
-.env-option:last-child {
-  border-right: none;
-}
-
-.env-option:hover {
-  background: var(--bg-hover);
-}
-
-.env-option-active.env-option-dev {
-  background: rgba(52, 211, 153, 0.14);
-  color: var(--green);
-}
-
-.env-option-active.env-option-staging {
-  background: rgba(251, 191, 36, 0.14);
-  color: var(--amber);
-}
-
-.env-option-active.env-option-prod {
-  background: rgba(248, 113, 113, 0.16);
-  color: var(--red);
-}
-
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
-  width: fit-content;
-}
-
-.check-row input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--accent-strong);
-  cursor: pointer;
-}
-
-.check-row-inline {
-  font-size: 12.5px;
-  color: var(--text-muted);
-}
-
-.editor-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 6px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.editor-actions-left,
-.editor-actions-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.confirm-delete {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.confirm-delete-text {
-  color: var(--red);
-  font-size: 12.5px;
-}
-
-.editor-kbd-hint {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-
-/* ----------------------------------------------------------------- buttons */
-
-.btn {
-  padding: 5px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: 12.5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: #2e3742;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.btn-primary {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: #04211d;
-  font-weight: 600;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #10a99b;
-  border-color: #10a99b;
-}
-
-.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-muted);
-}
-
-.btn-ghost:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: transparent;
-}
-
-.btn-danger {
-  background: rgba(248, 113, 113, 0.15);
-  border-color: rgba(248, 113, 113, 0.4);
-  color: var(--red);
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.25);
-}
-
-.btn-danger-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-faint);
-}
-
-.btn-danger-ghost:hover:not(:disabled) {
-  color: var(--red);
-  background: var(--red-dim);
-}
-
-/* ------------------------------------------------------------ cluster view */
-
-.cluster-view {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  max-width: 960px;
-}
-
-.cluster-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.cluster-header-id {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.cluster-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 10px;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  min-width: 0;
-}
-
-.stat-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-
-.stat-value {
-  font-size: 17px;
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-}
-
-.stat-mono {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding-top: 3px;
-}
-
-/* ------------------------------------------------------------------ tables */
-
-.table-card {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  overflow: hidden;
-}
-
-.table-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.table-card-title {
-  margin: 0;
-  font-size: 12.5px;
-  font-weight: 650;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.table-card-count {
-  font-size: 11.5px;
-  font-weight: 400;
-  color: var(--text-faint);
-}
-
-.table-card-tools {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.table-note {
-  padding: 14px 12px;
-  color: var(--text-faint);
-  font-size: 12.5px;
+@supports (contain: strict) {
+  .table-scroll { contain: strict; }
 }
 
 .data-table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
+  /* separate + 0 spacing: sticky headers keep their border, which
+     border-collapse:collapse drops in WebKit. */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--t-base);
 }
 
 .data-table th {
-  padding: 6px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--row-h-head);
+  padding: 0 var(--s-5);
   text-align: left;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  /* opaque, so rows never ghost through the header */
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--hairline-strong);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
-  color: var(--text-faint);
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-panel);
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 .data-table td {
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--border-soft);
+  height: var(--row-h);
+  padding: 0 var(--s-5);
   user-select: text;
+  vertical-align: middle;
+  color: var(--text-primary);
 }
 
-.data-table tbody tr:last-child td {
-  border-bottom: none;
+.data-table tbody tr:hover td { background: var(--bg-row-hover); }
+
+.data-table tbody tr:hover .ledger-gutter { background: var(--bg-row-hover); }
+
+.data-table tbody tr.row-selected td { background: var(--bg-row-selected); }
+
+.data-table tbody tr.row-selected .ledger-gutter {
+  border-right: 2px solid var(--accent);
 }
 
-.data-table tbody tr:hover {
-  background: var(--bg-hover);
-}
+/* Alignment law: identifiers left + mono; quantities right + sans +
+   tabular-nums; timestamps left + mono. Mono column widths are ch-based
+   so nothing reflows as data streams in.
 
+   `.data-table th` sets `text-align: left` at specificity (0,1,1); a bare
+   `.col-num` is (0,1,0) and lost, so every numeric COLUMN HEAD sat left
+   above a right-aligned column. Both selectors are qualified so the two
+   halves of a column can never disagree again. */
+.data-table th.col-num,
+.data-table td.col-num,
 .col-num {
   text-align: right;
   width: 1%;
   white-space: nowrap;
 }
 
+.data-table th.ledger-gutter,
+.data-table td.ledger-gutter { text-align: right; }
+
+.cell-num {
+  text-align: right;
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-primary);
+}
+
+/* --font-mono + --text-mono = a literal that came out of Kafka and could
+   be pasted into a kafka-topics.sh command. Never mono for a count. */
 .cell-mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-sm);
+  color: var(--text-mono);
 }
 
 .cell-empty {
-  color: var(--text-faint);
-  text-align: center;
-  padding: 14px 12px;
+  color: var(--text-secondary);
+  padding: var(--s-7) var(--s-5);
+  height: auto;
+  line-height: var(--lh-prose);
 }
 
-.row-internal td {
-  color: var(--text-faint);
+/* Internal topics: dimmed, never hidden, so nobody wonders where they went. */
+.row-internal td { color: var(--text-tertiary); }
+.row-internal .cell-mono { color: var(--text-tertiary); }
+
+/* An inline word that says WHY a row is dimmed, so the row explains itself
+   without a hover. Sans, because it is Kavka talking, not a Kafka literal. */
+.cell-tag {
+  font-family: var(--font-ui);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
 }
+
+/* null / absent → ∅, never the word "null". Meaningful, so it clears 3:1
+   on every row state including hover, selected and prod. */
+.absent {
+  color: var(--text-absent);
+  font-family: var(--font-mono);
+}
+
+/* Loading: never a spinner over data. A 2px indeterminate bar slides along
+   the bottom edge of the header row; existing rows stay readable. */
+.table-loading {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.table-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: var(--accent);
+  animation: slide 1.1s var(--ease) infinite;
+}
+
+/* Pinned to the bottom edge of the sticky header row, so existing rows
+   stay readable and interactive while the fetch is in flight. */
+.table-wrap > .table-loading {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--row-h-head) - 1px);
+  z-index: 2;
+}
+
+@keyframes slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(430%); }
+}
+
+/* Skeleton rows only where the layout is known. No shimmer — paint cost,
+   no benefit. */
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--rule);
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  height: var(--row-h);
+  padding: 0 var(--s-5);
+}
+
+.skeleton-cell {
+  height: 8px;
+  border-radius: var(--r-control);
+  background: var(--skeleton);
+}
+
+.table-note {
+  /* margin:0 — this is a <p> inside a flex panel that owns its own gap. */
+  margin: 0;
+  padding: var(--s-5) var(--s-5) var(--s-5) var(--s-5);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+/* ── Health · lag — law 2 in its most load-bearing form ─────────────── */
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  white-space: nowrap;
+}
+
+.health .dot {
+  width: 7px; height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.health-ok     { color: var(--ok); }
+.health-warn   { color: var(--warn); }
+.health-danger { color: var(--danger); }
+
+/* Lag: number, then a 40x3 track, then a trend arrow. Three channels, so
+   colour-blind users get length and direction. Status-adjacency law:
+   --accent may not appear in a column adjacent to health or lag, and lag
+   fills use --ok/--warn/--danger only. */
+.lag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  justify-content: flex-end;
+}
+
+.lag-track {
+  width: 40px; height: 3px;
+  flex-shrink: 0;
+  background: var(--track-empty);
+}
+
+/* A non-zero lag must never round down to zero pixels: at 40px wide,
+   anything under 2.5% of the threshold vanished and the meter read
+   "caught up" for a topic that is not. */
+.lag-fill { height: 100%; min-width: 2px; background: var(--ok); }
+.lag-warn   .lag-fill { background: var(--warn); }
+.lag-danger .lag-fill { background: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PANELS + STATS — Kavka ships zero cards. Grouping is whitespace plus a
+   top hairline; emphasis is type weight plus one of five text lightnesses.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.panel-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.panel-count {
+  font-size: var(--t-sm);
+  font-weight: var(--w-normal);
+  color: var(--text-tertiary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  flex-shrink: 0;
+}
+
+/* Stat blocks: no border, no background, no radius. Siblings separated by
+   40px, floating on the canvas. */
+.stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6) var(--s-10);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.stat-value {
+  font-size: var(--t-display);
+  line-height: var(--lh-display);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+  user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A cluster id is a literal from Kafka, not a quantity Kavka computed. */
+.stat-value-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-md);
+  line-height: var(--lh-display);
+  font-weight: var(--w-normal);
+  letter-spacing: 0;
+  color: var(--text-mono);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BUTTONS
+   All --control-h, --r-control, --t-sm, sentence case, no transform on
+   press. Exactly one primary per surface.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  height: var(--control-h);
+  min-height: var(--hit-min);
+  padding: 0 var(--s-5);
+  /* A button's boundary is the only thing that says "this is operable"
+     when the fill is transparent, so SC 1.4.11 applies: --border-control
+     (3.17:1 worst) and never --hairline-strong (1.18:1 worst). */
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) { background: var(--bg-row-hover); }
+
+/* Disabled controls always carry a title explaining why. Never a dead
+   control with no reason. */
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+.btn-primary {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--text-inverse);
+  font-weight: var(--w-medium);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--fill-primary-hover);
+  border-color: var(--fill-primary-hover);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) { color: var(--text-primary); }
+
+/* Danger OUTLINE only ever *opens* a confirmation. The border is the
+   component boundary, so it is opaque and precomputed: the old
+   rgba(...,.45) composited to 2.20:1 against the canvas. */
+.btn-danger {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) { background: var(--danger-tint); }
+
+/* Danger FILL only ever exists one click away from the action happening,
+   and only inside a modal or an inline confirmation. */
+.btn-danger-confirm {
+  background: var(--danger-fill);
+  border-color: var(--danger-fill);
+  color: var(--on-danger-fill);
+  font-weight: var(--w-medium);
+}
+
+.btn-danger-confirm:hover:not(:disabled) {
+  background: var(--danger-fill-hover);
+  border-color: var(--danger-fill-hover);
+}
+
+/* A latched toggle is a physical switch, not a link — it must read as ON
+   across the room. */
+.btn-latched,
+.btn-latched:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Loading keeps the label and reserves a fixed 16px leading slot, so the
+   button never resizes mid-click and shifts everything after it. */
+.btn-busy-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+.spinner {
+  width: 11px; height: 11px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: spin 620ms linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CHIPS · kbd
+   ══════════════════════════════════════════════════════════════════════ */
+
+.env-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-pill);
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.env-dev     { color: var(--accent); background: var(--accent-tint); }
+.env-staging { color: var(--warn);   background: var(--warn-tint); }
+
+/* Prod is the only FILLED chip, so it reads as a badge, not a tag. */
+.env-prod {
+  color: var(--env-chip-prod-ink);
+  background: var(--env-chip-prod-fill);
+}
+
+/* Sentence case: "read-only" is a phrase Kavka says to you, not a system
+   token like PROD. Uppercase micro-caps survive only on env chips, table
+   column heads, stat labels and section eyebrows. */
+.readonly-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 18px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-medium);
+}
+
+/* Filter chips use --r-control, NOT a pill: pills read immutable, filters
+   are editable. */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 20px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+  font-size: var(--t-sm);
+}
+
+.filter-chip-field { color: var(--text-tertiary); }
+.filter-chip-value { font-family: var(--font-mono); color: var(--text-primary); }
+.filter-chip-invalid { border: 1px solid var(--danger); }
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORMS
+   Labels are sentence case. All-caps labels read as system output;
+   sentence case reads as someone talking to you. Uppercase micro-caps
+   survive only on table column headers, stat labels and section eyebrows.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.editor {
+  max-width: var(--measure);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+}
+
+.view-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.view-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+}
+
+.view-title-id {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.view-title {
+  margin: 0;
+  font-size: var(--t-lg);
+  line-height: var(--lh-lg);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-subtitle {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+.view-address {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.field-label {
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+}
+
+.field-hint {
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+  max-width: var(--measure);
+}
+
+.field-hint code { color: var(--text-secondary); }
+
+.field-error {
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--danger);
+}
+
+/* The sunken fill is only 1.13:1 against the canvas, so --border-control
+   is the only thing satisfying SC 1.4.11 here. Do not remove it. */
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  min-height: var(--control-h-lg);
+  padding: var(--s-3) 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  outline: none;
+}
+
+select { height: var(--control-h-lg); }
+
+/* Machine data is mono; prose (a connection name) is sans. */
+.input-mono,
+textarea {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+}
+
+textarea { resize: vertical; }
+
+input:focus,
+textarea:focus,
+select:focus { border-color: var(--accent); }
+
+/* A placeholder is text a sighted user is expected to READ (it carries the
+   example format), so it takes --text-placeholder at 4.5:1 — not
+   --text-disabled, which is 3.53:1 on a raised surface and exists only to
+   say "this control is off". */
+input::placeholder,
+textarea::placeholder { color: var(--text-placeholder); opacity: 1; }
+
+input:disabled,
+textarea:disabled,
+select:disabled { color: var(--text-disabled); cursor: default; }
+
+select option:disabled { color: var(--text-disabled); }
+
+.input-invalid,
+.input-invalid:focus { border-color: var(--danger); }
+
+/* Fieldsets lose their borders entirely: a fieldset is a micro eyebrow
+   plus 12px of space. <fieldset>/<legend> semantics are kept. */
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fieldset > legend {
+  padding: 0;
+  margin-bottom: var(--s-5);
+}
+
+/* 18px box (up from 14px, which fails SC 2.5.8) in a 18px/1fr grid with
+   the hint in row 2 / column 2. This deletes the .field-hint-indent hack. */
+.check-field {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+}
+
+.check-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check-field .check-label {
+  font-size: var(--t-base);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.check-field .field-hint {
+  grid-column: 2;
+}
+
+/* Inline checkbox for toolbars — same 18px target, no hint row. */
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: fit-content;
+  min-height: var(--hit-min);
+}
+
+.check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Segmented control. Picking prod swaps the substrate of everything it
+   governs, live — the single best moment in the product to teach the
+   guardrail. */
+/* NO overflow:hidden. It was here to clip the segments' square corners to
+   the well's radius, and it clipped the focus ring off the first and last
+   segment with it — the ring is drawn OUTSIDE the box (outline-offset 2px),
+   so any ancestor clip eats it. The segments carry the radius themselves
+   instead. Same reasoning applies anywhere a rounded shell wraps focusable
+   children (see .palette). */
+.env-picker {
+  display: inline-flex;
+  width: fit-content;
+  height: var(--control-h);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+}
+
+.env-option {
+  min-width: 72px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-6);
+  border: none;
+  border-right: 1px solid var(--border-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.env-option:first-child {
+  border-top-left-radius: var(--r-control);
+  border-bottom-left-radius: var(--r-control);
+}
+
+.env-option:last-child {
+  border-right: none;
+  border-top-right-radius: var(--r-control);
+  border-bottom-right-radius: var(--r-control);
+}
+
+.env-option:hover { background: var(--bg-row-hover); }
+
+.env-option-active,
+.env-option-active:hover {
+  background: var(--env-tint);
+  color: var(--env-ink);
+  font-weight: var(--w-medium);
+}
+
+.editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+.editor-actions-left,
+.editor-actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.confirm-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.confirm-text {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  max-width: 40ch;
+  line-height: var(--lh-prose);
+}
+
+.editor-kbd-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   GLOSSARY TERM — teaching without documentation
+   Dotted underline, popover on hover AND focus, aria-describedby.
+   Hard cap: 15 terms in a shared registry, one gloss per term per view.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The gloss is a sibling, not a child: nested, it would be swallowed into
+   the term's accessible name instead of its description. */
+.term-wrap { display: inline-block; }
+
+.term {
+  border-bottom: 1px dotted var(--text-disabled);
+  cursor: help;
+}
+
+/* THE POPOVER IS PORTALLED TO <body> AND POSITIONED FIXED.
+   It used to be position:absolute inside .term-wrap, which put it inside
+   whatever the nearest scrollport or clipping ancestor happened to be. Two
+   of its three real call sites are inside a table header: `position: sticky`
+   plus the table's `overflow: auto` scrollport clipped the gloss to a 28px
+   header strip, so the one component whose entire job is teaching a novice
+   was the one component they could not read. `container-type: inline-size`
+   on .table-wrap would also have made it a containing block.
+   Glossary.tsx measures the term with getBoundingClientRect() and writes
+   top/left inline; this rule owns everything else. */
+.term-pop {
+  position: fixed;
+  z-index: 40;
+  width: 260px;
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-popover);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  font-weight: var(--w-normal);
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  pointer-events: none;
+  /* Kept mounted, not unmounted: an aria-describedby target that only
+     exists while hovered is a description a screen reader never resolves.
+     Hidden nodes ARE included in the accessible description when they are
+     referenced directly, so visibility:hidden is both correct and quiet. */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease),
+              visibility var(--dur-fast) var(--ease);
+}
+
+.term-pop-open {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BANNERS · TOASTS · MODALS — the three-surface rule
+   Toast = something you did, finished. Banner = a condition you are in.
+   Modal = something irreversible needs your consent.
+   An error the user must act on is NEVER a toast.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  padding: var(--s-4) var(--s-8) var(--s-4) var(--s-6);
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  border-left: 2px solid transparent;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.banner-danger {
+  background: var(--danger-tint);
+  border-top-color: rgba(229, 120, 107, 0.3);
+  border-bottom-color: rgba(229, 120, 107, 0.3);
+  border-left-color: var(--danger);
+}
+
+.banner-warn {
+  background: var(--warn-tint);
+  border-top-color: rgba(217, 164, 65, 0.3);
+  border-bottom-color: rgba(217, 164, 65, 0.3);
+  border-left-color: var(--warn);
+}
+
+.banner-info {
+  background: var(--bg-raised);
+  border-top-color: var(--hairline);
+  border-bottom-color: var(--hairline);
+  border-left-color: var(--accent-quiet);
+}
+
+/* Prod de-collision: on a prod cluster a danger banner drops its red tint
+   for a neutral shell with a --danger left bar. Otherwise the warm
+   substrate plus a coral banner is an undifferentiated red wash and BOTH
+   signals die. */
+[data-env="prod"] .banner-danger {
+  background: var(--bg-raised);
+  border-top-color: var(--hairline-strong);
+  border-bottom-color: var(--hairline-strong);
+  border-left-color: var(--danger);
+}
+
+/* ...and the env rule dampens while a danger banner is up, so the banner is
+   the only red thing on screen.
+
+   THE DAMPER MOVES CHROMA, NOT LIGHTNESS. The undampened prod rule is
+   already only 3.09:1 on a selected prod row, so there is no darker coral
+   left: the previous #6E3A33 measured 1.83:1 there and 2.09:1 on the
+   canvas, i.e. prod's most load-bearing guardrail switched itself off
+   exactly when an error was on screen. #9C8079 is the same rule at a
+   third of the chroma (spread 35 vs the coral's 96) and MORE luminance
+   contrast, not less: 5.22 canvas · 5.43 sunken · 4.90 raised · 4.83
+   row-hover · 4.61 row-selected · 4.55 on a selected prod sidebar row,
+   which is its worst. It reads as "muted", never as "gone".            */
+/* Also matches prod-scoped descendants (e.g. the profile editor form sets its
+   own data-env, which would otherwise re-declare --rule over the damper). */
+[data-env="prod"][data-alert="danger"],
+[data-alert="danger"] [data-env="prod"] { --rule: #9C8079; }
+
+.banner-glyph {
+  flex-shrink: 0;
+  font-weight: var(--w-bold);
+  line-height: var(--lh-base);
+}
+
+.banner-danger .banner-glyph { color: var(--danger); }
+.banner-warn .banner-glyph { color: var(--warn); }
+.banner-info .banner-glyph { color: var(--accent); }
+
+.banner-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Line 1: what happened. */
+.banner-title {
+  margin: 0;
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  user-select: text;
+  word-break: break-word;
+}
+
+/* Line 2: what to do. Capped at --measure. */
+.banner-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+}
+
+.banner-details {
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+}
+
+.banner-details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  width: fit-content;
+  border-radius: var(--r-control);
+}
+
+/* The raw broker string, verbatim and selectable. */
+.banner-raw {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-4);
+  background: var(--bg-sunken);
+  border-radius: var(--r-control);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+
+/* Toast — bottom-right, 24px inset, 320px, 4px left rule in the semantic
+   colour (the ledger rule at toast scale). Success auto-dismisses at 5s;
+   errors and warnings never do. */
+.toast-stack {
+  position: fixed;
+  right: var(--s-8);
+  bottom: var(--s-8);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.toast {
+  width: 320px;
+  padding: var(--s-5);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  animation: toast-in var(--dur-base) var(--ease-settle);
+}
+
+.toast-ok     { border-left-color: var(--ok); }
+.toast-warn   { border-left-color: var(--warn); }
+.toast-danger { border-left-color: var(--danger); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal — scrim with NO backdrop blur (a measurable WebView2 cost, and
+   the tell of a templated design). Focus trap; initial focus on Cancel;
+   Esc always cancels. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  background: var(--bg-scrim);
+}
+
+.modal {
+  width: 440px;
+  max-width: calc(100vw - var(--s-10));
+  padding: var(--s-7);
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-overlay);
+}
+
+.modal-wide { width: 560px; }
+
+/* Destructive modals get the same 2px wire as the prod bar, so the two
+   guardrails rhyme. */
+.modal-destructive { border-top: 2px solid var(--danger-fill); }
+
+.modal-title {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+}
+
+.modal-body {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE — the only element with real elevation, and one of only
+   two using --ease-settle. ⌘K is the real navigation; the sidebar is not.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Same trap as .env-picker: overflow:hidden here clipped the focus ring off
+   .palette-input, which is the one control in the palette. The children
+   carry the shell's radius instead. */
+.palette {
+  width: var(--palette-w);
+  max-width: calc(100vw - var(--s-10));
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-overlay);
+  animation: toast-in var(--dur-base) var(--ease-settle);
+}
+
+.palette-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--s-6);
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: var(--r-overlay) var(--r-overlay) 0 0;
+  background: transparent;
+  font-size: var(--t-md);
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: 36px;
+  padding: 0 var(--s-6);
+  cursor: pointer;
+}
+
+.palette-row:last-child {
+  border-bottom-left-radius: var(--r-overlay);
+  border-bottom-right-radius: var(--r-overlay);
+}
+
+/* Identical to table selection, so the pattern is learned once. */
+.palette-row-active {
+  background: var(--bg-row-selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-context { color: var(--text-tertiary); }
+.palette-row-danger .palette-context { color: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PAYLOAD INSPECTOR + DIFF — the ledger device at document scale
+   ══════════════════════════════════════════════════════════════════════ */
+
+.inspector {
+  width: var(--inspector-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--hairline-strong);
+  background: var(--bg-canvas);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  height: 36px;
+  padding: 0 var(--s-5);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.inspector-body {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+  user-select: text;
+}
+
+.code-line { display: flex; }
+
+.code-gutter {
+  width: var(--gutter-w-code);
+  min-width: var(--gutter-w-code);
+  padding-right: var(--s-4);
+  text-align: right;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+  user-select: none;
+}
+
+.code-text { padding-left: var(--s-5); white-space: pre-wrap; }
+
+.syn-key    { color: var(--syn-key); }
+.syn-string { color: var(--syn-string); }
+.syn-number { color: var(--syn-number); }
+.syn-atom   { color: var(--syn-atom); }
+.syn-punct  { color: var(--syn-punct); }
+
+/* A search hit must not be colour-only: background PLUS a 2px underline. */
+.syn-match {
+  background: var(--syn-match);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.collapsed-summary { color: var(--text-absent); }
+
+/* One diff component serves payload diff, config diff-from-default and
+   schema version diff. Build it once. */
+.diff-add { background: var(--ok-tint); }
+.diff-del { background: var(--danger-tint); }
+.diff-add .code-gutter { color: var(--ok); }
+.diff-del .code-gutter { color: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SEARCH BAR — plain text by default, CEL one keystroke away behind ƒx
+   ══════════════════════════════════════════════════════════════════════ */
+
+.searchbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  height: var(--control-h-lg);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-popover);
+  background: var(--bg-sunken);
+}
+
+.searchbar-input {
+  flex: 1;
+  min-height: auto;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.searchbar-input:focus { border: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CHARTS
+   1px strokes, no gradient fills, no chart junk, no shadows. Series must
+   be direct-labelled or dash-patterned — a 6-series chart identified by
+   hue alone fails SC 1.4.1 for deuteranopes.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.chart-grid  { stroke: var(--grid-line); stroke-width: 1; }
+.chart-axis  { font-size: var(--t-micro); fill: var(--text-tertiary); }
+.chart-s1 { stroke: var(--series-1); } .chart-s2 { stroke: var(--series-2); }
+.chart-s3 { stroke: var(--series-3); } .chart-s4 { stroke: var(--series-4); }
+.chart-s5 { stroke: var(--series-5); } .chart-s6 { stroke: var(--series-6); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CONNECTION LADDER — the highest-leverage novice component
+   A streaming checklist localizes the failure before the user has to
+   interpret prose.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.ladder {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  border-left: 1px solid var(--rule);
+}
+
+.ladder-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: var(--row-h);
+  padding: 0 var(--s-5);
+  color: var(--text-tertiary);
+}
+
+.ladder-step-glyph { width: 12px; flex-shrink: 0; text-align: center; }
+.ladder-step-label { flex: 1; min-width: 0; }
+.ladder-step-note { color: var(--text-tertiary); }
+.ladder-ok     { color: var(--text-secondary); }
+.ladder-ok     .ladder-step-glyph { color: var(--ok); }
+.ladder-fail   { color: var(--text-primary); }
+.ladder-fail   .ladder-step-glyph { color: var(--danger); }
+.ladder-fail   .ladder-step-note { color: var(--danger); }
+.ladder-skip   .ladder-step-glyph { color: var(--text-absent); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   EMPTY STATES
+   One sentence naming the situation, one naming the action, at most one
+   primary action. Centred block, left-aligned text inside it. No
+   illustrations, no shrug emoji.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.empty-state {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-9) 0;
+}
+
+.empty-block {
+  width: 100%;
+  max-width: 52ch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  text-align: left;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: var(--t-xl);
+  line-height: var(--lh-xl);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+}
+
+.empty-hint {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* No user-select opt-in here — `code` is selectable at the base rule. */
+.empty-hint code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-top: var(--s-2);
+}
+
+.empty-footnote {
+  margin: 0;
+  max-width: 44ch;
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   CLUSTER VIEW
+   ══════════════════════════════════════════════════════════════════════ */
+
+.cluster-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  max-width: 1040px;
+}
+
+/* Read-only mode: mutating controls are disabled, never hidden — hiding
+   creates the "where did the button go" ticket. But a dead control with
+   no reason reads as a broken app, so the toolbar carries the sentence. */
+.readonly-note {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS / WINDOWS HIGH CONTRAST
+   Windows HC drops our tints. The prod guardrail must NOT depend on hue,
+   so the wire thickens and gains the literal word.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  .app-wire[data-env-label="PROD"] {
+    height: auto;
+    min-height: 4px;
+    background: Mark;
+    color: MarkText;
+    text-align: center;
+    font-size: var(--t-micro);
+    font-weight: var(--w-bold);
+    letter-spacing: var(--track-eyebrow);
+  }
+
+  .app-wire[data-env-label="PROD"]::after { content: attr(data-env-label); }
+
+  /* There is deliberately NO `* { border-color: CanvasText }` here.
+     Forced-colors mode already preserves `transparent` and repaints every
+     other border with a system colour, so the blanket rule did nothing for
+     real borders and destroyed every indicator built on a transparent one:
+     it painted the idle state of the sidebar row, the tab strip, the banner
+     shell and the ghost button in the SAME colour as their active state, so
+     in Windows high contrast every row read as selected and every tab as
+     current. Indicators are restated POSITIVELY below instead — a distinct
+     system colour per meaning, which is also the only way two indicators
+     stacked on one element (prod AND selected) stay tellable apart. */
+
+  /* Selection — the same system colour the OS uses for selection. */
+  .profile-row-selected,
+  .profile-row-selected:hover { border-left-color: Highlight; }
+  .data-table tbody tr.row-selected .ledger-gutter { border-right-color: Highlight; }
+  .palette-row-active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .tab-active { border-bottom-color: Highlight; }
+
+  /* Prod — Mark, the same colour the wire above uses, so the guardrail
+     reads as one signal. Wins over Highlight when a prod row is selected,
+     because the environment matters more than the selection. */
+  .profile-row-prod,
+  .profile-row-prod:hover,
+  .profile-row-prod.profile-row-selected { border-left-color: Mark; }
+
+  /* Severity — a banner is a condition you are in, so its shell must not
+     vanish into the canvas. */
+  .banner {
+    border-top-color: CanvasText;
+    border-bottom-color: CanvasText;
+    border-left-color: CanvasText;
+  }
+  .banner-danger,
+  .toast-danger { border-left-color: Mark; }
+  .modal-destructive { border-top-color: Mark; }
+
+  /* The latched toggle is a switch: it has to read as ON across the room. */
+  .btn-latched { outline: 2px solid Highlight; outline-offset: -3px; }
+
+  .env-prod,
+  .btn-danger-confirm { border: 1px solid CanvasText; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LIGHT — SPECCED AND AUDITED, NOT SHIPPED
+   Every text token clears AA on all six light surfaces; --border-control
+   clears 3:1 on all six. Do NOT expose a user toggle until every
+   component composition has been verified in it (Phase 6).
+   ══════════════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-rail: #F2F4F6;  --bg-canvas: #FBFCFD;  --bg-raised: #FFFFFF;
+  --bg-sunken: #F5F7F9; --bg-row-hover: #F1F4F7; --bg-row-selected: #E8F4F1;
+  --bg-row-prod-hover: #F7E2DF;  --bg-row-prod-selected: #F2D8D4;
+  --bg-scrim: rgba(16, 21, 25, 0.30);
+  --selection: rgba(10, 117, 101, 0.20);
+  --skeleton: #DDE2E7;
+  --text-primary: #10151A;    /* 17.87:1 */
+  --text-secondary: #3E4A57;  /*  8.80:1 */
+  --text-tertiary: #5C6875;   /*  5.54:1 */
+  --text-disabled: #7D8794;   /* :disabled only                          */
+  --text-placeholder: #646E7B;/*  4.59:1 worst (selected row)             */
+  --text-absent: #646E7B;     /*  4.59:1 worst (selected row) — same
+                                 reasoning as dark: one floor, two roles  */
+  --text-mono: #1A222B;  --text-inverse: #FFFFFF;
+  --hairline: #E4E8EC;  --hairline-strong: #D3D9DF;
+  --border-control: #767F8C;  /* 3.94 canvas / 4.05 raised / 3.77 sunken */
+  --accent: #0A7565;  --accent-quiet: #0A7565;  --accent-tint: #E4F2EF;
+  --focus: #0A7565;
+  --fill-primary-hover: #000000;
+  --ok: #0B7A52;  --warn: #8A5A08;  --danger: #B3392A;  --danger-fill: #9E2E22;
+  --danger-fill-hover: #8A281D;  --on-danger-fill: #FFFFFF;
+  --danger-border: #B9564A;   /*  4.07:1 worst (danger tint)              */
+  --ok-tint: #E9F5EF;  --warn-tint: #FAF1DE;  --danger-tint: #FBECEA;
+  --track-empty: #C9D0D6;     /* fills clear 3.44–3.81:1 against it       */
+  --rule: #D3D9DF;
+  --env-chip-prod-ink: #FFFFFF;  --env-chip-prod-fill: #9E2E22;
+  --syn-key: #3F5266;  --syn-string: #136B45;  --syn-number: #7A4E06;
+  --syn-atom: #5B3FC4; --syn-punct: #5C6875;   --syn-match: #E3EEF6;
+  --shadow-popover: 0 6px 20px -6px rgba(16, 21, 25, 0.18),
+                    0 0 0 1px var(--hairline-strong);
+  --shadow-overlay: 0 20px 56px -16px rgba(16, 21, 25, 0.22),
+                    0 0 0 1px var(--hairline-strong);
+}
+
+[data-theme="light"] [data-env="staging"] { --rule: #8A5A08; }
+[data-theme="light"] [data-env="prod"]    { --rule: #8E3A31; --env-wire: #9E2E22; }
+/* Light needs its own damper, or it inherits the dark one. Same rule:
+   chroma down, contrast kept (4.09:1 worst, on a selected row). */
+[data-theme="light"] [data-env="prod"][data-alert="danger"],
+[data-theme="light"] [data-alert="danger"] [data-env="prod"] { --rule: #8A6F6A; }

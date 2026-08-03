@@ -6,9 +6,11 @@
     <meta name="color-scheme" content="dark" />
     <title>Kavka</title>
     <style>
-      /* Avoid a white flash before the stylesheet loads. */
+      /* Avoid a white flash before the stylesheet loads. Must stay in sync
+         with --bg-canvas in src/styles.css, or the app flashes the old
+         theme on every cold start. */
       html {
-        background: #111418;
+        background: #0f1317;
       }
     </style>
   </head>
