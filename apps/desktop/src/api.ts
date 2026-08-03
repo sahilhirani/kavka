@@ -125,6 +125,15 @@ export function secretDelete(entry: string): Promise<void> {
   return invoke<void>("secret_delete", { entry });
 }
 
+/**
+ * Whether the keychain holds this entry. Presence only — the value stays on
+ * the Rust side. A profile carries a SecretRef, never a value, so this is the
+ * only honest way to say "leave it blank to keep the stored one".
+ */
+export function secretExists(entry: string): Promise<boolean> {
+  return invoke<boolean>("secret_exists", { entry });
+}
+
 export function clusterConnect(profileId: string): Promise<ClusterOverview> {
   return invoke<ClusterOverview>("cluster_connect", { profileId });
 }

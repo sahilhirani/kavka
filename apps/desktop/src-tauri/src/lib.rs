@@ -56,8 +56,11 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
         store.delete(&profile_id)?;
         // Best-effort purge: an orphaned keychain entry is harmless, a ghost
         // profile in the UI is not — so a purge failure doesn't fail the
-        // delete.
-        let _ = kavka_core::secrets::delete(&format!("{profile_id}/password"));
+        // delete. Every entry the editor can create is purged, not just the
+        // password: mTLS and OAuth profiles also leave a key behind.
+        for suffix in ["password", "client_key", "client_secret"] {
+            let _ = kavka_core::secrets::delete(&format!("{profile_id}/{suffix}"));
+        }
         Ok(())
     })
     .await
@@ -92,6 +95,14 @@ async fn secret_set(entry: String, value: String) -> CmdResult<()> {
 #[tauri::command]
 async fn secret_delete(entry: String) -> CmdResult<()> {
     blocking(move || kavka_core::secrets::delete(&entry)).await
+}
+
+/// Presence only — the value never crosses the IPC boundary. The editor asks
+/// this to decide whether a blank secret field really means "keep the stored
+/// one", instead of inferring it from the sign-in method and being wrong.
+#[tauri::command]
+async fn secret_exists(entry: String) -> CmdResult<bool> {
+    blocking(move || kavka_core::secrets::exists(&entry)).await
 }
 
 #[tauri::command]
@@ -164,6 +175,7 @@ pub fn run() {
             profiles_import,
             secret_set,
             secret_delete,
+            secret_exists,
             cluster_connect,
             cluster_disconnect,
             topics_list,

@@ -1,7 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ConnectionProfile, ConnState, ConnStatus, Environment } from "./api";
-
-const SUPPORT_URL = "https://buymeacoffee.com/sahilhirani";
+import { SUPPORT_URL } from "./AboutDialog";
 
 // Sentence-case everywhere except env chips and table column headers. The
 // chip renders uppercase via CSS, so the word stays readable in the DOM.
@@ -35,6 +34,7 @@ interface SidebarProps {
   creating: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onAbout: () => void;
 }
 
 export default function Sidebar({
@@ -44,6 +44,7 @@ export default function Sidebar({
   creating,
   onSelect,
   onNew,
+  onAbout,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
@@ -119,16 +120,26 @@ export default function Sidebar({
 
       <footer className="sidebar-footer">
         <span className="app-name">Kavka</span>
-        <a
-          className="support-link"
-          href={SUPPORT_URL}
-          onClick={(e) => {
-            e.preventDefault();
-            openUrl(SUPPORT_URL).catch(console.error);
-          }}
-        >
-          Support Kavka ☕
-        </a>
+        <div className="sidebar-footer-links">
+          {/* Same look as the support link, so the footer reads as one line
+              of quiet text rather than a button next to a link. */}
+          <button type="button" className="support-link" onClick={onAbout}>
+            About
+          </button>
+          <span className="footer-sep" aria-hidden="true">
+            ·
+          </span>
+          <a
+            className="support-link"
+            href={SUPPORT_URL}
+            onClick={(e) => {
+              e.preventDefault();
+              openUrl(SUPPORT_URL).catch(console.error);
+            }}
+          >
+            Support Kavka ☕
+          </a>
+        </div>
       </footer>
     </aside>
   );

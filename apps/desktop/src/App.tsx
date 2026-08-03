@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clusterConnect,
   clusterDisconnect,
@@ -11,6 +11,9 @@ import {
 import Sidebar from "./Sidebar";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
 import ClusterView from "./ClusterView";
+import Palette, { paletteKeyLabel, type PaletteCommands } from "./Palette";
+import AboutDialog from "./AboutDialog";
+import ImportExportDialog, { type TransferTab } from "./ImportExportDialog";
 
 const SELECTED_KEY = "kavka.selectedProfileId";
 
@@ -57,6 +60,20 @@ export default function App() {
   // True when the last profiles fetch failed — an empty-looking list must not
   // be trusted (e.g. to prune the persisted selection).
   const [loadFailed, setLoadFailed] = useState(false);
+  // Overlays. At most one is up at a time: the palette opens the others and
+  // closes itself on the way, and ⌘K is ignored while a dialog is up.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [transfer, setTransfer] = useState<TransferTab | null>(null);
+  // A danger banner inside the transfer dialog is still danger on screen, and
+  // §5.8's prod damper reads one attribute on the app root — so the dialog
+  // reports its banner up here rather than the guardrail missing it.
+  const [transferDanger, setTransferDanger] = useState(false);
+  // Bumping this remounts ClusterView, which refetches topics on mount. The
+  // honest version of "Refresh topics" from the palette is a handle into that
+  // component; until it exposes one, a remount is the whole of the behaviour
+  // and none of the coupling. Swap it the day ClusterView owns a ref.
+  const [topicsNonce, setTopicsNonce] = useState(0);
   // Profile ids with a cluster_connect in flight (double-click guard).
   const connectsInFlight = useRef(new Set<string>());
   // Mirror of `profiles` for use after awaits without stale closures.
@@ -185,6 +202,44 @@ export default function App() {
     [reloadProfiles],
   );
 
+  // ⌘K / Ctrl+K — the app's real navigation (DESIGN.md §5.9). Ignored while a
+  // dialog is up: a palette on top of a modal is two focus traps fighting.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key !== "k" && e.key !== "K") return;
+      e.preventDefault();
+      if (aboutOpen || transfer !== null) return;
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [aboutOpen, transfer]);
+
+  const openAbout = useCallback(() => setAboutOpen(true), []);
+  const closeAbout = useCallback(() => setAboutOpen(false), []);
+  const closeTransfer = useCallback(() => setTransfer(null), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  const paletteCommands = useMemo<PaletteCommands>(
+    () => ({
+      // Connecting from the palette also selects: the workspace has to show
+      // the cluster you just asked for, whichever one was on screen before.
+      connect: (profile) => {
+        select(profile.id);
+        void connect(profile);
+      },
+      goTo: select,
+      addConnection: startCreating,
+      disconnect: (profileId) => void disconnect(profileId),
+      refreshTopics: () => setTopicsNonce((n) => n + 1),
+      exportConnections: () => setTransfer("export"),
+      importConnections: () => setTransfer("import"),
+      about: openAbout,
+    }),
+    [select, connect, startCreating, disconnect, openAbout],
+  );
+
   const selected =
     !creating && profiles !== null
       ? (profiles.find((p) => p.id === selectedId) ?? null)
@@ -220,7 +275,8 @@ export default function App() {
   } else if (selected && conn.status === "connected" && conn.overview) {
     main = (
       <ClusterView
-        key={selected.id}
+        // The nonce is "Refresh topics" from the palette — see the state above.
+        key={`${selected.id}:${topicsNonce}`}
         profile={selected}
         overview={conn.overview}
         onDisconnect={disconnect}
@@ -323,10 +379,13 @@ export default function App() {
       className="app"
       data-env={env}
       // Prod de-collision (§5.8): the env rule dampens while ANY danger is on
-      // screen, including the inline connect failure in the editor. Miss the
-      // inline case and a prod cluster shows a coral rule behind a coral
-      // banner, which is the one composition the guardrail must not produce.
-      data-alert={error !== null || conn.error ? "danger" : undefined}
+      // screen — the global banner, the inline connect failure in the editor,
+      // and a banner inside a dialog. Miss one and a prod cluster shows a
+      // coral rule behind a coral banner, which is the one composition the
+      // guardrail must not produce.
+      data-alert={
+        error !== null || conn.error || transferDanger ? "danger" : undefined
+      }
     >
       {/* Prod guardrail layer 2: a 2px wire under the native title bar.
           Transparent outside prod. Do not remove it because the substrate
@@ -345,6 +404,7 @@ export default function App() {
           creating={creating}
           onSelect={select}
           onNew={startCreating}
+          onAbout={openAbout}
         />
 
         <main className="workspace">
@@ -402,6 +462,20 @@ export default function App() {
               )}
             </div>
             <div className="statusbar-right">
+              {/* The one shortcut worth advertising, and clickable for
+                  whoever finds it here before they find the key. */}
+              <button
+                type="button"
+                className="statusbar-hint"
+                title="Search commands and clusters"
+                onClick={() => setPaletteOpen(true)}
+              >
+                <span className="kbd">{paletteKeyLabel()}</span>
+                commands
+              </button>
+              <span className="statusbar-sep" aria-hidden="true">
+                ·
+              </span>
               <span className="statusbar-item statusbar-mono">
                 core v{version || "…"}
               </span>
@@ -409,6 +483,33 @@ export default function App() {
           </footer>
         </main>
       </div>
+
+      {paletteOpen && (
+        <Palette
+          // `?? []` and not a guard on `profiles !== null`: ⌘K during the
+          // first read must still open something, or the shortcut looks
+          // broken on exactly the launch where a user first tries it.
+          profiles={profiles ?? []}
+          connections={connections}
+          // The cluster actually on screen, not the persisted id: while a new
+          // connection is being written there is no cluster in the workspace,
+          // so "Refresh topics" must not claim there is one.
+          selectedId={selected?.id ?? null}
+          commands={paletteCommands}
+          onClose={closePalette}
+        />
+      )}
+
+      {aboutOpen && <AboutDialog version={version} onClose={closeAbout} />}
+
+      {transfer !== null && (
+        <ImportExportDialog
+          initialTab={transfer}
+          onImported={() => void reloadProfiles()}
+          onDangerChange={setTransferDanger}
+          onClose={closeTransfer}
+        />
+      )}
     </div>
   );
 }

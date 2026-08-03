@@ -45,6 +45,21 @@ pub mod secrets {
         }
     }
 
+    /// Whether the keychain holds a value for this entry, without reading it.
+    ///
+    /// The UI needs this to tell the truth about a stored secret: "leave this
+    /// blank to keep the stored password" is a lie if nothing is stored, and
+    /// the profile alone can't answer — it carries a [`SecretRef`], not the
+    /// value. A real keychain failure propagates rather than reading as "no",
+    /// so a locked keychain never gets mistaken for an empty one.
+    pub fn exists(entry: &str) -> Result<bool> {
+        match keyring::Entry::new(SERVICE, entry)?.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Idempotent: deleting a missing entry is not an error.
     pub fn delete(entry: &str) -> Result<()> {
         match keyring::Entry::new(SERVICE, entry)?.delete_credential() {

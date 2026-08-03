@@ -2156,3 +2156,304 @@ select option:disabled { color: var(--text-disabled); }
    chroma down, contrast kept (4.09:1 worst, on a selected row). */
 [data-theme="light"] [data-env="prod"][data-alert="danger"],
 [data-theme="light"] [data-alert="danger"] [data-env="prod"] { --rule: #8A6F6A; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE — rows, and the two dialogs that hang off it
+   Additions only. Every rule below is a NEW selector: the palette shell,
+   the row, the modal and the banner already exist above and are reused
+   verbatim, because the palette's active row must stay pixel-identical to
+   a selected table row (§5.9) and a dialog must stay a modal (§5.8).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The ⌘K chip sits inside the input's box, so the wrapper is the
+   positioning context. No overflow here either — the input's focus ring is
+   drawn outside its box and any ancestor clip would eat it (see .palette). */
+.palette-inputwrap {
+  position: relative;
+  display: block;
+}
+
+.palette-inputwrap .palette-input {
+  /* Room for the chip, so a long query never runs underneath it. */
+  padding-right: 76px;
+}
+
+.palette-inputchip {
+  position: absolute;
+  top: 50%;
+  right: var(--s-6);
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-disabled);
+}
+
+.palette-list {
+  /* ~9 rows, then it scrolls. A palette taller than that is a menu. */
+  max-height: 324px;
+  overflow-y: auto;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.palette-glyph {
+  flex: 0 0 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.palette-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* Scoped so the shared .palette-context colour rule above still owns the
+   colour — this only adds the truncation the row layout needs. */
+.palette-row .palette-context {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+}
+
+/* Fixed slot on the right, so the ⏎ appearing on the active row can never
+   shove the label around as the selection moves. */
+.palette-kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Greyed, never removed — and the row carries the reason as its context
+   line, so the sentence is on screen and not only in the tooltip. */
+.palette-row-disabled,
+.palette-row-disabled .palette-label,
+.palette-row-disabled .palette-context {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.palette-empty {
+  margin: 0;
+  padding: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-6);
+  border-top: 1px solid var(--hairline);
+  border-bottom-left-radius: var(--r-overlay);
+  border-bottom-right-radius: var(--r-overlay);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.palette-foot-sep { color: var(--text-disabled); }
+
+/* ── The ⌘K hint in the status bar ─────────────────────────────────── */
+
+/* Operable, so --hit-min applies (SC 2.5.8) — which is exactly the height
+   of the bar, so it fills it rather than sitting inside it. */
+.statusbar-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--hit-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  cursor: pointer;
+}
+
+.statusbar-hint:hover { color: var(--text-secondary); }
+
+/* ── Sidebar footer: About beside the support link ─────────────────── */
+
+.sidebar-footer-links {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+/* The About control is a button (it opens a dialog, it is not a link), but
+   it has to read as the same quiet footer text as the link next to it. */
+button.support-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.footer-sep { color: var(--text-disabled); font-size: var(--t-sm); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   DIALOGS — About · Export/Import
+   Built entirely from the modal, tab, banner and form primitives above.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Tabs inside a raised surface: the .tabstrip shell paints --bg-canvas,
+   which is wrong on a modal, so only the .tab children are reused. */
+.modal-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-6);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* The app's tab-strip metric, because a bare .tab is only as tall as its
+   text — well under the 24px SC 2.5.8 floor. */
+.modal-tabs .tab { min-height: var(--tabstrip-h); }
+
+/* The import panel is the tallest thing Kavka puts in a modal, and the
+   window's minimum height is 600px: at 14vh from the top that leaves about
+   500px. It scrolls rather than running off the bottom of the window, where
+   Close and Import would be unreachable. Safe to clip here in a way a table
+   well is not: the modal's own 20px padding is five times what the focus
+   ring needs, so no ring is ever cut. */
+.modal-wide {
+  max-height: calc(86vh - var(--s-8));
+  overflow-y: auto;
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+/* A quiet aside under the body copy — the secrets promise, the loading
+   sentence, the fallback address. Never a control, never a warning. */
+.dialog-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.dialog-inline-action {
+  display: flex;
+  gap: var(--s-4);
+}
+
+/* The keyboard path, said out loud — ⏎ inside a textarea is a newline, so
+   the modifier has to be taught rather than guessed at. */
+.dialog-kbd-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* The JSON boxes. Mono comes from the base textarea rule; this only caps
+   the height and stops a long single line from widening the modal. */
+.io-json {
+  max-height: 40vh;
+  white-space: pre;
+  overflow: auto;
+}
+
+.io-strategy {
+  gap: var(--s-6);
+  margin-top: var(--s-1);
+}
+
+/* The base sheet styles checkboxes; radios need the same 18px target and
+   the same accent, or the two controls read as different families. */
+.check-field input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* An info banner inside a modal shares the modal's own --bg-raised fill,
+   so it would read as loose text with a stripe. Sunken gives it back the
+   edge that makes it a banner. */
+.modal .banner-info {
+  background: var(--bg-sunken);
+}
+
+.about-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: var(--s-6) 0 0;
+}
+
+.about-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+}
+
+.about-fact-label {
+  flex: 0 0 96px;
+  color: var(--text-tertiary);
+}
+
+.about-fact-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-6);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the overlay additions
+   Same doctrine as the block above: restate indicators POSITIVELY, one
+   system colour per meaning. No blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* The palette and the dialogs are the only things with real elevation,
+     and forced colors drops the shadow that says so. A border is the only
+     way the surface stays tellable from the canvas behind it. */
+  .palette,
+  .modal { border: 1px solid CanvasText; }
+
+  /* Prod, and every danger context, uses Mark — matching the wire, so the
+     guardrail reads as one signal wherever it appears. */
+  .palette-row-danger .palette-context { color: Mark; }
+
+  /* GrayText is the one colour forced-colors guarantees reads as "off". */
+  .palette-row-disabled,
+  .palette-row-disabled .palette-label,
+  .palette-row-disabled .palette-context { color: GrayText; }
+
+  .banner-info { border-left-color: Highlight; }
+}

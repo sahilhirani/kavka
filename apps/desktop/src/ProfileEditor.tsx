@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   errorMessage,
   profilesDelete,
   profilesSave,
   secretDelete,
+  secretExists,
   secretSet,
   type AuthConfig,
   type ConnectionProfile,
@@ -55,18 +56,36 @@ export function ErrorBanner({
   );
 }
 
-/** Auth kinds fully implemented in this slice. */
-type EditableAuthKind = "plaintext" | "sasl_plain" | "sasl_scram";
+/** Auth kinds the form can create and edit. Everything except Kerberos. */
+type EditableAuthKind =
+  | "plaintext"
+  | "sasl_plain"
+  | "sasl_scram"
+  | "tls"
+  | "aws_msk_iam"
+  | "oauth_bearer";
 
 /** Every control validation can point at. */
-type FieldKey = "name" | "bootstrap" | "username" | "password";
+type FieldKey =
+  | "name"
+  | "bootstrap"
+  | "username"
+  | "password"
+  | "caPath"
+  | "clientCert"
+  | "clientKey"
+  | "region"
+  | "awsProfile"
+  | "tokenEndpoint"
+  | "clientId"
+  | "clientSecret";
 
 interface FieldError {
   field: FieldKey;
   message: string;
 }
 
-/** Why each unimplemented sign-in method is disabled. Never a dead option. */
+/** Why Kerberos is disabled. Never a dead option. */
 const NOT_YET =
   "Kavka can't set this up yet. A connection that already uses it keeps working and is preserved exactly as it is when you save.";
 
@@ -81,6 +100,25 @@ interface FormState {
   password: string;
   mechanism: ScramMechanism;
   tls: boolean;
+  /** mTLS: path to the CA .pem on this machine. */
+  caPath: string;
+  /** mTLS: path to the client certificate .pem on this machine. */
+  clientCert: string;
+  /**
+   * mTLS: the private key's PEM CONTENT, pasted — not a path. NEVER stored in
+   * the profile; sent to secret_set exactly like a password.
+   */
+  clientKey: string;
+  /** MSK IAM: the AWS region the cluster runs in. */
+  region: string;
+  /** MSK IAM: a named profile from ~/.aws, or empty for the default chain. */
+  awsProfile: string;
+  /** OAuth: the URL the identity provider issues tokens at. */
+  tokenEndpoint: string;
+  /** OAuth: the client id the identity provider issued. */
+  clientId: string;
+  /** OAuth: raw client secret. NEVER stored in the profile. */
+  clientSecret: string;
   readOnly: boolean;
 }
 
@@ -94,6 +132,14 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     password: "",
     mechanism: "SCRAM-SHA-256",
     tls: false,
+    caPath: "",
+    clientCert: "",
+    clientKey: "",
+    region: "",
+    awsProfile: "",
+    tokenEndpoint: "",
+    clientId: "",
+    clientSecret: "",
     readOnly: false,
   };
   if (!profile) return base;
@@ -111,9 +157,23 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     base.username = auth.username;
     base.mechanism = auth.mechanism;
     base.tls = auth.tls;
+  } else if (auth.kind === "tls") {
+    base.authKind = "tls";
+    base.caPath = auth.ca_pem_path ?? "";
+    base.clientCert = auth.client_cert_pem_path ?? "";
+    // The key itself lives in the keychain and is never read back into the
+    // form: blank means "leave the stored one alone".
+  } else if (auth.kind === "aws_msk_iam") {
+    base.authKind = "aws_msk_iam";
+    base.region = auth.region;
+    base.awsProfile = auth.profile ?? "";
+  } else if (auth.kind === "oauth_bearer") {
+    base.authKind = "oauth_bearer";
+    base.tokenEndpoint = auth.token_endpoint;
+    base.clientId = auth.client_id;
   }
-  // Other kinds (tls / aws_msk_iam / oauth_bearer / kerberos) are not editable
-  // yet; they fall back to plaintext in the form.
+  // Kerberos is not editable; it falls back to plaintext in the form and is
+  // preserved verbatim on save (see `unsupportedAuth`).
   return base;
 }
 
@@ -123,6 +183,43 @@ function parseBootstrap(raw: string): string[] {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
+
+/** Optional text field → the `null` the Rust side expects, never `""`. */
+function orNull(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** A token endpoint has to be a URL we can actually fetch. */
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which of this profile's secrets the keychain has actually been asked about
+ * and confirmed. Never inferred from the sign-in method: a profile that
+ * arrived through an import carries a SecretRef pointing at nothing on this
+ * machine, and a profile's entry can be removed outside Kavka. Telling that
+ * user their password is "unchanged" hides the problem until the handshake
+ * fails, in the one form that exists to fix it.
+ */
+interface StoredSecrets {
+  password: boolean;
+  clientKey: boolean;
+  clientSecret: boolean;
+}
+
+/** Until the keychain answers, nothing is stored — so the form asks for it. */
+const NOTHING_STORED: StoredSecrets = {
+  password: false,
+  clientKey: false,
+  clientSecret: false,
+};
 
 interface ProfileEditorProps {
   /** null = creating a new profile. */
@@ -170,16 +267,10 @@ export default function ProfileEditor({
       });
   }, []);
 
-  // Auth kinds the form can't edit yet (tls / aws_msk_iam / oauth_bearer /
-  // kerberos): shown read-only and preserved verbatim on save — never silently
-  // downgraded to plaintext.
+  // Kerberos is the one sign-in method the form can't edit: shown read-only
+  // and preserved verbatim on save — never silently downgraded to plaintext.
   const unsupportedAuth =
-    profile !== null &&
-    profile.auth.kind !== "plaintext" &&
-    profile.auth.kind !== "sasl_plain" &&
-    profile.auth.kind !== "sasl_scram"
-      ? profile.auth
-      : null;
+    profile !== null && profile.auth.kind === "kerberos" ? profile.auth : null;
 
   const patch = useCallback((partial: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...partial }));
@@ -194,14 +285,66 @@ export default function ProfileEditor({
     [],
   );
 
-  // The profile already has a stored password secret we can leave untouched.
-  const hasStoredPassword =
-    profile !== null &&
-    (profile.auth.kind === "sasl_plain" || profile.auth.kind === "sasl_scram");
+  /** Switching methods hides controls, so any message about one goes too. */
+  const changeAuthKind = useCallback((authKind: EditableAuthKind) => {
+    setForm((prev) => ({ ...prev, authKind }));
+    setFieldError(null);
+  }, []);
+
+  // The keychain entries THIS profile points at, if any. Plain strings, so the
+  // check below re-runs when the profile changes and not when React hands us a
+  // new object for the same one.
+  const savedAuth = profile?.auth;
+  const passwordEntry =
+    savedAuth &&
+    (savedAuth.kind === "sasl_plain" || savedAuth.kind === "sasl_scram")
+      ? savedAuth.password.entry
+      : null;
+  const clientKeyEntry =
+    savedAuth && savedAuth.kind === "tls"
+      ? (savedAuth.client_key?.entry ?? null)
+      : null;
+  const clientSecretEntry =
+    savedAuth && savedAuth.kind === "oauth_bearer"
+      ? savedAuth.client_secret.entry
+      : null;
+
+  // Secrets this profile already has in the keychain, which a blank input
+  // therefore means "leave alone" rather than "clear". Asked, never assumed.
+  const [stored, setStored] = useState<StoredSecrets>(NOTHING_STORED);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Reset first: while the answer is in flight — and if it never comes —
+    // every secret counts as absent, so the form asks for input instead of
+    // promising to keep something nobody has verified is there.
+    setStored(NOTHING_STORED);
+    const check = (entry: string | null): Promise<boolean> =>
+      entry === null
+        ? Promise.resolve(false)
+        : // A keychain that can't answer is not a keychain that said yes.
+          secretExists(entry).catch(() => false);
+    void Promise.all([
+      check(passwordEntry),
+      check(clientKeyEntry),
+      check(clientSecretEntry),
+    ]).then(([password, clientKey, clientSecret]) => {
+      if (!cancelled) setStored({ password, clientKey, clientSecret });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [passwordEntry, clientKeyEntry, clientSecretEntry]);
+
+  const hasStoredPassword = stored.password;
+  const hasStoredClientKey = stored.clientKey;
+  const hasStoredClientSecret = stored.clientSecret;
 
   const needsPassword =
     (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") &&
     !hasStoredPassword;
+  const needsClientSecret =
+    form.authKind === "oauth_bearer" && !hasStoredClientSecret;
 
   /**
    * Returns the FIRST problem and the control it belongs to, or null. Naming
@@ -220,10 +363,10 @@ export default function ProfileEditor({
         field: "bootstrap",
         message: "Add at least one broker, as host:port — e.g. broker-1:9092",
       };
-    if (
-      !unsupportedAuth &&
-      (form.authKind === "sasl_plain" || form.authKind === "sasl_scram")
-    ) {
+    // Kerberos is preserved as-is; there is nothing here to check.
+    if (unsupportedAuth) return null;
+
+    if (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") {
       if (form.username.trim().length === 0)
         return {
           field: "username",
@@ -235,13 +378,73 @@ export default function ProfileEditor({
           message: "This sign-in method needs a password.",
         };
     }
+
+    if (form.authKind === "tls") {
+      // The certificate and its key travel together: half a pair is a
+      // connection that can only ever fail at the handshake.
+      const certPath = form.clientCert.trim();
+      const typedKey = form.clientKey.trim();
+      if (certPath.length > 0 && typedKey.length === 0 && !hasStoredClientKey)
+        return {
+          field: "clientKey",
+          message:
+            "Paste the private key that goes with that certificate — Kavka needs both halves.",
+        };
+      if (certPath.length === 0 && typedKey.length > 0)
+        return {
+          field: "clientCert",
+          message:
+            "Add the path to the certificate this key belongs to — Kavka needs both halves.",
+        };
+    }
+
+    if (form.authKind === "aws_msk_iam") {
+      if (form.region.trim().length === 0)
+        return {
+          field: "region",
+          message: "Name the region the cluster runs in — e.g. eu-west-1",
+        };
+    }
+
+    if (form.authKind === "oauth_bearer") {
+      if (form.tokenEndpoint.trim().length === 0)
+        return {
+          field: "tokenEndpoint",
+          message:
+            "Add the URL your identity provider issues tokens at — e.g. https://login.example.com/oauth2/token",
+        };
+      if (!isHttpUrl(form.tokenEndpoint.trim()))
+        return {
+          field: "tokenEndpoint",
+          message:
+            "Use the whole URL, starting with https:// — e.g. https://login.example.com/oauth2/token",
+        };
+      if (form.clientId.trim().length === 0)
+        return {
+          field: "clientId",
+          message:
+            "Add the client id your identity provider issued for this application.",
+        };
+      if (needsClientSecret && form.clientSecret.length === 0)
+        return {
+          field: "clientSecret",
+          message: "This sign-in method needs the secret that goes with that client id.",
+        };
+    }
+
     return null;
-  }, [form, needsPassword, unsupportedAuth]);
+  }, [
+    form,
+    needsPassword,
+    needsClientSecret,
+    hasStoredClientKey,
+    unsupportedAuth,
+  ]);
 
   /**
-   * Persist the profile. If a password was entered it is written to the secret
-   * store first; the profile itself only ever carries a SecretRef.
-   * Returns the saved profile, or null on validation/IPC failure.
+   * Persist the profile. Anything secret is written to the OS keychain first;
+   * the profile itself only ever carries a SecretRef. Returns the saved
+   * profile, or null on validation/IPC failure.
    */
   const save = useCallback(async (): Promise<ConnectionProfile | null> => {
     const problem = validate();
@@ -252,7 +455,18 @@ export default function ProfileEditor({
     }
     setFieldError(null);
     const id = profile?.id ?? (draftIdRef.current ??= crypto.randomUUID());
-    const secretEntry = `${id}/password`;
+    const entry = {
+      password: `${id}/password`,
+      clientKey: `${id}/client_key`,
+      clientSecret: `${id}/client_secret`,
+    };
+
+    // Cleared certificate path = the client certificate is being removed, so
+    // the stored key goes with it. Stated in the hint under the key field.
+    const certPath = orNull(form.clientCert);
+    const typedKey = form.clientKey.trim();
+    const keepsClientKey =
+      certPath !== null && (typedKey.length > 0 || hasStoredClientKey);
 
     let auth: AuthConfig;
     if (unsupportedAuth) {
@@ -266,7 +480,7 @@ export default function ProfileEditor({
           auth = {
             kind: "sasl_plain",
             username: form.username.trim(),
-            password: { entry: secretEntry },
+            password: { entry: entry.password },
             tls: form.tls,
           };
           break;
@@ -275,8 +489,31 @@ export default function ProfileEditor({
             kind: "sasl_scram",
             mechanism: form.mechanism,
             username: form.username.trim(),
-            password: { entry: secretEntry },
+            password: { entry: entry.password },
             tls: form.tls,
+          };
+          break;
+        case "tls":
+          auth = {
+            kind: "tls",
+            ca_pem_path: orNull(form.caPath),
+            client_cert_pem_path: certPath,
+            client_key: keepsClientKey ? { entry: entry.clientKey } : null,
+          };
+          break;
+        case "aws_msk_iam":
+          auth = {
+            kind: "aws_msk_iam",
+            region: form.region.trim(),
+            profile: orNull(form.awsProfile),
+          };
+          break;
+        case "oauth_bearer":
+          auth = {
+            kind: "oauth_bearer",
+            token_endpoint: form.tokenEndpoint.trim(),
+            client_id: form.clientId.trim(),
+            client_secret: { entry: entry.clientSecret },
           };
           break;
       }
@@ -291,30 +528,70 @@ export default function ProfileEditor({
       read_only: form.readOnly,
     };
 
-    const writingSecret =
-      !unsupportedAuth &&
-      (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") &&
-      form.password.length > 0;
-    // The stored password is obsolete if auth moves off SASL.
-    const droppingSasl = hasStoredPassword && form.authKind === "plaintext";
+    // What this save puts into the keychain. A blank secret input always
+    // means "keep whatever is stored" — never "clear it".
+    const writes: Array<[string, string]> = [];
+    if (!unsupportedAuth) {
+      if (
+        (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") &&
+        form.password.length > 0
+      )
+        writes.push([entry.password, form.password]);
+      if (form.authKind === "tls" && certPath !== null && typedKey.length > 0)
+        writes.push([entry.clientKey, typedKey]);
+      if (form.authKind === "oauth_bearer" && form.clientSecret.length > 0)
+        writes.push([entry.clientSecret, form.clientSecret]);
+    }
+
+    // Entries this profile still has but the new sign-in method no longer
+    // references. Cleaned up best-effort after the profile is safely saved.
+    const obsolete: string[] = [];
+    if (!unsupportedAuth) {
+      if (
+        hasStoredPassword &&
+        form.authKind !== "sasl_plain" &&
+        form.authKind !== "sasl_scram"
+      )
+        obsolete.push(entry.password);
+      if (hasStoredClientKey && !(form.authKind === "tls" && keepsClientKey))
+        obsolete.push(entry.clientKey);
+      if (hasStoredClientSecret && form.authKind !== "oauth_bearer")
+        obsolete.push(entry.clientSecret);
+    }
 
     setBusy(true);
     try {
-      if (writingSecret) {
-        await secretSet(secretEntry, form.password);
+      for (const [name, value] of writes) {
+        await secretSet(name, value);
       }
       try {
         await profilesSave(next);
       } catch (err) {
-        // Don't leave a fresh secret behind for a profile that never existed.
-        if (writingSecret && isNew) void secretDelete(secretEntry);
+        // Don't leave fresh secrets behind for a profile that never existed.
+        if (isNew) for (const [name] of writes) void secretDelete(name);
         throw err;
       }
-      if (droppingSasl) {
-        // Best-effort cleanup; an orphaned entry is harmless.
-        void secretDelete(secretEntry);
-      }
-      setForm((prev) => ({ ...prev, password: "" }));
+      // Best-effort cleanup; an orphaned entry is harmless.
+      for (const name of obsolete) void secretDelete(name);
+      // The inputs are cleared, so what is stored has to be recorded here or
+      // the next Save asks for a secret this one just wrote. Written entries
+      // are known present; obsolete ones count as gone even though the delete
+      // is best-effort — erring towards "ask again" is the safe direction.
+      const written = new Set(writes.map(([name]) => name));
+      const removed = new Set(obsolete);
+      const settled = (name: string, was: boolean) =>
+        written.has(name) || (was && !removed.has(name));
+      setStored((prev) => ({
+        password: settled(entry.password, prev.password),
+        clientKey: settled(entry.clientKey, prev.clientKey),
+        clientSecret: settled(entry.clientSecret, prev.clientSecret),
+      }));
+      setForm((prev) => ({
+        ...prev,
+        password: "",
+        clientKey: "",
+        clientSecret: "",
+      }));
       return next;
     } catch (err) {
       onError(errorMessage(err));
@@ -330,6 +607,8 @@ export default function ProfileEditor({
     onError,
     unsupportedAuth,
     hasStoredPassword,
+    hasStoredClientKey,
+    hasStoredClientSecret,
   ]);
 
   const handleSave = useCallback(async () => {
@@ -377,6 +656,9 @@ export default function ProfileEditor({
   const connecting = connStatus === "connecting";
   const showSasl =
     form.authKind === "sasl_plain" || form.authKind === "sasl_scram";
+  const showMtls = form.authKind === "tls";
+  const showAws = form.authKind === "aws_msk_iam";
+  const showOauth = form.authKind === "oauth_bearer";
   const waitReason = connecting
     ? "Wait for the connection attempt to finish"
     : busy
@@ -505,9 +787,11 @@ export default function ProfileEditor({
 
         {unsupportedAuth && (
           <span className="field-hint">
-            This connection signs in with <code>{unsupportedAuth.kind}</code>,
-            which Kavka can't edit yet. Saving keeps it exactly as it is; every
-            other field here still works.
+            This connection signs in with Kerberos (
+            <code>{unsupportedAuth.service_name}</code> as{" "}
+            <code>{unsupportedAuth.principal}</code>), which Kavka can't set up
+            yet. Saving keeps it exactly as it is; every other field here still
+            works.
           </span>
         )}
 
@@ -520,7 +804,7 @@ export default function ProfileEditor({
               id="pe-auth-kind"
               value={form.authKind}
               onChange={(e) =>
-                patch({ authKind: e.target.value as EditableAuthKind })
+                changeAuthKind(e.target.value as EditableAuthKind)
               }
             >
               <option value="plaintext">
@@ -532,24 +816,24 @@ export default function ProfileEditor({
               <option value="sasl_scram">
                 Username and password — SASL/SCRAM
               </option>
+              <option value="tls">
+                A certificate this machine presents — mTLS
+              </option>
+              <option value="aws_msk_iam">
+                The AWS credentials on this machine — MSK IAM
+              </option>
+              <option value="oauth_bearer">
+                A token from your identity provider — OAuth 2.0 / OIDC
+              </option>
               {/* Every disabled control says why. No dead ends. */}
-              <option value="tls" disabled title={NOT_YET}>
-                Client certificate (mTLS) — not yet
-              </option>
-              <option value="aws_msk_iam" disabled title={NOT_YET}>
-                AWS MSK IAM — not yet
-              </option>
-              <option value="oauth_bearer" disabled title={NOT_YET}>
-                OAuth / OIDC — not yet
-              </option>
               <option value="kerberos" disabled title={NOT_YET}>
-                Kerberos — not yet
+                A Kerberos ticket — GSSAPI (not yet)
               </option>
             </select>
             <span className="field-hint">
               Managed Kafka usually wants SASL/SCRAM with TLS on. A local
-              broker usually wants nothing at all. The four greyed-out methods
-              arrive in a later release.
+              broker usually wants nothing at all. Kerberos is the one method
+              Kavka can't set up yet.
             </span>
           </div>
         )}
@@ -639,6 +923,258 @@ export default function ProfileEditor({
                 Managed Kafka almost always needs this on. If the broker
                 answers but the handshake fails, this is the first thing to
                 try.
+              </span>
+            </div>
+          </>
+        )}
+
+        {!unsupportedAuth && showMtls && (
+          <>
+            <span className="field-hint">
+              Kavka reads PEM files exactly as they are — there is no JKS or
+              PKCS#12 keystore to convert first.
+            </span>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-ca-path">
+                CA certificate
+              </label>
+              <input
+                id="pe-ca-path"
+                ref={bind("caPath")}
+                type="text"
+                className={cls("caPath", "input-mono")}
+                value={form.caPath}
+                placeholder="/etc/kafka/ca.pem"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("caPath")}
+                aria-describedby={describe("caPath", "pe-ca-path-hint")}
+                onChange={(e) => edit("caPath", { caPath: e.target.value })}
+              />
+              {fieldMessage("caPath")}
+              <span className="field-hint" id="pe-ca-path-hint">
+                Path to the CA .pem — leave empty to use the system trust
+                store.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-client-cert">
+                Client certificate
+              </label>
+              <input
+                id="pe-client-cert"
+                ref={bind("clientCert")}
+                type="text"
+                className={cls("clientCert", "input-mono")}
+                value={form.clientCert}
+                placeholder="/etc/kafka/client.pem"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("clientCert")}
+                aria-describedby={describe(
+                  "clientCert",
+                  "pe-client-cert-hint",
+                )}
+                onChange={(e) =>
+                  edit("clientCert", { clientCert: e.target.value })
+                }
+              />
+              {fieldMessage("clientCert")}
+              <span className="field-hint" id="pe-client-cert-hint">
+                Path to the certificate this machine shows the broker — leave
+                empty if the broker doesn't ask for one.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-client-key">
+                Client private key
+              </label>
+              <textarea
+                id="pe-client-key"
+                ref={bind("clientKey")}
+                rows={5}
+                className={cls("clientKey")}
+                value={form.clientKey}
+                placeholder={
+                  hasStoredClientKey
+                    ? "••••••••  (unchanged)"
+                    : "-----BEGIN PRIVATE KEY-----\n…"
+                }
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("clientKey")}
+                aria-describedby={describe("clientKey", "pe-client-key-hint")}
+                onChange={(e) =>
+                  edit("clientKey", { clientKey: e.target.value })
+                }
+              />
+              {fieldMessage("clientKey")}
+              <span className="field-hint" id="pe-client-key-hint">
+                Paste the key itself, not a path to it. It goes to your
+                operating system's keychain — never into the connection file,
+                and never off this machine.
+                {hasStoredClientKey
+                  ? " Leave it empty to keep the stored key; clearing the certificate path above removes it."
+                  : ""}
+              </span>
+            </div>
+          </>
+        )}
+
+        {!unsupportedAuth && showAws && (
+          <>
+            <span className="field-hint">
+              Kavka signs each request with the AWS credentials already on this
+              machine. The bootstrap servers above have to be this cluster's
+              IAM endpoint — the <code>.amazonaws.com</code> hosts from the MSK
+              console, usually on port 9098.
+            </span>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-region">
+                Region
+              </label>
+              <input
+                id="pe-region"
+                ref={bind("region")}
+                type="text"
+                className={cls("region", "input-mono")}
+                value={form.region}
+                placeholder="eu-west-1"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("region")}
+                aria-describedby={describe("region", "pe-region-hint")}
+                onChange={(e) => edit("region", { region: e.target.value })}
+              />
+              {fieldMessage("region")}
+              <span className="field-hint" id="pe-region-hint">
+                The AWS region the cluster runs in. It has to match the
+                bootstrap hosts, or the signature won't be accepted.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-aws-profile">
+                AWS profile name
+              </label>
+              <input
+                id="pe-aws-profile"
+                ref={bind("awsProfile")}
+                type="text"
+                className={cls("awsProfile", "input-mono")}
+                value={form.awsProfile}
+                placeholder="default"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("awsProfile")}
+                aria-describedby={describe("awsProfile", "pe-aws-profile-hint")}
+                onChange={(e) =>
+                  edit("awsProfile", { awsProfile: e.target.value })
+                }
+              />
+              {fieldMessage("awsProfile")}
+              <span className="field-hint" id="pe-aws-profile-hint">
+                A named profile from <code>~/.aws/config</code>. Leave empty to
+                use the default credential chain — environment variables, then{" "}
+                <code>~/.aws</code>, then SSO.
+              </span>
+            </div>
+          </>
+        )}
+
+        {!unsupportedAuth && showOauth && (
+          <>
+            <span className="field-hint">
+              Kavka asks your identity provider for a token with the client
+              credentials grant, then presents it to the broker as
+              SASL/OAUTHBEARER.
+            </span>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-token-endpoint">
+                Token endpoint
+              </label>
+              <input
+                id="pe-token-endpoint"
+                ref={bind("tokenEndpoint")}
+                type="text"
+                className={cls("tokenEndpoint", "input-mono")}
+                value={form.tokenEndpoint}
+                placeholder="https://login.example.com/oauth2/token"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("tokenEndpoint")}
+                aria-describedby={describe(
+                  "tokenEndpoint",
+                  "pe-token-endpoint-hint",
+                )}
+                onChange={(e) =>
+                  edit("tokenEndpoint", { tokenEndpoint: e.target.value })
+                }
+              />
+              {fieldMessage("tokenEndpoint")}
+              <span className="field-hint" id="pe-token-endpoint-hint">
+                The URL that issues the token, not the sign-in page a browser
+                would use.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-client-id">
+                Client id
+              </label>
+              <input
+                id="pe-client-id"
+                ref={bind("clientId")}
+                type="text"
+                className={cls("clientId", "input-mono")}
+                value={form.clientId}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={invalid("clientId")}
+                aria-describedby={describe("clientId", "pe-client-id-hint")}
+                onChange={(e) => edit("clientId", { clientId: e.target.value })}
+              />
+              {fieldMessage("clientId")}
+              <span className="field-hint" id="pe-client-id-hint">
+                The application your identity provider registered for Kafka —
+                not your own user account.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor="pe-client-secret">
+                Client secret
+              </label>
+              <input
+                id="pe-client-secret"
+                ref={bind("clientSecret")}
+                type="password"
+                className={cls("clientSecret")}
+                value={form.clientSecret}
+                autoComplete="new-password"
+                placeholder={
+                  hasStoredClientSecret
+                    ? "••••••••  (unchanged)"
+                    : "Client secret"
+                }
+                aria-invalid={invalid("clientSecret")}
+                aria-describedby={describe(
+                  "clientSecret",
+                  "pe-client-secret-hint",
+                )}
+                onChange={(e) =>
+                  edit("clientSecret", { clientSecret: e.target.value })
+                }
+              />
+              {fieldMessage("clientSecret")}
+              <span className="field-hint" id="pe-client-secret-hint">
+                Goes to your operating system's keychain — never into the
+                connection file, and never off this machine.
               </span>
             </div>
           </>
