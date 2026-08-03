@@ -2,6 +2,10 @@
 resolver = "2"
 members = [
     "crates/kavka-core",
+    # The MCP server (Phase 5b). A member rather than a binary inside the
+    # desktop package because it must build and run where Tauri, a webview and a
+    # built frontend do not exist — see crates/kavka-mcp/src/lib.rs.
+    "crates/kavka-mcp",
     "apps/desktop/src-tauri",
 ]
 

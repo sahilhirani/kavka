@@ -283,6 +283,21 @@ export interface DecodedPayload {
   /** True when the core cut the value at `max_value_bytes` for display. */
   truncated: boolean;
   schema: SchemaMeta | null;
+  /**
+   * The WASM serde plugin that produced this payload, when one did (Phase 5b).
+   *
+   * ADDITIVE AND ABSENT BY DEFAULT, on exactly the terms `dlq` and `masked`
+   * are: the Rust side skips it when there is no plugin, which is nearly every
+   * record, so a payload's wire form is unchanged for everything the built-in
+   * ladder decoded.
+   *
+   * `encoding` STAYS `"json"` for a plugin's answer, and that is the contract
+   * rather than an omission: a plugin returns canonical JSON, so `json` holds a
+   * tree and `"json"` is a true answer to "how do I read this". The plugin's
+   * name is a provenance fact, and provenance is where it is rendered — see
+   * `provenance` in payload.ts, which is the one reader of this field.
+   */
+  decoded_by?: string | null;
 }
 
 export interface HeaderEntry {
@@ -312,6 +327,23 @@ export interface MessageRecord {
    * test and no view has to sniff header names for itself.
    */
   dlq?: DlqMeta | null;
+  /**
+   * True when a masking rule rewrote something on this record before it crossed
+   * IPC (Phase 5b). See `MaskRule` at the bottom of this file.
+   *
+   * ADDITIVE AND FALSE BY DEFAULT — `?` rather than a plain boolean, for the
+   * same reason `dlq` is optional: the Rust side serde-defaults it, so a record
+   * decoded by an older core simply has no key here and every reader treats
+   * missing and `false` as the same thing.
+   *
+   * IT IS A FLAG ABOUT WHAT ARRIVED, NOT AN INSTRUCTION. The text in `key`,
+   * `value` and `headers` is ALREADY masked when this is true — the raw bytes
+   * did not cross the boundary — so nothing on this side can (or should try to)
+   * reverse it. What the flag buys is honesty downstream: the inspector says
+   * the payload is not verbatim, and the export carries the same sentence into
+   * the toast, so a file of masked records is never mistaken for the topic.
+   */
+  masked?: boolean;
 }
 
 export type SeekSpec =
@@ -918,13 +950,27 @@ export function exportRecords(
  * CSV of it is a header line rather than an empty file. `rows` are positional
  * against that list, exactly as they arrive on `kavka://sql/{id}/rows`.
  */
+/**
+ * `masked` is the one fact a result set cannot carry for itself, which is why
+ * it is an argument here and not on a row.
+ *
+ * A `MessageRecord` arrives with its own `masked` flag — the core sets it per
+ * record — so `exportRecords` reads the truth off what it is about to write. A
+ * row of projected columns has nowhere to put that flag: it is `[3, "•••"]`,
+ * and by the time it reaches the webview the rewriting has already happened and
+ * left no mark. So the caller states it, from what it knows about the session
+ * that produced the rows, and the shell writes the same notice a masked message
+ * export carries. Omitted means "not masked" — the shell defaults it — which
+ * keeps every existing caller correct.
+ */
 export function exportRows(
   path: string,
   format: ExportFormat,
   columns: SqlColumn[],
   rows: JsonValue[][],
+  masked = false,
 ): Promise<void> {
-  return invoke<void>("export_rows", { path, format, columns, rows });
+  return invoke<void>("export_rows", { path, format, columns, rows, masked });
 }
 
 export interface SaveDialogFilter {
@@ -2692,3 +2738,329 @@ export interface DlqMeta {
   exception_message: string | null;
   stacktrace: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5b — the MCP server, the NL→query translator, masking, WASM serdes
+//
+// Same contract shape as every phase before it: snake_case struct fields, and
+// camelCase ONLY in invoke()'s argument keys.
+//
+// THREE THINGS ARE GENUINELY NEW HERE, and all three are about where the
+// answer comes from.
+//
+// 1. THE MCP SERVER IS A SECOND FRONT DOOR ONTO THE SAME DATA. It is a separate
+//    binary reading the SAME profiles.json and the SAME OS keychain, driven by
+//    an AI client rather than by this window. Nothing in this file talks to it:
+//    `mcp_info` returns three strings the About dialog renders so a user can
+//    wire it up, and that is the entire IPC surface. The write gating is the
+//    server's, enforced at ITS start-up from the environment — this window
+//    cannot turn it on, and must never imply that it can.
+//
+// 2. THE TRANSLATOR IS A GRAMMAR, NOT A MODEL. `nl_to_query` is a pure function
+//    in the core over a curated pattern list. It has no network, no weights and
+//    no memory of the last call; the same words always produce the same query.
+//    Everything the UI says about it says exactly that — see NlQueryBar, which
+//    fills the editor and never runs anything.
+//
+// 3. MASKING HAPPENS BEFORE THE IPC BOUNDARY. `mask_payload` runs in the shell,
+//    on the decoded record, on its way to this window — so while a rule is on,
+//    the raw bytes are not in the webview at all. That is what makes the
+//    guarantee worth having and it is also the reason nothing on this side can
+//    "unmask" anything: there is nothing here to unmask. Exports and copies
+//    therefore carry the masked text, and every one of them says so.
+// ---------------------------------------------------------------------------
+
+// ── The MCP server ─────────────────────────────────────────────────────────
+
+/**
+ * Where the stdio MCP server lives on this machine, and two ready-to-paste
+ * client configurations for it.
+ *
+ * The snippets are built by the SHELL rather than assembled here, and that is
+ * deliberate: only the Rust side knows the real, resolved path of the binary
+ * next to the running app (which differs between a dev build, an installed
+ * `.app`, an AppImage and a Windows install directory), and a snippet with a
+ * path the user has to fix by hand is a snippet that teaches nothing. Rendered
+ * verbatim, in a mono block, with a copy button — never re-formatted here.
+ */
+export interface McpInfo {
+  binary_path: string;
+  /** `claude mcp add …` — a shell command. */
+  snippet_claude: string;
+  /** The `.cursor/mcp.json` object — JSON. */
+  snippet_cursor: string;
+}
+
+export function mcpInfo(): Promise<McpInfo> {
+  return invoke<McpInfo>("mcp_info");
+}
+
+/**
+ * THE TWO ENVIRONMENT VARIABLES THAT GATE EVERY WRITE, mirrored so the UI can
+ * name them exactly.
+ *
+ * They are read by the SERVER at start-up, not by this app and not per call, so
+ * the sentence next to them has to be about how the client launches it. A
+ * refusal from the server names the variable it wanted; these constants are
+ * what keeps the app's explanation and that refusal spelling the same string.
+ */
+export const MCP_ALLOW_WRITES_ENV = "KAVKA_MCP_ALLOW_WRITES";
+export const MCP_ALLOW_PROD_ENV = "KAVKA_MCP_ALLOW_PROD";
+
+/**
+ * The third of the same kind, and the only one that is an opt-OUT.
+ *
+ * The MCP server honours this connection's masking rules by default: it reads
+ * `masking.json` from the same folder as `profiles.json`, so the rules written
+ * in the Masking tab apply to what an assistant is handed, and an answer they
+ * rewrote says so. Starting the server with this set to 1 turns that off.
+ *
+ * Same shape as the two above — read once, by the server, at start-up — for
+ * the same reason: what a running server may hand out belongs in the client's
+ * config file beside the command, not in something the assistant can ask for.
+ */
+export const MCP_UNMASKED_ENV = "KAVKA_MCP_UNMASKED";
+
+/**
+ * What the server exposes, mirrored from its self-description for the same
+ * reason `SQL_SURFACE` is mirrored: a tool list in a screenshot that the server
+ * does not actually serve is worse than no list, because the user spends their
+ * afternoon debugging their client.
+ *
+ * CONTRACT FRICTION — flagged, not resolved. The canonical list is the server's
+ * own `tools/list` response, and there is no command that hands it to this
+ * window; so this is a second copy, kept in step by hand. The day the shell
+ * exposes the server's descriptor (or the app speaks to it over stdio itself),
+ * these two constants should become a call.
+ */
+export const MCP_READ_TOOLS: ReadonlyArray<{ name: string; what: string }> = [
+  { name: "kavka_list_profiles", what: "The connections saved on this machine." },
+  { name: "kavka_cluster_overview", what: "Brokers, topic and partition counts." },
+  { name: "kavka_list_topics", what: "Every topic, with partitions and replication." },
+  { name: "kavka_topic_detail", what: "One topic's partitions, watermarks and config." },
+  { name: "kavka_fetch_messages", what: "Records from a seek point — at most 500." },
+  { name: "kavka_search", what: "A bounded scan; matches and counts, never the whole topic." },
+  { name: "kavka_sql", what: "SQL over a bounded scan of one topic." },
+  { name: "kavka_groups", what: "Consumer groups and their states." },
+  { name: "kavka_group_detail", what: "One group's members, offsets and lag." },
+];
+
+export const MCP_WRITE_TOOLS: ReadonlyArray<{ name: string; what: string }> = [
+  { name: "kavka_produce", what: "Send one record to a topic." },
+  { name: "kavka_reset_offsets", what: "Move a consumer group's committed offsets." },
+];
+
+// ── Plain English → a query ────────────────────────────────────────────────
+
+/** Which editor the answer is going into. */
+export type NlMode = "cel" | "sql";
+
+/**
+ * What the translator is allowed to assume about the payload's shape.
+ *
+ * `json_fields` are top-level keys Kavka has actually SEEN on this topic, so
+ * "orderId over 100" can become `value.orderId > 100` rather than a guess. An
+ * empty list is normal and never an error: the grammar still handles keys,
+ * partitions, offsets and time, and it reports the field words it could not
+ * place in `unrecognized` instead of inventing a column.
+ */
+export interface NlSchemaHint {
+  json_fields: string[];
+}
+
+/** How much of the input the grammar actually accounted for. */
+export type NlConfidence = "high" | "low";
+
+/**
+ * One translation. Four fields, and every one of them is on screen.
+ *
+ * `query` FILLS THE EDITOR AND IS NEVER RUN. That is the whole safety model of
+ * this feature: a grammar that mis-reads a sentence produces a query the user
+ * reads before pressing the button they were always going to press.
+ *
+ * `unrecognized` is the honest half — the phrases the grammar dropped on the
+ * floor. A translator that silently ignores half a sentence and answers
+ * confidently is the failure mode this field exists to prevent, and `low`
+ * confidence is what the UI paints a caution style around.
+ */
+export interface NlTranslation {
+  query: string;
+  confidence: NlConfidence;
+  /** One sentence, in Kavka's words, saying what the query will match. */
+  explanation: string;
+  unrecognized: string[];
+}
+
+/**
+ * PURE, AND NOT AN LLM. The core translates against a fixed pattern grammar:
+ * no network, no model, no state between calls, and the same words always
+ * produce the same query. Every screen that renders this says so — see
+ * NlQueryBar — because a "plain English" box that looks like an assistant and
+ * is a lookup table would be the most dishonest control in the product.
+ *
+ * The road to real AI assistance is the MCP server, which is why the bar points
+ * at it rather than apologising for itself.
+ */
+export function nlToQuery(
+  input: string,
+  mode: NlMode,
+  schemaHint: NlSchemaHint,
+): Promise<NlTranslation> {
+  return invoke<NlTranslation>("nl_to_query", { input, mode, schemaHint });
+}
+
+/**
+ * EVERY SENTENCE THE GRAMMAR ACCEPTS, in the core's own words.
+ *
+ * The text is `kavka_core::nlq::NLQ_GRAMMAR`, which is checked against the
+ * implementation by a test — so a pattern the grammar grew and the doc did not
+ * mention fails the build rather than the user. That is exactly why this is a
+ * CALL and not a constant copied into this file: a cheatsheet that drifts from
+ * the engine teaches expressions that do nothing.
+ *
+ * CONTRACT FRICTION — flagged, not smuggled. The Phase 5b IPC contract names
+ * one translator command (`nl_to_query`), and the core's `nlq_grammar()` was
+ * written "so the UI has something to call over IPC" with no command behind it
+ * yet. The name here is the guess with the most votes — the sibling command is
+ * `nl_to_query`, so `nl_` is the prefix — and EVERY CALLER MUST TREAT A
+ * REJECTION AS "this build doesn't publish it" rather than as an error: see
+ * NlQueryBar, which falls back to its own one-paragraph summary and says where
+ * the full list lives. Nothing is broken if the command never lands; the bar is
+ * simply less useful, which is the honest shape for a guess.
+ */
+export function nlGrammar(): Promise<string> {
+  return invoke<string>("nl_grammar");
+}
+
+// ── Masking ────────────────────────────────────────────────────────────────
+
+/** Which part of a record a rule reads. `all` is the three of them together. */
+export type MaskScope = "value" | "key" | "headers" | "all";
+
+/** What a masked run becomes when the rule doesn't say. Three bullets. */
+export const DEFAULT_MASK_REPLACEMENT = "•••";
+
+/**
+ * One masking rule, stored per profile beside the alert rules.
+ *
+ * `pattern` is a regular expression in the CORE's dialect (Rust's `regex`),
+ * which is not quite this window's: it has no back-references and no
+ * look-around, and it is linear-time precisely because of that. The editor's
+ * live preview runs in the webview's engine, so it is an approximation and says
+ * so — the compile that matters happens in the core.
+ *
+ * `enabled: false` is a rule that is written down and not in force. It is a
+ * real state worth keeping: masking a field is usually a decision about one
+ * incident, and deleting the rule to see the raw value loses the pattern
+ * somebody worked out.
+ */
+export interface MaskRule {
+  id: string;
+  name: string;
+  pattern: string;
+  replacement: string;
+  applies_to: MaskScope;
+  enabled: boolean;
+}
+
+export function maskingList(profileId: string): Promise<MaskRule[]> {
+  return invoke<MaskRule[]>("masking_list", { profileId });
+}
+
+/** Upsert by `rule.id`. Local only — it never touches the cluster. */
+export function maskingSave(profileId: string, rule: MaskRule): Promise<void> {
+  return invoke<void>("masking_save", { profileId, rule });
+}
+
+export function maskingDelete(profileId: string, ruleId: string): Promise<void> {
+  return invoke<void>("masking_delete", { profileId, ruleId });
+}
+
+/**
+ * Turn one rule on or off without rewriting it.
+ *
+ * CONTRACT FRICTION — flagged, not resolved. The Phase 5b contract names four
+ * commands (`list/save/delete/toggle`) and also asks for a "session-scoped
+ * toggle in the UI status bar", and those are two different switches: this one
+ * is per RULE and persists, while a session switch would have to be per
+ * CONNECTION and live only as long as the window. This wrapper is the per-rule
+ * reading, because that is the field `MaskRule` actually carries.
+ *
+ * There is deliberately no session switch on this side. Masking is applied in
+ * the shell BEFORE records cross IPC, so the raw bytes are never in the webview
+ * while a rule is on — which means nothing here could honour a "show me the
+ * real values" toggle, and a control that looked like it did would be lying
+ * about the one guarantee this feature sells. The status-bar chip therefore
+ * reports and points at the rules; the switch is the rule's own.
+ */
+export function maskingToggle(
+  profileId: string,
+  ruleId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("masking_toggle", { profileId, ruleId, enabled });
+}
+
+// ── WASM decoder plugins ───────────────────────────────────────────────────
+
+/**
+ * One custom decoder, stored per profile.
+ *
+ * `path` is a file on THIS machine — the plugin is never carried inside the
+ * profile and never travels with an export, for the same reason a certificate
+ * path doesn't: a `.wasm` that arrived with someone else's connection file is
+ * code you did not choose to run.
+ *
+ * `applies_to_topics` are globs. An empty list means the plugin is configured
+ * and matches nothing, which is a real state (a plugin being set up) and not
+ * the same as "every topic" — so the editor says so rather than guessing.
+ */
+export interface WasmSerdeConfig {
+  name: string;
+  path: string;
+  applies_to_topics: string[];
+}
+
+export function wasmSerdesList(profileId: string): Promise<WasmSerdeConfig[]> {
+  return invoke<WasmSerdeConfig[]>("wasm_serdes_list", { profileId });
+}
+
+/** Upsert by `config.name` — the name is the identity, as it is on the wire. */
+export function wasmSerdesSave(
+  profileId: string,
+  config: WasmSerdeConfig,
+): Promise<void> {
+  return invoke<void>("wasm_serdes_save", { profileId, config });
+}
+
+export function wasmSerdesDelete(
+  profileId: string,
+  name: string,
+): Promise<void> {
+  return invoke<void>("wasm_serdes_delete", { profileId, name });
+}
+
+/** The ABI a plugin has to implement. v1 is the stable contract. */
+export const WASM_ABI_VERSION = 1;
+
+/** Linear memory one plugin instance may occupy. */
+export const WASM_MEMORY_CAP_BYTES = 10 * 1024 * 1024;
+
+/**
+ * THE PER-RECORD CEILING IS FUEL, NOT A CLOCK — and the editor says so in the
+ * engine's own terms rather than quoting a millisecond number that is not what
+ * is enforced.
+ *
+ * Fuel is a count of executed WebAssembly operations, so the limit bounds
+ * WORK and is deterministic: a plugin that runs on one laptop cannot
+ * mysteriously fail on a slower one, because a slower machine gets the same
+ * number of operations and more time. What that budget costs in milliseconds
+ * depends on which operations they are, which is why the second constant is a
+ * measured RANGE and is written as an approximation everywhere it appears.
+ *
+ * Both come from `kavka_core::wasm_serde::FUEL_PER_RECORD` and the calibration
+ * test beside it (`the_fuel_budget_is_calibrated`, which prints the numbers
+ * rather than asserting on them).
+ */
+export const WASM_FUEL_PER_RECORD = 100_000_000;
+export const WASM_FUEL_MS_APPROX = "2–20 ms";

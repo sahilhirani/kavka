@@ -398,11 +398,19 @@ export default function TopicsTab({
    * and the NEXT failure's headers describe that failure rather than this one.
    * Everything is a prefill: the form is the user's, and a value they want to
    * fix before replaying is exactly what this screen is for.
+   *
+   * A MASKED RECORD NEVER GETS HERE. The inspector disables the action with the
+   * reason (`replayBlockedWhy`), and this refuses it again — because the
+   * consequence is a write: what this window holds for a masked record is
+   * Kavka's replacement text, so a prefill from one would offer to produce
+   * `•••` to a live topic under `kavka.dlq.replayed.from.*` headers claiming it
+   * is the original. A disabled button is a courtesy; this is the guard.
    */
   const reproduce = useCallback(
     (record: MessageRecord) => {
       const original = record.dlq?.original_topic ?? null;
       if (original === null || topic === null) return;
+      if (record.masked === true) return;
       setProducing({
         topic: original,
         prefill: {

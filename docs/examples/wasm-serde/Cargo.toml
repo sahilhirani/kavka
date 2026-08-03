@@ -1,0 +1,33 @@
+# A standalone crate on purpose: `[workspace]` below makes this its own
+# workspace root, so it is not a member of Kavka's and `cargo build` inside this
+# directory works without touching the repo's manifest. It also means this
+# example is never built by Kavka's CI — the committed artefact is source, and
+# the README says how to build it.
+[workspace]
+
+[package]
+name = "kavka-acme-serde"
+description = "Example Kavka WASM serde plugin (ABI v1) — decodes the made-up ACME1 wire format"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[lib]
+# `cdylib` is what produces a `.wasm` with our exports and no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+# None, deliberately. ABI v1 hands the plugin bytes and takes back bytes, so a
+# decoder needs no runtime, no allocator crate and no serde — this one writes
+# its JSON with `core::fmt`. A plugin that wants serde_json can have it; it is
+# +~40 KB of `.wasm` and it works, because the module still imports nothing.
+
+[profile.release]
+# A serde plugin is loaded once and run per record, so size is the only thing
+# worth tuning here: `opt-level = "z"` plus LTO takes this module from about
+# 1.6 MB to about 20 KB.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

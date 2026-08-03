@@ -4957,3 +4957,403 @@ select.input-invalid { border-color: var(--danger); }
   /* The current step is weight and a border, never a fill. */
   .wizard-step-active .wizard-step-n { border-color: Highlight; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 5b — the plain-English bar, the MCP section, masking
+   Nothing here invents a vocabulary: the bar is a form row, the MCP
+   snippets are the banner's raw block, and every masking indicator is a
+   chip or a note that already exists somewhere else in this file.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Plain English → the editor ────────────────────────────────────── */
+
+/* A row of the seek-bar family, not a panel: it belongs to the control it
+   writes into, so it takes the same label metrics and no box of its own. */
+/* No padding of its own: every child of .messages-head sits flush and the
+   column's gap does the spacing, so an inset here would indent the one
+   control that is supposed to read as part of the editor below it. */
+.nlbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.nlbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.nlbar-row .seekbar-label { flex: 0 0 auto; }
+
+.nlbar-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+}
+
+.nlbar-input::placeholder { color: var(--text-placeholder); }
+.nlbar-input:focus { border-color: var(--accent); }
+
+/* The answer. A left rule in the semantic colour — the ledger device at
+   note scale, exactly as a toast wears it — and no fill in the confident
+   case, because a translation that worked is not an event. */
+.nlbar-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: var(--measure);
+  padding: var(--s-3) 0 var(--s-3) var(--s-5);
+  border-left: 2px solid var(--hairline-strong);
+}
+
+/* Low confidence: the caution colour, AND the sentence above it, AND the
+   chips below. Three channels — never the border alone (Law 2). */
+.nlbar-result-low {
+  border-left-color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.nlbar-caution {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  font-weight: var(--w-medium);
+}
+
+.nlbar-explanation {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.nlbar-unknown {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.nlbar-unknown-label { color: var(--text-tertiary); }
+.nlbar-unknown-tail { color: var(--text-tertiary); }
+
+/* A filter chip's shape — --r-control, not a pill: a pill reads immutable,
+   and these are phrases the user is about to rewrite. */
+.nlbar-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 18px;
+}
+
+.nlbar-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The grammar, verbatim from the core: a fixed-width block that scrolls in
+   both directions rather than wrapping — the two columns of every line are
+   the pattern and its synonyms, and a wrap makes them one column of mush. */
+.nlbar-grammar {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  user-select: text;
+}
+
+/* ── The MCP section in About ──────────────────────────────────────── */
+
+.mcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+.mcp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.mcp-label {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+/* The path is a literal someone pastes elsewhere: mono, selectable, and
+   allowed to ellipsis rather than to break the dialog's width. */
+.mcp-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.mcp-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.mcp-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+/* Verbatim: it scrolls sideways rather than wrapping, because a wrapped
+   JSON snippet is a snippet somebody pastes wrong. */
+.mcp-code {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.mcp-subhead {
+  margin: var(--s-4) 0 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tool {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+}
+
+.mcp-tool code {
+  flex: 0 0 auto;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+}
+
+.mcp-tool-what { color: var(--text-secondary); }
+
+.mcp-gates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+}
+
+.mcp-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.mcp-gate dt code {
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.mcp-gate dd {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The one external link in here goes through About's allowlisted helper,
+   so it is a button wearing the link's clothes. */
+.mcp-repo-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ── Masking ───────────────────────────────────────────────────────── */
+
+/* The status-bar chip. Same shape as the read-only chip beside it — both
+   are conditions the connection is in — and it always carries a number,
+   never a bare mark. */
+.mask-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 18px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+}
+
+/* The inspector's notice. Above the tabs, in the warn vocabulary, with the
+   bullets themselves as the glyph — the mark and the sentence say the same
+   thing, so neither is load-bearing alone. */
+.mask-notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  margin: 0;
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--warn-tint);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.mask-notice-mark {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+/* A masked payload reads one step quieter than a verbatim one: the text is
+   what arrived, but it is not what the producer sent. */
+.inspector-masked .code-text { color: var(--text-secondary); }
+
+.mask-pattern {
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row's switch. The word is the state; the box is how you change it. */
+.mask-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--hit-min);
+  cursor: pointer;
+}
+
+.mask-switch-word {
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-secondary);
+}
+
+/* A list inside a panel carries its own inset, exactly as `.table-note` and
+   `.sql-surface-list` do — the panel owns the gap, never the padding. */
+.mask-consequences {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0 var(--s-5) var(--s-5) calc(var(--s-5) + var(--s-6));
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.mask-consequences strong {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.mask-sample { min-height: calc(var(--lh-base) * 2 + var(--s-5)); }
+
+.mask-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-left: var(--s-5);
+  border-left: 2px solid var(--accent-quiet);
+}
+
+.mask-preview-out {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mask-preview-count,
+.mask-preview-none {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Phase 5b additions
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning, and never a blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Masking is a condition rather than a severity — but it is the one that
+     changes what the data MEANS, so it takes the same Mark the prod wire
+     and every danger indicator use. The words are already there. */
+  .mask-chip { border-color: Mark; color: Mark; }
+  .mask-notice-mark { color: Mark; }
+
+  /* A low-confidence translation loses its tint here, so the border is the
+     only channel left and it must not fade into the hairline. */
+  .nlbar-result-low { border-left-color: Mark; }
+  .nlbar-caution { color: Mark; }
+
+  /* The preview is a positive indicator — the thing you asked to see. */
+  .mask-preview { border-left-color: Highlight; }
+}

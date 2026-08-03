@@ -19,6 +19,7 @@ import {
 import { classifyError } from "./errors";
 import { Term } from "./Glossary";
 import { formatSpan } from "./monitoring";
+import WasmSerdesFields from "./WasmSerdesFields";
 
 /**
  * The three-layer error banner from DESIGN.md §5.8 / §7: plain title, then
@@ -2050,6 +2051,11 @@ export default function ProfileEditor({
           </span>
         </div>
       </fieldset>
+
+      {/* Custom decoders — independent of everything above, and stored beside
+          the connection rather than inside it. The section states that, since
+          it is the one part of this form that writes as you type. */}
+      <WasmSerdesFields profileId={profile?.id ?? null} />
 
       <div className="check-field">
         <input

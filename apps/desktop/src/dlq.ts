@@ -60,6 +60,46 @@ export function isDlqHeader(name: string): boolean {
   return DLQ_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix));
 }
 
+/** The sentence a read-only connection blocks a replay with. */
+export const REPLAY_READ_ONLY_WHY =
+  "This connection is read-only. Turn that off in the connection's settings to produce or edit.";
+
+/**
+ * A MASKED RECORD CANNOT BE REPLAYED, and this is why.
+ *
+ * Masking runs in the core, on the decoded record, before it crosses IPC — so
+ * a masked payload in this window is `•••` and the original bytes are not here
+ * to send. A replay of it would produce the REPLACEMENT to the topic the record
+ * originally failed on: a real record, on a real topic, carrying Kavka's
+ * redaction where the customer's data was, with `kavka.dlq.replayed.from.*`
+ * headers claiming it came from somewhere. That is the one masking failure that
+ * writes.
+ *
+ * So the action is disabled with the reason, rather than hidden or silently
+ * degraded — DESIGN §5.8: a control that cannot act says what would make it
+ * able to. The way out is the user's own rule, and the sentence names it.
+ */
+export const REPLAY_MASKED_WHY =
+  "Re-producing is blocked: this record was masked on its way here — turn the rule off in the Masking settings and fetch again to re-produce the real bytes.";
+
+/**
+ * Why this record cannot be sent back to its original topic, or `undefined`
+ * when it can.
+ *
+ * Read-only first: it is a property of the connection rather than of the
+ * record, so it is the answer for every row on the screen and naming the
+ * masking rule to somebody whose real obstacle is read-only would send them to
+ * the wrong settings page.
+ */
+export function replayBlockedWhy(
+  readOnly: boolean,
+  record: MessageRecord,
+): string | undefined {
+  if (readOnly) return REPLAY_READ_ONLY_WHY;
+  if (record.masked === true) return REPLAY_MASKED_WHY;
+  return undefined;
+}
+
 /** How Kavka names a convention in prose. Unknown values pass through. */
 export function conventionWord(convention: string): string {
   switch (convention) {

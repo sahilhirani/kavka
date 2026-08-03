@@ -8,6 +8,7 @@ import {
   type ConnectionProfile,
   type ConnState,
 } from "./api";
+import { maskingChipLabel, maskingChipTitle, useMasking } from "./masking";
 import Sidebar from "./Sidebar";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
 import ClusterView, { stageTopic } from "./ClusterView";
@@ -304,6 +305,12 @@ export default function App() {
     status: "disconnected",
   };
 
+  // Masking is a per-connection condition, so its chip sits beside the
+  // read-only one. The count comes from the same store the Masking tab writes,
+  // which is why the status bar is correct the moment a rule is saved rather
+  // than on the next connect.
+  const masking = useMasking(selected?.id ?? null);
+
   let main: React.ReactNode;
   if (profiles === null) {
     // Never a full-screen spinner. A sentence says what we are waiting for.
@@ -552,6 +559,19 @@ export default function App() {
                       title="This connection is read-only. Turn that off in the connection's settings to produce or edit."
                     >
                       read-only
+                    </span>
+                  )}
+                  {/* Masking, said out loud wherever data is. A payload that
+                      has been rewritten on its way here must never look like
+                      what the producer sent, and the number is part of the
+                      claim — "on" with nothing to say how much is not a
+                      statement anyone can act on. */}
+                  {masking.enabled > 0 && (
+                    <span
+                      className="mask-chip"
+                      title={maskingChipTitle(masking)}
+                    >
+                      {maskingChipLabel(masking)}
                     </span>
                   )}
                 </>

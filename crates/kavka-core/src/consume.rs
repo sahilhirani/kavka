@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "kafka")]
 use crate::connection::auth::KavkaClientContext;
 #[cfg(feature = "kafka")]
-use crate::serdes::{self, DEFAULT_MAX_VALUE_BYTES};
+use crate::serdes::{self, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
 #[cfg(feature = "kafka")]
@@ -205,6 +205,11 @@ pub fn fetch_messages(
         .map_err(|e| Error::Other(format!("assigning partitions of {}: {e}", spec.topic)))?;
 
     let registry = profile_sr.map(SchemaRegistry::new);
+    // Asked once, before the first poll — the plugin set belongs to the
+    // connection and was compiled when it opened
+    // ([`ClusterConnection::decoder_for`]). `None` is the common case and the
+    // whole cost of not having a plugin.
+    let decoder = conn.decoder_for(&spec.topic);
     // partition -> the end watermark it must reach to be finished.
     let mut pending: HashMap<i32, i64> =
         plan.iter().map(|slot| (slot.partition, slot.end)).collect();
@@ -245,7 +250,12 @@ pub fn fetch_messages(
                     pending.remove(&partition);
                     continue;
                 }
-                records.push(record(&message, registry.as_ref(), max_display));
+                records.push(record(
+                    &message,
+                    registry.as_ref(),
+                    max_display,
+                    decoder.as_ref(),
+                ));
                 if offset + 1 >= end {
                     pending.remove(&partition);
                 }
@@ -501,7 +511,12 @@ fn record(
     message: &BorrowedMessage<'_>,
     registry: Option<&SchemaRegistry>,
     max_display: usize,
+    decoder: Option<&SharedDecoder>,
 ) -> MessageRecord {
+    // Resolved once per record into the borrow `decode_with` takes; the plugin
+    // itself was compiled when the connection opened
+    // ([`ClusterConnection::decoder_for`]).
+    let custom = decoder.map(|plugin| plugin.as_ref());
     let headers = message.headers().map_or_else(Vec::new, |headers| {
         (0..headers.count())
             .map(|i| {
@@ -516,16 +531,17 @@ fn record(
         timestamp_ms: message.timestamp().to_millis(),
         key: message
             .key()
-            .map(|bytes| serdes::decode(bytes, registry, max_display)),
+            .map(|bytes| serdes::decode_with(bytes, registry, max_display, custom)),
         // `None` here is a tombstone, not an empty value — the two are
         // different facts about a compacted topic.
         value: message
             .payload()
-            .map(|bytes| serdes::decode(bytes, registry, max_display)),
+            .map(|bytes| serdes::decode_with(bytes, registry, max_display, custom)),
         // Before `headers` moves. `None` for every record that is not a dead
         // letter, which costs one pass over a short list and nothing on the
         // wire (see `MessageRecord::dlq`).
         dlq: serdes::dlq_inspect(&headers),
+        masked: false,
         headers,
     }
 }
@@ -591,6 +607,9 @@ impl TailSession {
             .map_err(|e| Error::Other(format!("assigning partitions of {topic}: {e}")))?;
 
         let registry = profile_sr.map(SchemaRegistry::new);
+        // Resolved on this thread and MOVED into the pump: the tail outlives
+        // this call, so it cannot borrow the connection.
+        let decoder = conn.decoder_for(topic);
         let shared = Arc::new(TailShared {
             queue: Mutex::new(TailQueue::default()),
             ready: Condvar::new(),
@@ -604,7 +623,7 @@ impl TailSession {
             std::thread::Builder::new()
                 .name("kavka-tail".into())
                 .spawn(move || {
-                    pump(&consumer, registry.as_ref(), &shared, &topic);
+                    pump(&consumer, registry.as_ref(), decoder, &shared, &topic);
                     shared.finish();
                 })
                 .map_err(|e| Error::Other(format!("starting the live tail thread: {e}")))?
@@ -722,6 +741,7 @@ impl TailShared {
 fn pump(
     consumer: &BaseConsumer<KavkaClientContext>,
     registry: Option<&SchemaRegistry>,
+    decoder: Option<SharedDecoder>,
     shared: &TailShared,
     topic: &str,
 ) {
@@ -729,7 +749,12 @@ fn pump(
         match consumer.poll(TAIL_POLL) {
             None => {}
             Some(Ok(message)) => {
-                shared.push(record(&message, registry, DEFAULT_MAX_VALUE_BYTES));
+                shared.push(record(
+                    &message,
+                    registry,
+                    DEFAULT_MAX_VALUE_BYTES,
+                    decoder.as_ref(),
+                ));
             }
             Some(Err(e)) => {
                 // The session ends rather than spinning on a broker that is
@@ -860,6 +885,7 @@ mod tests {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         })
         .expect("connect")
     }

@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import McpSection from "./McpSection";
 import Overlay from "./Overlay";
 
 /**
@@ -27,10 +28,15 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
   // URL). When it does, the address is put on screen to copy instead.
   const [unopened, setUnopened] = useState<string | null>(null);
 
-  const open = (url: string) => {
+  const open = useCallback((url: string) => {
     setUnopened(null);
     openUrl(url).catch(() => setUnopened(url));
-  };
+  }, []);
+
+  // The MCP section points at the example plugin in the repo. It goes through
+  // the same helper rather than calling `openUrl` itself, so the capability
+  // allowlist still has exactly two literals to match.
+  const openRepo = useCallback(() => open(REPO_URL), [open]);
 
   const link = (url: string, text: string) => (
     <a
@@ -47,7 +53,10 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
 
   return (
     <Overlay
-      surfaceClass="modal"
+      // Wide, and it scrolls: the MCP section carries two config snippets that
+      // are literals someone pastes elsewhere, and re-wrapping them to fit a
+      // 440px dialog would make them wrong.
+      surfaceClass="modal modal-wide"
       labelledBy="about-title"
       initialFocus={closeRef}
       onClose={onClose}
@@ -76,6 +85,8 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
           </dd>
         </div>
       </dl>
+
+      <McpSection onOpenRepo={openRepo} />
 
       <div className="about-links">
         {link(REPO_URL, "github.com/sahilhirani/kavka")}

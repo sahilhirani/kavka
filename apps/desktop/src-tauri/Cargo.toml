@@ -14,7 +14,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-kavka-core = { path = "../../../crates/kavka-core", features = ["kafka-ssl"] }
+# `wasm-serdes` is named even though `kafka-ssl` already implies it (see the
+# core's Cargo.toml). Spelled out rather than inherited because it is the
+# feature this shell has commands for — `wasm_serdes_list/save/delete`, and the
+# plugin step of the decode ladder that `ClusterConnection::decoder_for` feeds —
+# so the day somebody re-cuts the feature tiers, the thing that breaks is this
+# line rather than a ProfileEditor section that silently decodes nothing.
+kavka-core = { path = "../../../crates/kavka-core", features = [
+    "kafka-ssl",
+    "wasm-serdes",
+] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 # The Rust half of @tauri-apps/plugin-dialog. Present for one command — the OS

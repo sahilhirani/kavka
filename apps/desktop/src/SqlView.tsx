@@ -20,6 +20,8 @@ import { useDangerSignal, type DangerReport } from "./danger";
 import ExportButton from "./ExportButton";
 import { approxCount, groupDigits } from "./format";
 import HelpPopover from "./HelpPopover";
+import { useMasking } from "./masking";
+import NlQueryBar from "./NlQueryBar";
 import { ErrorBanner } from "./ProfileEditor";
 import ResultGrid, { type ResultGridHandle } from "./ResultGrid";
 import SeekBar, {
@@ -126,6 +128,24 @@ export default function SqlView({
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
   useDangerSignal(error !== null, onDanger);
+
+  /**
+   * WHETHER THIS RESULT SET CARRIES MASKED TEXT — and why it is the rule count
+   * rather than a flag off the rows.
+   *
+   * The shell masks SQL rows on their way to this window, cell by cell
+   * (`mask_rows`), and a projected row has nowhere to carry a `masked` flag the
+   * way a `MessageRecord` does: what arrives is `[3, "•••"]`, with the
+   * rewriting already done and unmarked. So the honest thing this view CAN say
+   * is that rules were in force while the query ran — which is exactly what an
+   * exported file's notice claims ("some values here are not the values on the
+   * topic"), and it is the same direction of error as the message export: it
+   * over-warns rather than under-warns, and a file that says it might be
+   * redacted when it is not is a footnote, while the reverse is evidence
+   * somebody trusted.
+   */
+  const masking = useMasking(profile.id);
+  const rowsMayBeMasked = masking.enabled > 0;
 
   const known = useMemo(
     () => new Set(partitions.map((p) => p.partition)),
@@ -335,10 +355,28 @@ export default function SqlView({
               capped={
                 capped ? { shown: rows.length, total: scanned, kind: "sql" } : null
               }
+              masked={rowsMayBeMasked}
               push={push}
             />
           </div>
         </div>
+
+        {/* PLAIN ENGLISH, ABOVE THE EDITOR IT WRITES INTO — and it only ever
+            writes. The query lands in the box and waits for Run, because a
+            grammar that misreads a sentence must not be able to start a scan.
+            See NlQueryBar. */}
+        <NlQueryBar
+          mode="sql"
+          profileId={profile.id}
+          topic={topic}
+          idPrefix="ql"
+          disabled={running || stopping}
+          disabledReason={busyWhy}
+          onFill={(next) => {
+            setQuery(next);
+            setQueryError(null);
+          }}
+        />
 
         {/* THE EDITOR. Mono, because a query is a literal you could paste into
             any other SQL client; Ctrl/Cmd+Enter runs it, which is the one

@@ -16,10 +16,13 @@ use kavka_core::connect::{ConfigValidation, ConnectorSummary};
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
 use kavka_core::consume::{self, FetchSpec, TailSession};
 use kavka_core::history::{self, GroupWindow, HistoryStore, LagSample, SamplerStatus};
+use kavka_core::masking::{MaskRule, MaskSet, MaskStore, MASK_NOTICE_MARKER};
 use kavka_core::metrics::{MetricPoint, MetricsCollector, MetricsStatus};
+use kavka_core::nlq::{self, SchemaHint, Translation};
 use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
 use kavka_core::profiles::{
     export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
+    WasmSerdeConfig,
 };
 // `TopicPartition` here is the protocol module's — `admin` has an
 // identically-shaped one for group assignments, which is why it is reached
@@ -135,6 +138,18 @@ struct AppState {
     /// to a cluster, which is why the alert commands are the one surface a
     /// read-only connection is not blocked from.
     alerts: Arc<AlertStore>,
+    /// Display-masking rules — `masking.json`, beside the two above and local
+    /// for the same reason.
+    masks: Arc<MaskStore>,
+    /// Each profile's rules **compiled**, so a scan of 400,000 records compiles
+    /// its regexes once rather than 400,000 times (see
+    /// `kavka_core::masking`'s performance contract).
+    ///
+    /// Keyed by profile because that is the scope of a rule, and dropped by
+    /// every command that edits one — which is what makes a rule the user just
+    /// switched on apply to the next batch of a tail that is already running,
+    /// without a per-record read of `masking.json`.
+    mask_sets: Mutex<HashMap<String, Arc<MaskSet>>>,
     /// The lag-history files, one per profile — see [`HistoryStores`].
     histories: Arc<HistoryStores>,
     /// The background sampler/scraper/alert loop of each connected profile,
@@ -904,6 +919,40 @@ fn notify(app: &AppHandle, event: &AlertEvent) {
 }
 
 impl AppState {
+    /// One profile's compiled masking rules, from the cache or freshly built.
+    ///
+    /// **Every path that emits a record calls this, and an error here is fatal
+    /// to that path on purpose.** A `masking.json` this build cannot read is
+    /// the one failure where carrying on is worse than stopping: the rules a
+    /// user believes are hiding a customer's card number are exactly the ones
+    /// that would silently not be applied, and they would find out from the
+    /// screenshot. Fail closed — the message names the file.
+    ///
+    /// A rule stored on disk that will not COMPILE is a different case and is
+    /// not fatal: the core skips it, names it, and this logs the sentence once
+    /// per compile rather than once per record.
+    fn mask_set(&self, profile_id: &str) -> kavka_core::Result<Arc<MaskSet>> {
+        if let Some(cached) = self.mask_sets.lock().unwrap().get(profile_id) {
+            return Ok(Arc::clone(cached));
+        }
+        let (set, refused) = self.masks.mask_set(profile_id)?;
+        for problem in refused {
+            tracing::warn!(profile = profile_id, "{problem}");
+        }
+        let set = Arc::new(set);
+        self.mask_sets
+            .lock()
+            .unwrap()
+            .insert(profile_id.to_string(), Arc::clone(&set));
+        Ok(set)
+    }
+
+    /// Drops one profile's compiled rules, so the next record-emitting call
+    /// recompiles them. Called by every masking command that changes anything.
+    fn forget_mask_set(&self, profile_id: &str) {
+        self.mask_sets.lock().unwrap().remove(profile_id);
+    }
+
     fn connection(&self, profile_id: &str) -> CmdResult<Arc<ClusterConnection>> {
         self.connections
             .lock()
@@ -1310,19 +1359,35 @@ fn is_false(flag: &bool) -> bool {
 }
 
 /// One live tail's reader loop. Runs on its own thread — see [`spawn_emitter`].
-fn pump_tail(app: &AppHandle, tail_id: &str, session: &TailSession) {
+fn pump_tail(app: &AppHandle, tail_id: &str, profile_id: &str, session: &TailSession) {
     let event = tail_event(tail_id);
     let mut reported_drops = 0;
     // `None` is the end of the session; `Some(empty)` is a quiet topic, which
     // is a state, not an ending.
-    while let Some(records) = session.next_batch(TAIL_POLL) {
+    while let Some(mut records) = session.next_batch(TAIL_POLL) {
         let dropped = session.dropped();
         // A quiet topic costs nothing: the view says "listening" from its own
-        // timer, and 2 empty events a second per open tail is pure IPC.
+        // timer, and 2 empty events a second per open tail is pure IPC. The
+        // masking pass is below this rather than above it for the same reason —
+        // a quiet topic must stay free.
         if records.is_empty() && dropped == reported_drops {
             continue;
         }
         reported_drops = dropped;
+        // Read per batch rather than captured once, so a rule the user switches
+        // on while a tail is running masks the records that arrive after it —
+        // which is the whole point of a switch. It is a cache hit and an `Arc`
+        // clone; the regexes are compiled once (`AppState::mask_set`).
+        match mask_session(app, profile_id) {
+            Some(rules) => {
+                mask_batch(&rules, &mut records);
+            }
+            // Fail closed: the rules could not be read, so nothing goes out.
+            None => {
+                session.stop();
+                break;
+            }
+        }
         if let Err(e) = app.emit(
             &event,
             TailBatch {
@@ -1344,6 +1409,7 @@ fn pump_tail(app: &AppHandle, tail_id: &str, session: &TailSession) {
     if let Some(state) = app.try_state::<AppState>() {
         state.tails.forget(tail_id);
     }
+    report_session_serde_errors(app, profile_id);
     let _ = app.emit(
         &event,
         TailBatch {
@@ -1354,9 +1420,460 @@ fn pump_tail(app: &AppHandle, tail_id: &str, session: &TailSession) {
     );
 }
 
+// ── Display masking ────────────────────────────────────────────────────────
+//
+// EVERY RECORD THE WEBVIEW EVER SEES PASSES THROUGH ONE OF THE FUNCTIONS
+// BELOW. That is the whole guarantee: masking is applied HERE, on the shell
+// side of the IPC boundary, so while a rule is on the raw text is not in the
+// webview at all — not in a devtools console, not in a copied cell, not in a
+// screen share, not in an export. A masking pass done in the UI would leave the
+// real value one inspector click away, which is a costume rather than a mask
+// (see `kavka_core::masking`'s module docs, which own this argument).
+//
+// The four record-emitting paths, and the one place each is masked:
+//
+//   messages_fetch   the returned Vec, before the command resolves
+//   tail             `pump_tail`,   each batch, before `app.emit`
+//   search           `pump_search`, each batch, before `app.emit`
+//   sql              `pump_sql`,    each row batch, before `app.emit`
+//
+// Cross-cluster copy is deliberately NOT in that list: a copy moves raw bytes
+// from one broker to another and shows the user nothing, so masking it would
+// corrupt the destination topic while redacting nothing. `copy_dry_run` returns
+// watermark arithmetic and no payloads at all. Produce, bulk produce and the
+// admin surfaces carry no records either.
+//
+// Exports and clipboard copies need no pass of their own, and that is the point
+// of doing it here: the records the UI hands back to `export_records` are the
+// masked ones it was given. What the export DOES add is the notice — see
+// `mask_notice_for`.
+
+/// One profile's compiled rules, for an emitter thread that only has an
+/// [`AppHandle`].
+///
+/// `None` is "do not emit": either the state is gone (the app is shutting down)
+/// or `masking.json` could not be read. Both are cases where sending records on
+/// would mean sending them **unmasked**, which is the one outcome this feature
+/// exists to prevent — so every caller stops the session instead.
+fn mask_session(app: &AppHandle, profile_id: &str) -> Option<Arc<MaskSet>> {
+    let state = app.try_state::<AppState>()?;
+    match state.mask_set(profile_id) {
+        Ok(rules) => Some(rules),
+        Err(e) => {
+            tracing::error!(profile = profile_id, "masking rules unreadable: {e}");
+            None
+        }
+    }
+}
+
+/// Takes and logs the first RUNTIME failure each of a connection's WASM decoder
+/// plugins hit — a trap, an exhausted fuel budget, an answer that was not an
+/// ABI v1 result block.
+///
+/// Once per session, not once per record: the core hands each error out exactly
+/// once (`take_serde_errors`), on the same rule the Schema Registry's own
+/// errors follow, because a plugin that fails on every record of a
+/// 400,000-record scan must not write 400,000 lines.
+///
+/// A plugin that would not LOAD is the other half and is reported elsewhere —
+/// at `cluster_connect`, where it happens, once.
+///
+/// Neither is an error the user's read failed on: a plugin that declines or
+/// crashes falls through to the built-in ladder, which is why the read still
+/// returns records and why this has to be said out loud somewhere.
+fn report_serde_errors(conn: &ClusterConnection) {
+    for error in conn.take_serde_errors() {
+        tracing::warn!("{error}; those records fell through to the built-in decoders");
+    }
+}
+
+/// [`report_serde_errors`] for an emitter thread, which only has an
+/// [`AppHandle`]. Silent when the cluster has since been disconnected.
+fn report_session_serde_errors(app: &AppHandle, profile_id: &str) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if let Ok(conn) = state.connection(profile_id) {
+        report_serde_errors(&conn);
+    }
+}
+
+/// The key a masked export's notice rides under, in both JSON shapes.
+///
+/// Leading underscore because it sits in the same object position as a record's
+/// own fields and is not one of them; the name is stable because a reader may
+/// legitimately filter on it.
+const MASK_NOTICE_KEY: &str = "_kavka_notice";
+
+/// The sentence a masked export or a masked copy carries.
+///
+/// **Count-free, and that is a gap rather than a choice.**
+/// `kavka_core::masking::mask_notice` writes the better sentence — "3 masking
+/// rules applied" — but the number is a property of the SESSION and the only
+/// thing that survives to the webview and back is `MessageRecord::masked`, a
+/// boolean. Inventing a count would be worse than omitting one, so this says
+/// everything except the number, keeps `MASK_NOTICE_MARKER` so a file can still
+/// be searched for it, and is the string to replace the day the export commands
+/// are given the rule count (see the note on `export_rows`).
+fn mask_notice_text() -> String {
+    format!("{MASK_NOTICE_MARKER} — some values here are not the values on the topic.")
+}
+
+/// The notice for a batch of records, or `None` when none of them was masked.
+///
+/// Driven by `MessageRecord::masked`, which the core sets and never clears —
+/// so an export of a selection where ONE record was rewritten says so, which is
+/// the right way round: the question a reader has is "can I trust this file",
+/// and the answer is no as soon as any of it is redacted.
+fn mask_notice_for(records: &[MessageRecord]) -> Option<String> {
+    records
+        .iter()
+        .any(|record| record.masked)
+        .then(mask_notice_text)
+}
+
+/// Masks a batch in place, and answers whether anything changed.
+///
+/// A no-op — one boolean per batch — when the profile has no enabled rules,
+/// which is nearly every session.
+fn mask_batch(rules: &MaskSet, records: &mut [MessageRecord]) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let mut masked = false;
+    for record in records.iter_mut() {
+        masked |= rules.mask_record(record);
+    }
+    masked
+}
+
+/// Masks a batch of SQL result rows in place, by column name.
+///
+/// The policy — which column is masked as which part of a record, and what
+/// happens to a computed one — is `kavka_core::masking::mask_sql_rows`, and it
+/// lives there because the MCP server runs the same pass over the same rows for
+/// an agent. This is the adapter that turns the shell's `SqlColumn`s into the
+/// names that function reads; two copies of the reasoning would be two answers
+/// to one question.
+fn mask_rows(rules: &MaskSet, columns: &[SqlColumn], rows: &mut [Vec<serde_json::Value>]) -> bool {
+    let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+    kavka_core::masking::mask_sql_rows(rules, &names, rows)
+}
+
 #[tauri::command]
 fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+// ── MCP server ─────────────────────────────────────────────────────────────
+
+/// Everything the About/Settings surface needs to wire Kavka's MCP server
+/// (`crates/kavka-mcp`) into Claude Code or Cursor: where the binary is, and a
+/// snippet for each that can be pasted without editing.
+#[derive(Serialize)]
+struct McpInfo {
+    binary_path: String,
+    snippet_claude: String,
+    snippet_cursor: String,
+}
+
+/// The MCP server binary, and the two configuration snippets for it.
+///
+/// **Where the binary is, in both worlds.** It is always a SIBLING of the
+/// running executable, which is one rule rather than two:
+///
+/// - *Development* — `cargo tauri dev` runs `target/debug/kavka-desktop`, and
+///   `cargo build -p kavka-mcp` puts `kavka-mcp` in that same directory. Build
+///   it first: this command reports where the binary belongs whether or not it
+///   is there yet, because a path somebody can act on beats an empty panel.
+/// - *Packaged* — the server ships beside the app binary: next to `Kavka.exe`
+///   on Windows, inside `Kavka.app/Contents/MacOS/` on macOS. That is where
+///   Tauri's bundler places a sidecar (`bundle.externalBin`), and wiring it is
+///   the packaging step this path is written against — **it is not wired yet**,
+///   because `externalBin` fails the build outright when the named
+///   per-target-triple binary is absent, which would break the release workflow
+///   the day it lands rather than the day the sidecar is built. Until then a
+///   packaged build reports the path the sidecar will have.
+///
+/// The snippets are deliberately the READ-ONLY configuration. Enabling the two
+/// write tools is a decision with a blast radius, so it is a line the person
+/// adds themselves — the Claude snippet shows exactly which one, and
+/// `crates/kavka-mcp/src/gate.rs` is where the rules live.
+#[tauri::command]
+fn mcp_info() -> McpInfo {
+    let binary = mcp_binary_path();
+    let (snippet_claude, snippet_cursor) = mcp_snippets(&binary);
+    McpInfo {
+        binary_path: binary,
+        snippet_claude,
+        snippet_cursor,
+    }
+}
+
+fn mcp_binary_path() -> String {
+    let name = format!("kavka-mcp{}", std::env::consts::EXE_SUFFIX);
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(&name)))
+        .map_or(name, |path| path.display().to_string())
+}
+
+/// The two snippets, as pure string work so they can be checked without a
+/// window. Split out from the command for exactly that reason.
+fn mcp_snippets(binary: &str) -> (String, String) {
+    let claude = format!(
+        "claude mcp add kavka -- \"{binary}\"\n\
+         \n\
+         # Read-only by default. To also allow the two write tools (produce a\n\
+         # record, reset a group's offsets) — production connections still\n\
+         # refuse without KAVKA_MCP_ALLOW_PROD=1, and connections marked\n\
+         # read-only always refuse:\n\
+         claude mcp add kavka -e KAVKA_MCP_ALLOW_WRITES=1 -- \"{binary}\"\n"
+    );
+    // Built with serde_json rather than by hand: a Windows path is full of
+    // backslashes, and a snippet that has to be escaped by the person pasting
+    // it is not a snippet.
+    let cursor = serde_json::to_string_pretty(&serde_json::json!({
+        "mcpServers": {
+            "kavka": {
+                "command": binary,
+                "args": [],
+                "env": {},
+            }
+        }
+    }))
+    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+    (claude, cursor)
+}
+
+// ── Plain English → a query ────────────────────────────────────────────────
+
+/// Translates one plain-English line into a CEL filter or a SQL statement.
+///
+/// **A grammar, not a model.** `kavka_core::nlq` is a pure function over a
+/// curated pattern list: no network, no weights, no state between calls, and
+/// the same words always produce the same query. This command is a two-line
+/// forward precisely because there is nothing else to it — and the UI says so
+/// in as many words (`NlQueryBar`), because a "plain English" box that looks
+/// like an assistant and is a lookup table would be the most dishonest control
+/// in the product.
+///
+/// **The answer fills the editor and is never run.** That is the safety model:
+/// a grammar that mis-reads a sentence produces a query the user reads before
+/// pressing the button they were always going to press. Nothing here touches a
+/// cluster, so there is no connection to check and no read-only rule to apply.
+///
+/// Not on the blocking pool, unlike almost everything else in this file: it is
+/// a tokenizer over one short line, it opens no file and takes no lock, and a
+/// hop to another thread would cost more than the work.
+#[tauri::command]
+fn nl_to_query(input: String, mode: String, schema_hint: SchemaHint) -> CmdResult<Translation> {
+    // Parsed rather than taken as the enum so an unknown mode is the core's own
+    // sentence — expected "cel" or "sql" — rather than a serde error about a
+    // variant.
+    let mode = mode.parse().map_err(|e: kavka_core::Error| e.to_string())?;
+    Ok(nlq::nl_to_query(&input, mode, &schema_hint))
+}
+
+/// Every sentence the translator accepts, in the core's own words.
+///
+/// The text is `kavka_core::nlq::NLQ_GRAMMAR`, which a test checks against the
+/// implementation — so a pattern the grammar grew and the doc did not mention
+/// fails the build rather than the user. That is why this is a command and not
+/// a constant copied into the webview: a cheatsheet that drifts from the engine
+/// teaches expressions that do nothing.
+#[tauri::command]
+fn nl_grammar() -> String {
+    nlq::nlq_grammar().to_string()
+}
+
+// ── Masking ────────────────────────────────────────────────────────────────
+//
+// Rules live in masking.json beside profiles.json and alerts.json, and like
+// alert rules they are deliberately NOT part of a profile export: one person's
+// redaction policy is not portable, and a rule somebody relies on silently not
+// travelling with the connection it was written for is worse than it not
+// travelling at all.
+//
+// Every command here is local — nothing is read from or written to a cluster —
+// so, exactly like the alert commands, none of them is gated on read-only.
+// Masking is about what reaches the screen; read-only is about what leaves
+// Kavka. Tying them together would mean turning off a guardrail to get a
+// redaction.
+//
+// All four drop the profile's compiled `MaskSet` afterwards, which is what
+// makes an edit take effect on the next batch of a tail that is already
+// running.
+
+#[tauri::command]
+async fn masking_list(state: State<'_, AppState>, profile_id: String) -> CmdResult<Vec<MaskRule>> {
+    let masks = Arc::clone(&state.masks);
+    blocking(move || masks.rules(&profile_id)).await
+}
+
+/// Upsert by `rule.id`, so the editor's "save" is one call whether the rule is
+/// new or not.
+///
+/// The pattern is compiled by the core **before** anything is written: a stored
+/// rule that cannot compile is a rule that silently does not mask, which is the
+/// worst failure this feature has — the user believes the screen is redacted.
+#[tauri::command]
+async fn masking_save(
+    state: State<'_, AppState>,
+    profile_id: String,
+    rule: MaskRule,
+) -> CmdResult<()> {
+    let masks = Arc::clone(&state.masks);
+    let id = profile_id.clone();
+    let saved = blocking(move || masks.save_rule(&id, rule)).await;
+    state.forget_mask_set(&profile_id);
+    saved
+}
+
+#[tauri::command]
+async fn masking_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    rule_id: String,
+) -> CmdResult<()> {
+    let masks = Arc::clone(&state.masks);
+    let id = profile_id.clone();
+    let deleted = blocking(move || masks.delete_rule(&id, &rule_id)).await;
+    // Dropped even if the delete failed: the cheap mistake is recompiling a set
+    // that did not change, and the expensive one is a rule that is gone from
+    // the file and still masking (or, worse, still believed to be).
+    state.forget_mask_set(&profile_id);
+    deleted
+}
+
+/// Turns one rule on or off without rewriting it — a different action from the
+/// editor's save, and routing it through save would mean re-validating (and
+/// potentially refusing) a pattern the user is not editing.
+#[tauri::command]
+async fn masking_toggle(
+    state: State<'_, AppState>,
+    profile_id: String,
+    rule_id: String,
+    enabled: bool,
+) -> CmdResult<()> {
+    let masks = Arc::clone(&state.masks);
+    let id = profile_id.clone();
+    let toggled = blocking(move || masks.set_enabled(&id, &rule_id, enabled).map(|_| ())).await;
+    state.forget_mask_set(&profile_id);
+    toggled
+}
+
+// ── WASM decoder plugins ───────────────────────────────────────────────────
+//
+// Unlike masking rules these live ON the profile (ConnectionProfile
+// ::wasm_serdes), because a plugin is part of how a cluster's payloads are read
+// rather than a policy about who is looking. The .wasm file itself never
+// travels: the profile carries a PATH, so an imported profile naming a plugin
+// this machine does not have reports that the same way a missing CA file does.
+//
+// **A change takes effect on the next connect.** The plugin set is compiled
+// when `ClusterConnection::connect` opens the cluster (see
+// `ClusterConnection::decoder_for`), which is what keeps one scan's records
+// decoded one way from beginning to end — a module swapped underneath a running
+// search would produce a result set assembled from two decoders.
+
+/// The one thing three commands do: read the profile, change its plugin list,
+/// write it back.
+///
+/// A read-modify-write over the whole profile, because that is the store's unit
+/// ([`ProfileStore::upsert`]). It races the ProfileEditor's own save the way any
+/// two edits of one document race — last writer wins — which is the same
+/// exposure the editor has had since Phase 0 and is bounded by both being
+/// user-driven actions on one window.
+fn edit_wasm_serdes(
+    store: &ProfileStore,
+    profile_id: &str,
+    edit: impl FnOnce(&mut Vec<WasmSerdeConfig>),
+) -> kavka_core::Result<()> {
+    let mut profile = store
+        .list()?
+        .into_iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| kavka_core::Error::Other(format!("unknown profile: {profile_id}")))?;
+    edit(&mut profile.wasm_serdes);
+    store.upsert(profile)
+}
+
+#[tauri::command]
+async fn wasm_serdes_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<Vec<WasmSerdeConfig>> {
+    let store = state.store.clone();
+    blocking(move || {
+        Ok(store
+            .list()?
+            .into_iter()
+            .find(|p| p.id == profile_id)
+            .map(|profile| profile.wasm_serdes)
+            .unwrap_or_default())
+    })
+    .await
+}
+
+/// The one thing checked before a plugin is written into a profile: **where it
+/// comes from**.
+///
+/// `kavka_core::wasm_serde::validate_plugin_path` owns the rule and the
+/// sentences — a relative path resolves against whatever folder the app was
+/// launched from and would mean something else again on the machine an exported
+/// profile lands on, and a UNC path moves the execution source onto somebody
+/// else's computer. This is the save-time half; the loader checks the same
+/// thing again, because `profiles.json` can be hand-edited and imported.
+///
+/// It is deliberately the ONLY save-time check. The module itself is not loaded
+/// here: `WasmSerdes::load` compiles it when the connection opens and says what
+/// is wrong with it in a sentence, and a plugin file that is fine today and
+/// missing tomorrow would have passed an existence check at save time anyway.
+fn validated_wasm_serde(config: WasmSerdeConfig) -> kavka_core::Result<WasmSerdeConfig> {
+    kavka_core::wasm_serde::validate_plugin_path(&config.path)
+        .map_err(|e| kavka_core::Error::Other(e.to_string()))?;
+    Ok(config)
+}
+
+/// Upsert by `config.name` — the name is the identity, and it is what the
+/// payload inspector's provenance line shows.
+#[tauri::command]
+async fn wasm_serdes_save(
+    state: State<'_, AppState>,
+    profile_id: String,
+    config: WasmSerdeConfig,
+) -> CmdResult<()> {
+    let store = state.store.clone();
+    blocking(move || {
+        // Before the read-modify-write, so a refused path leaves the profile
+        // exactly as it was.
+        let config = validated_wasm_serde(config)?;
+        edit_wasm_serdes(&store, &profile_id, |plugins| {
+            match plugins.iter_mut().find(|kept| kept.name == config.name) {
+                Some(slot) => *slot = config,
+                None => plugins.push(config),
+            }
+        })
+    })
+    .await
+}
+
+/// Idempotent: removing a plugin that is not there is not an error — the other
+/// window already did it.
+#[tauri::command]
+async fn wasm_serdes_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    name: String,
+) -> CmdResult<()> {
+    let store = state.store.clone();
+    blocking(move || {
+        edit_wasm_serdes(&store, &profile_id, |plugins| {
+            plugins.retain(|plugin| plugin.name != name);
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1365,10 +1882,34 @@ async fn profiles_list(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionPr
     blocking(move || store.list()).await
 }
 
+/// Writes a profile.
+///
+/// **The WASM plugin list is not this command's to write.** It is edited
+/// through `wasm_serdes_save`/`wasm_serdes_delete` (the ProfileEditor's plugin
+/// section writes as you type, exactly as the alert rules do), and the profile
+/// object this command receives is BUILT FIELD BY FIELD by that editor — so a
+/// plugin list it does not carry would be an empty list here, and an upsert
+/// would wipe every plugin on the connection the first time somebody renamed
+/// it. That is silent data loss of a file path the user had to go and find,
+/// and it is exactly the class of bug `serde(default)` on an additive field
+/// makes easy: the field parses fine and arrives empty.
+///
+/// So an incoming empty list means "I have nothing to say about plugins" and
+/// the stored one is kept. Emptying the list is `wasm_serdes_delete`'s job,
+/// which is the only surface that can say it and mean it.
 #[tauri::command]
 async fn profiles_save(state: State<'_, AppState>, profile: ConnectionProfile) -> CmdResult<()> {
     let store = state.store.clone();
-    blocking(move || store.upsert(profile)).await
+    blocking(move || {
+        let mut profile = profile;
+        if profile.wasm_serdes.is_empty() {
+            if let Some(stored) = store.list()?.into_iter().find(|p| p.id == profile.id) {
+                profile.wasm_serdes = stored.wasm_serdes;
+            }
+        }
+        store.upsert(profile)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1378,12 +1919,14 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
     // `take_sessions_of` stops the monitor too, so nothing is still sampling
     // into a history file that is about to be removed.
     let sessions = state.take_sessions_of(&profile_id);
+    state.forget_mask_set(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
     let protocol = state.take_protocol(&profile_id);
     let history = state.histories.take(&profile_id);
     let history_path = state.histories.path_of(&profile_id);
     let histories = Arc::clone(&state.histories);
     let alerts = Arc::clone(&state.alerts);
+    let masks = Arc::clone(&state.masks);
     let store = state.store.clone();
     blocking(move || {
         drop(sessions); // joins each worker thread, off the event loop
@@ -1426,6 +1969,10 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
         // longer see: this profile's alert rules, channels and incident
         // history, and its week of lag samples.
         let _ = alerts.forget_profile(&profile_id);
+        // And its masking rules, by the same argument a fourth time: a
+        // redaction policy for a cluster nobody can reach again is state
+        // nobody can find to delete.
+        let _ = masks.forget_profile(&profile_id);
         // Taken a second time on purpose. Stopping the monitor does not join
         // its thread, so a tick that was already in flight can have reopened
         // the handle between the two lines above and this one. If the file is
@@ -1497,6 +2044,12 @@ async fn cluster_connect(
             .find(|p| p.id == id)
             .ok_or_else(|| kavka_core::Error::Other(format!("unknown profile: {id}")))?;
         let conn = ClusterConnection::connect(profile)?;
+        // Said once, here, where it happened: a plugin that would not load is
+        // not a reason to refuse the cluster (the built-in decoders are always
+        // there), so the only alternative to saying so now is never saying so.
+        for problem in conn.serde_problems() {
+            tracing::warn!(profile = %conn.profile().id, "{problem}");
+        }
         let overview = conn.overview()?;
         let monitor = Arc::new(Monitor::for_profile(conn.profile()));
         Ok((Arc::new(conn), overview, monitor))
@@ -1539,6 +2092,7 @@ async fn cluster_disconnect(state: State<'_, AppState>, profile_id: String) -> C
     // seven days, and the Monitoring tab can read last week for a profile nobody
     // is connected to. Only deleting the profile takes it away.
     let sessions = state.take_sessions_of(&profile_id);
+    state.forget_mask_set(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
     // The kept-alive protocol socket goes with them, for the same reason: it is
     // authenticated to a cluster the user has just walked away from.
@@ -1643,17 +2197,26 @@ async fn messages_fetch(
     spec: FetchSpec,
 ) -> CmdResult<Vec<MessageRecord>> {
     let conn = state.connection(&profile_id)?;
+    // Resolved BEFORE the fetch, so an unreadable `masking.json` is an error
+    // instead of a screenful of unmasked payloads (see `AppState::mask_set`).
+    let rules = state.mask_set(&profile_id).map_err(|e| e.to_string())?;
     let token = state.begin_fetch(&profile_id);
     let running = token.clone();
     let result = blocking(move || {
         // The registry is the profile's, not a global: two clusters can have
         // different registries, and one of them can have none.
-        consume::fetch_messages(
+        let mut records = consume::fetch_messages(
             &conn,
             conn.profile().schema_registry.as_ref(),
             &spec,
             Some(&running),
-        )
+        )?;
+        // On the blocking pool, with the records still on this side of IPC.
+        mask_batch(&rules, &mut records);
+        // Once per fetch rather than once per record — the same rule the
+        // Schema Registry's own errors follow.
+        report_serde_errors(&conn);
+        Ok(records)
     })
     .await;
     state.end_fetch(&profile_id, &token);
@@ -1669,6 +2232,12 @@ async fn tail_start(
     partitions: Option<Vec<i32>>,
 ) -> CmdResult<String> {
     let conn = state.connection(&profile_id)?;
+    // Compiled before the session exists, so an unreadable `masking.json` is an
+    // error the user reads on the button they pressed rather than a tail that
+    // stops on its first batch (`AppState::mask_set` says why this fails
+    // closed). The set is cached: the pump re-reads it per batch to pick up a
+    // rule switched on mid-tail, and pays a hashmap lookup for it.
+    state.mask_set(&profile_id).map_err(|e| e.to_string())?;
     // Started on the blocking pool because the consumer is created and assigned
     // before `start` returns: an unknown topic or a dead broker fails here,
     // where the caller can be told, rather than as a session that ends a moment
@@ -1689,7 +2258,8 @@ async fn tail_start(
 
     let spawned = spawn_emitter("kavka-tail-emit", {
         let tail_id = tail_id.clone();
-        move || pump_tail(&app, &tail_id, &session)
+        let profile_id = profile_id.clone();
+        move || pump_tail(&app, &tail_id, &profile_id, &session)
     });
     if let Err(e) = spawned {
         // Nothing will ever drain this session, so it must not be left running.
@@ -1756,7 +2326,7 @@ fn await_subscriber(app: &AppHandle, session_id: &str, what: &str) {
 }
 
 /// One search's reader loop. Runs on its own thread — see [`spawn_emitter`].
-fn pump_search(app: &AppHandle, search_id: &str, session: &SearchSession) {
+fn pump_search(app: &AppHandle, search_id: &str, profile_id: &str, session: &SearchSession) {
     let results_event = search_results_event(search_id);
     let progress_event = search_progress_event(search_id);
 
@@ -1769,8 +2339,19 @@ fn pump_search(app: &AppHandle, search_id: &str, session: &SearchSession) {
     // `None` is the end of the search; `Some(empty)` is a scan that has not
     // matched anything yet, which is a state the UI has to be able to say out
     // loud (docs/DESIGN.md §7: never "no results" while a search is running).
-    while let Some(records) = session.next_results(SEARCH_POLL) {
+    while let Some(mut records) = session.next_results(SEARCH_POLL) {
         if !records.is_empty() {
+            // Same placement and same reason as the live tail's: on this side
+            // of the boundary, per batch, fail closed.
+            match mask_session(app, profile_id) {
+                Some(rules) => {
+                    mask_batch(&rules, &mut records);
+                }
+                None => {
+                    session.stop();
+                    break;
+                }
+            }
             if let Err(e) = app.emit(&results_event, SearchResults { records }) {
                 // Nobody can receive this search any more; don't keep scanning.
                 tracing::warn!("search {search_id}: {e}");
@@ -1796,6 +2377,7 @@ fn pump_search(app: &AppHandle, search_id: &str, session: &SearchSession) {
     if let Some(state) = app.try_state::<AppState>() {
         state.searches.forget(search_id);
     }
+    report_session_serde_errors(app, profile_id);
     let mut final_progress = session.progress();
     // Forced rather than read, for the one case where it would be false: a loop
     // that left early because the emit failed. As far as anything downstream is
@@ -1820,6 +2402,8 @@ async fn search_start(
     spec: SearchSpec,
 ) -> CmdResult<String> {
     let conn = state.connection(&profile_id)?;
+    // Before the scan starts, for the reason `tail_start` gives.
+    state.mask_set(&profile_id).map_err(|e| e.to_string())?;
     let session = blocking(move || {
         // The registry is the profile's, not a global: two clusters can have
         // different registries, and one of them can have none.
@@ -1837,7 +2421,8 @@ async fn search_start(
 
     let spawned = spawn_emitter("kavka-search-emit", {
         let search_id = search_id.clone();
-        move || pump_search(&app, &search_id, &session)
+        let profile_id = profile_id.clone();
+        move || pump_search(&app, &search_id, &profile_id, &session)
     });
     if let Err(e) = spawned {
         // Nothing will ever drain this session, and a search nobody drains is
@@ -1909,7 +2494,7 @@ struct SqlRows {
 }
 
 /// One query's reader loop. Runs on its own thread — see [`spawn_emitter`].
-fn pump_sql(app: &AppHandle, sql_id: &str, session: &SqlSession) {
+fn pump_sql(app: &AppHandle, sql_id: &str, profile_id: &str, session: &SqlSession) {
     let schema_event = sql_schema_event(sql_id);
     let rows_event = sql_rows_event(sql_id);
     let progress_event = sql_progress_event(sql_id);
@@ -1921,10 +2506,13 @@ fn pump_sql(app: &AppHandle, sql_id: &str, session: &SqlSession) {
     let mut last_progress = Instant::now();
     await_subscriber(app, sql_id, "sql query");
 
+    // Read once: the schema event needs it, and so does the masking pass, which
+    // decides what a cell is by the name of the column it is in.
+    let columns = session.columns();
     if let Err(e) = app.emit(
         &schema_event,
         SqlSchema {
-            columns: session.columns(),
+            columns: columns.clone(),
         },
     ) {
         // Nobody can receive this query any more; don't scan a topic for it.
@@ -1934,8 +2522,20 @@ fn pump_sql(app: &AppHandle, sql_id: &str, session: &SqlSession) {
         // `None` is the end of the query; `Some(empty)` is a scan that has not
         // produced a row yet, which is a state the UI has to be able to say out
         // loud (docs/DESIGN.md §7: never "no results" while something runs).
-        while let Some(rows) = session.next_rows(SQL_POLL) {
+        while let Some(mut rows) = session.next_rows(SQL_POLL) {
             if !rows.is_empty() {
+                // A result set is projected columns rather than records, so the
+                // pass is by column — see `mask_rows`, which documents what it
+                // can and cannot know about a computed one.
+                match mask_session(app, profile_id) {
+                    Some(rules) => {
+                        mask_rows(&rules, &columns, &mut rows);
+                    }
+                    None => {
+                        session.stop();
+                        break;
+                    }
+                }
                 if let Err(e) = app.emit(&rows_event, SqlRows { rows }) {
                     tracing::warn!("sql {sql_id}: {e}");
                     session.stop();
@@ -1961,6 +2561,7 @@ fn pump_sql(app: &AppHandle, sql_id: &str, session: &SqlSession) {
     if let Some(state) = app.try_state::<AppState>() {
         state.sqls.forget(sql_id);
     }
+    report_session_serde_errors(app, profile_id);
     let mut final_progress = session.progress();
     // Forced rather than read, for the one case where it would be false: a loop
     // that left early because an emit failed. As far as anything downstream is
@@ -1985,6 +2586,8 @@ async fn sql_start(
     spec: SqlSpec,
 ) -> CmdResult<String> {
     let conn = state.connection(&profile_id)?;
+    // Before the scan starts, for the reason `tail_start` gives.
+    state.mask_set(&profile_id).map_err(|e| e.to_string())?;
     let session = blocking(move || {
         // The registry is the profile's, not a global — same rule as search:
         // `key_text`/`value_text` are decoded values, and two clusters can have
@@ -2001,7 +2604,8 @@ async fn sql_start(
 
     let spawned = spawn_emitter("kavka-sql-emit", {
         let sql_id = sql_id.clone();
-        move || pump_sql(&app, &sql_id, &session)
+        let profile_id = profile_id.clone();
+        move || pump_sql(&app, &sql_id, &profile_id, &session)
     });
     if let Err(e) = spawned {
         // Nothing will ever drain this session, and a query nobody drains is a
@@ -3143,6 +3747,12 @@ fn export_format(format: &str) -> kavka_core::Result<ExportFormat> {
 /// consent, and the dialog has already asked about overwriting. Nothing else is
 /// trusted — the format is parsed **before** the file is opened, so a bad format
 /// cannot truncate a file the user already had.
+///
+/// **The records arrive already masked** — masking happens on the way OUT of
+/// this process, so the text the webview holds is the text this writes and
+/// there is nothing here to redact. What this adds is the notice: see
+/// [`mask_notice_for`], and `kavka_core::masking::mask_notice` for the sentence
+/// and why a masked file that does not say so is the failure worth preventing.
 #[tauri::command]
 async fn export_records(
     path: String,
@@ -3154,6 +3764,7 @@ async fn export_records(
 
 fn write_export(path: &str, format: &str, records: &[MessageRecord]) -> kavka_core::Result<()> {
     let format = export_format(format)?;
+    let notice = mask_notice_for(records);
     let file = std::fs::OpenOptions::new()
         // Spelled out rather than `File::create`: this command overwrites what
         // the user pointed it at, and that is worth saying in the code that
@@ -3166,9 +3777,9 @@ fn write_export(path: &str, format: &str, records: &[MessageRecord]) -> kavka_co
 
     let mut out = std::io::BufWriter::new(file);
     let written = match format {
-        ExportFormat::Csv => write_csv(&mut out, records),
-        ExportFormat::Json => write_json(&mut out, records),
-        ExportFormat::Ndjson => write_ndjson(&mut out, records),
+        ExportFormat::Csv => write_csv(&mut out, records, notice.as_deref()),
+        ExportFormat::Json => write_json(&mut out, records, notice.as_deref()),
+        ExportFormat::Ndjson => write_ndjson(&mut out, records, notice.as_deref()),
     };
     // Flushed explicitly: a `BufWriter` that fails while flushing in `drop`
     // fails silently, and "Kavka said it exported, and the file is half a record
@@ -3180,7 +3791,19 @@ fn write_export(path: &str, format: &str, records: &[MessageRecord]) -> kavka_co
 
 /// RFC 4180, one column per thing a user can act on: the address, the time, the
 /// two payloads exactly as they were rendered on screen, and the headers.
-fn write_csv(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
+fn write_csv(
+    out: &mut impl Write,
+    records: &[MessageRecord],
+    notice: Option<&str>,
+) -> std::io::Result<()> {
+    // A `#` line above the header row. CSV has no comment syntax, so this is
+    // not free — a strict reader sees a one-column first row — and it is still
+    // the right trade: every tool that opens this shows the sentence, and the
+    // alternative is a spreadsheet of redacted values that looks exactly like a
+    // spreadsheet of real ones.
+    if let Some(notice) = notice {
+        writeln!(out, "# {notice}\r")?;
+    }
     out.write_all(b"partition,offset,timestamp_ms,key_text,value_text,headers_json\r\n")?;
     for record in records {
         // Absent is an empty field, never the word "null" (docs/DESIGN.md §7):
@@ -3237,12 +3860,40 @@ fn csv_field(field: &str) -> Cow<'_, str> {
 
 /// The whole selection as one array, pretty-printed — this is the format people
 /// read and diff, and `ndjson` is the one they pipe.
-fn write_json(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
-    serde_json::to_writer_pretty(&mut *out, records)?;
+fn write_json(
+    out: &mut impl Write,
+    records: &[MessageRecord],
+    notice: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(notice) = notice else {
+        serde_json::to_writer_pretty(&mut *out, records)?;
+        return out.write_all(b"\n");
+    };
+    // The array shape is KEPT and the notice rides as its first element, rather
+    // than the file becoming an object with a `records` key: a masked export is
+    // still a list of records, every `.map()` over it still works, and the one
+    // entry with `_kavka_notice` instead of `partition` is impossible to read
+    // past by accident. It is only ever present when something was masked.
+    let mut items: Vec<serde_json::Value> = Vec::with_capacity(records.len() + 1);
+    items.push(serde_json::json!({ MASK_NOTICE_KEY: notice }));
+    for record in records {
+        items.push(serde_json::to_value(record)?);
+    }
+    serde_json::to_writer_pretty(&mut *out, &items)?;
     out.write_all(b"\n")
 }
 
-fn write_ndjson(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Result<()> {
+fn write_ndjson(
+    out: &mut impl Write,
+    records: &[MessageRecord],
+    notice: Option<&str>,
+) -> std::io::Result<()> {
+    // The first LINE, which is where a reader of an NDJSON file looks and what
+    // `head -1` shows.
+    if let Some(notice) = notice {
+        serde_json::to_writer(&mut *out, &serde_json::json!({ MASK_NOTICE_KEY: notice }))?;
+        out.write_all(b"\n")?;
+    }
     for record in records {
         serde_json::to_writer(&mut *out, record)?;
         out.write_all(b"\n")?;
@@ -3258,14 +3909,25 @@ fn write_ndjson(out: &mut impl Write, records: &[MessageRecord]) -> std::io::Res
 /// with zero rows still has a schema**, and a CSV of it is a header line rather
 /// than an empty file. The rows are positional against that list, exactly as
 /// they arrive over `kavka://sql/{id}/rows`.
+///
+/// `masked` is the one argument a result set cannot infer for itself. A
+/// `MessageRecord` carries its own `masked` flag; a row of projected columns
+/// carries nothing, so the caller — which knows whether the query ran under a
+/// masking rule — has to say. **Optional, and today the UI does not send it**:
+/// the argument is here so a masked result set can be labelled the moment
+/// `SqlView` passes the flag it already has, rather than the export command
+/// having to change shape later. Absent means "not masked", which is the
+/// truthful default for every session with no rules on.
 #[tauri::command]
 async fn export_rows(
     path: String,
     format: String,
     columns: Vec<SqlColumn>,
     rows: Vec<Vec<serde_json::Value>>,
+    masked: Option<bool>,
 ) -> CmdResult<()> {
-    blocking(move || write_row_export(&path, &format, &columns, &rows)).await
+    blocking(move || write_row_export(&path, &format, &columns, &rows, masked.unwrap_or(false)))
+        .await
 }
 
 fn write_row_export(
@@ -3273,6 +3935,7 @@ fn write_row_export(
     format: &str,
     columns: &[SqlColumn],
     rows: &[Vec<serde_json::Value>],
+    masked: bool,
 ) -> kavka_core::Result<()> {
     // Parsed before the file is opened, exactly as in `write_export`: a bad
     // format must not truncate a file the user already had.
@@ -3284,11 +3947,12 @@ fn write_row_export(
         .open(path)
         .map_err(|e| file_trouble(path, &e))?;
 
+    let notice = masked.then(mask_notice_text);
     let mut out = std::io::BufWriter::new(file);
     let written = match format {
-        ExportFormat::Csv => write_rows_csv(&mut out, columns, rows),
-        ExportFormat::Json => write_rows_json(&mut out, columns, rows),
-        ExportFormat::Ndjson => write_rows_ndjson(&mut out, columns, rows),
+        ExportFormat::Csv => write_rows_csv(&mut out, columns, rows, notice.as_deref()),
+        ExportFormat::Json => write_rows_json(&mut out, columns, rows, notice.as_deref()),
+        ExportFormat::Ndjson => write_rows_ndjson(&mut out, columns, rows, notice.as_deref()),
     };
     written
         .and_then(|()| out.flush())
@@ -3302,7 +3966,11 @@ fn write_rows_csv(
     out: &mut impl Write,
     columns: &[SqlColumn],
     rows: &[Vec<serde_json::Value>],
+    notice: Option<&str>,
 ) -> std::io::Result<()> {
+    if let Some(notice) = notice {
+        writeln!(out, "# {notice}\r")?;
+    }
     let header: Vec<Cow<'_, str>> = columns
         .iter()
         .map(|column| csv_field(&column.name))
@@ -3349,9 +4017,15 @@ fn write_rows_json(
     out: &mut impl Write,
     columns: &[SqlColumn],
     rows: &[Vec<serde_json::Value>],
+    notice: Option<&str>,
 ) -> std::io::Result<()> {
-    let objects: Vec<serde_json::Map<String, serde_json::Value>> =
-        rows.iter().map(|row| row_object(columns, row)).collect();
+    let mut objects: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+    if let Some(notice) = notice {
+        let mut first = serde_json::Map::new();
+        first.insert(MASK_NOTICE_KEY.to_string(), notice.into());
+        objects.push(first);
+    }
+    objects.extend(rows.iter().map(|row| row_object(columns, row)));
     serde_json::to_writer_pretty(&mut *out, &objects)?;
     out.write_all(b"\n")
 }
@@ -3360,7 +4034,12 @@ fn write_rows_ndjson(
     out: &mut impl Write,
     columns: &[SqlColumn],
     rows: &[Vec<serde_json::Value>],
+    notice: Option<&str>,
 ) -> std::io::Result<()> {
+    if let Some(notice) = notice {
+        serde_json::to_writer(&mut *out, &serde_json::json!({ MASK_NOTICE_KEY: notice }))?;
+        out.write_all(b"\n")?;
+    }
     for row in rows {
         serde_json::to_writer(&mut *out, &row_object(columns, row))?;
         out.write_all(b"\n")?;
@@ -3430,6 +4109,9 @@ pub fn run() {
             // is data the app produced rather than configuration the user
             // wrote, and it is the one thing here that can reach a gigabyte.
             let alerts = Arc::new(AlertStore::new(dir.clone()));
+            // Masking rules sit beside both, for the same reason and with the
+            // same discipline (tmp-then-rename, one write lock).
+            let masks = Arc::new(MaskStore::new(dir.clone()));
             let histories = Arc::new(HistoryStores::new(
                 app.path().app_data_dir()?.join("history"),
             ));
@@ -3445,6 +4127,8 @@ pub fn run() {
                 fetches: Mutex::new(HashMap::new()),
                 protocol: Mutex::new(HashMap::new()),
                 alerts,
+                masks,
+                mask_sets: Mutex::new(HashMap::new()),
                 histories,
                 monitors: Mutex::new(HashMap::new()),
                 id_seq: AtomicU64::new(0),
@@ -3456,6 +4140,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             core_version,
+            mcp_info,
+            nl_to_query,
+            nl_grammar,
+            masking_list,
+            masking_save,
+            masking_delete,
+            masking_toggle,
+            wasm_serdes_list,
+            wasm_serdes_save,
+            wasm_serdes_delete,
             profiles_list,
             profiles_save,
             profiles_delete,
@@ -3549,16 +4243,23 @@ pub fn run() {
 }
 
 /// The shell is a bridge, so there is almost nothing here to test — every
-/// command hands its arguments to the core and its answer back. There are two
-/// exceptions, and they are the two places the shell decides something rather
-/// than forwarding it: the export writer, where a quoting bug is a corrupted
-/// file rather than a visible error, and the monitor loop's own arithmetic —
-/// how long it waits after a failure, what it calls a failure, and what it
-/// publishes while it is doing so. Everything the loop *does* (sampling,
-/// scraping, evaluating) belongs to the core and is tested there.
+/// command hands its arguments to the core and its answer back. There are five
+/// exceptions, and they are the places the shell decides something rather than
+/// forwarding it: the export writer, where a quoting bug is a corrupted file
+/// rather than a visible error; the monitor loop's own arithmetic — how long it
+/// waits after a failure, what it calls a failure, and what it publishes while
+/// it is doing so; the MCP snippets, which are strings this file invents and
+/// a person pastes into another program's configuration; the masking pass,
+/// which is the one place a record is CHANGED on its way to the webview —
+/// which cell of a result set is masked as what, and what a file that carries
+/// masked text says about itself; and the one save-time refusal, which is the
+/// path a WASM decoder plugin may be loaded from. Everything the loop *does*
+/// (sampling, scraping, evaluating) and everything a rule does to a string
+/// belongs to the core and is tested there.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kavka_core::masking::MaskTarget;
     use kavka_core::profiles::{AuthConfig, Environment, MetricsEndpointConfig};
     use kavka_core::serdes::{DecodedPayload, Encoding, HeaderEntry};
 
@@ -3570,6 +4271,7 @@ mod tests {
             raw_len: text.len(),
             truncated: false,
             schema: None,
+            decoded_by: None,
         }
     }
 
@@ -3582,13 +4284,63 @@ mod tests {
             value: Some(payload("{\"id\":7}")),
             headers: Vec::new(),
             dlq: None,
+            masked: false,
         }
     }
 
     fn csv_of(records: &[MessageRecord]) -> String {
         let mut out = Vec::new();
-        write_csv(&mut out, records).expect("a Vec never fails to write");
+        write_csv(&mut out, records, None).expect("a Vec never fails to write");
         String::from_utf8(out).expect("the writer only ever emits UTF-8")
+    }
+
+    // ── MCP snippets ───────────────────────────────────────────────────────
+
+    /// A Windows path is mostly backslashes, and the Cursor snippet is JSON —
+    /// so the one thing that must never happen is a snippet the person has to
+    /// repair before it works.
+    #[test]
+    fn the_cursor_snippet_is_json_that_names_the_binary() {
+        let path = r"C:\Program Files\Kavka\kavka-mcp.exe";
+        let (_, cursor) = mcp_snippets(path);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&cursor).expect("the snippet is valid JSON");
+        assert_eq!(parsed["mcpServers"]["kavka"]["command"], path);
+        assert_eq!(parsed["mcpServers"]["kavka"]["args"], serde_json::json!([]));
+        // The env block is present and empty: writes are opt-in, and this is
+        // where the person opts in.
+        assert_eq!(parsed["mcpServers"]["kavka"]["env"], serde_json::json!({}));
+        // The raw text carries escaped separators, not literal ones.
+        assert!(cursor.contains(r"C:\\Program Files\\Kavka"), "{cursor}");
+    }
+
+    #[test]
+    fn the_claude_snippet_quotes_the_path_and_shows_how_to_allow_writes() {
+        let path = "/Applications/Kavka.app/Contents/MacOS/kavka-mcp";
+        let (claude, _) = mcp_snippets(path);
+        let first = claude.lines().next().expect("a first line");
+        assert_eq!(first, format!("claude mcp add kavka -- \"{path}\""));
+        // The default is the read-only server; enabling writes is a separate,
+        // visible line naming the variable that does it.
+        assert!(claude.contains("KAVKA_MCP_ALLOW_WRITES=1"), "{claude}");
+        assert!(claude.contains("KAVKA_MCP_ALLOW_PROD=1"), "{claude}");
+        assert!(claude.contains("read-only always refuse"), "{claude}");
+    }
+
+    /// The path is a sibling of the running binary on every platform — the one
+    /// rule that covers `cargo tauri dev` and a packaged app at once.
+    #[test]
+    fn the_binary_is_looked_for_beside_this_one() {
+        let path = std::path::PathBuf::from(mcp_binary_path());
+        let expected = format!("kavka-mcp{}", std::env::consts::EXE_SUFFIX);
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some(&*expected));
+        assert_eq!(
+            path.parent(),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(PathBuf::from))
+                .as_deref(),
+        );
     }
 
     #[test]
@@ -3669,7 +4421,7 @@ mod tests {
     #[test]
     fn ndjson_is_one_record_per_line() {
         let mut out = Vec::new();
-        write_ndjson(&mut out, &[record(1), record(2)]).expect("a Vec never fails to write");
+        write_ndjson(&mut out, &[record(1), record(2)], None).expect("a Vec never fails to write");
         let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -3682,7 +4434,7 @@ mod tests {
     #[test]
     fn json_is_one_array_of_records() {
         let mut out = Vec::new();
-        write_json(&mut out, &[record(1), record(2)]).expect("a Vec never fails to write");
+        write_json(&mut out, &[record(1), record(2)], None).expect("a Vec never fails to write");
         let parsed: serde_json::Value =
             serde_json::from_slice(&out).expect("the whole file is one JSON document");
         let array = parsed.as_array().expect("an array");
@@ -3738,7 +4490,7 @@ mod tests {
 
     fn rows_csv_of(cols: &[SqlColumn], rows: &[Vec<serde_json::Value>]) -> String {
         let mut out = Vec::new();
-        write_rows_csv(&mut out, cols, rows).expect("a Vec never fails to write");
+        write_rows_csv(&mut out, cols, rows, None).expect("a Vec never fails to write");
         String::from_utf8(out).expect("the writer only ever emits UTF-8")
     }
 
@@ -3808,6 +4560,7 @@ mod tests {
                 vec![serde_json::json!(0), serde_json::json!(17)],
                 vec![serde_json::json!(1), serde_json::json!(16)],
             ],
+            None,
         )
         .expect("a Vec never fails to write");
         let parsed: serde_json::Value =
@@ -3828,6 +4581,7 @@ mod tests {
                 vec![serde_json::json!("order-1")],
                 vec![serde_json::Value::Null],
             ],
+            None,
         )
         .expect("a Vec never fails to write");
         let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
@@ -3868,14 +4622,15 @@ mod tests {
         let cols = columns(&["n"]);
         let rows = vec![vec![serde_json::json!(1)]];
 
-        write_row_export(&path_text, "parquet", &cols, &rows)
+        write_row_export(&path_text, "parquet", &cols, &rows, false)
             .expect_err("not a format Kavka writes");
         assert_eq!(
             std::fs::read(&path).expect("the file is still there"),
             b"not Kavka's"
         );
 
-        write_row_export(&path_text, "csv", &cols, &rows).expect("csv is a format Kavka writes");
+        write_row_export(&path_text, "csv", &cols, &rows, false)
+            .expect("csv is a format Kavka writes");
         let written = std::fs::read_to_string(&path).expect("the file is still there");
         assert_eq!(written, "n\r\n1\r\n");
         let _ = std::fs::remove_file(&path);
@@ -3910,6 +4665,7 @@ mod tests {
             // the keychain, and a unit test must not touch the machine's.
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         }
     }
 
@@ -4238,5 +4994,328 @@ mod tests {
             .into_owned();
         assert!(!name.contains('/') && !name.contains('\\'), "{name}");
         assert!(name.ends_with(".redb"), "{name}");
+    }
+
+    // ── WASM decoder plugins: where one may come from ──────────────────────
+    //
+    // The rule and its sentences are `kavka_core::wasm_serde`'s. What is tested
+    // here is that the SAVE path runs it — the loader's own check is defence in
+    // depth, and a refusal that only happens when the connection is next opened
+    // is a refusal the person who typed the path never sees.
+
+    fn plugin(path: &str) -> WasmSerdeConfig {
+        WasmSerdeConfig {
+            name: "acme".into(),
+            path: path.into(),
+            applies_to_topics: vec!["*".into()],
+        }
+    }
+
+    #[test]
+    fn saving_a_relative_or_network_plugin_path_is_refused_before_anything_is_written() {
+        let relative = validated_wasm_serde(plugin("decoder.wasm")).expect_err("relative");
+        assert!(relative.to_string().contains("travels"), "{relative}");
+
+        let unc = validated_wasm_serde(plugin(r"\\build-server\share\decoder.wasm"))
+            .expect_err("a network path");
+        assert!(unc.to_string().contains("network path"), "{unc}");
+
+        // …and an absolute local path goes through untouched.
+        let local = std::env::temp_dir().join("acme.wasm").display().to_string();
+        let kept = validated_wasm_serde(plugin(&local)).expect("an absolute path");
+        assert_eq!(kept.path, local);
+    }
+
+    // ── Masking: the things this file decides ──────────────────────────────
+    //
+    // The rules, their compilation and what a rule does to a string all belong
+    // to `kavka_core::masking` and are tested there. What is tested HERE is the
+    // shell's own decisions: which cell of a SQL result set is masked as what,
+    // that a batch pass sets the flag the UI reads, and that an export of
+    // anything masked says so in a way the file itself carries.
+
+    fn rules(pattern: &str, applies_to: MaskTarget) -> MaskSet {
+        let (set, refused) = MaskSet::compile(&[MaskRule {
+            id: "r1".into(),
+            name: "test".into(),
+            pattern: pattern.into(),
+            replacement: "•••".into(),
+            applies_to,
+            enabled: true,
+        }]);
+        assert!(refused.is_empty(), "the fixture rule must compile");
+        set
+    }
+
+    fn masked_record(key: &str, value: &str) -> MessageRecord {
+        MessageRecord {
+            partition: 0,
+            offset: 1,
+            timestamp_ms: Some(1_700_000_000_000),
+            key: Some(payload(key)),
+            value: Some(payload(value)),
+            headers: Vec::new(),
+            dlq: None,
+            masked: false,
+        }
+    }
+
+    #[test]
+    fn a_batch_pass_masks_every_record_and_sets_the_flag() {
+        let set = rules(r"\d{4}", MaskTarget::All);
+        let mut batch = vec![masked_record("k-1111", "v-2222"), masked_record("k", "v")];
+        assert!(mask_batch(&set, &mut batch));
+        assert_eq!(batch[0].key.as_ref().expect("a key").text, "k-•••");
+        assert_eq!(batch[0].value.as_ref().expect("a value").text, "v-•••");
+        assert!(batch[0].masked);
+        // A record nothing matched is NOT flagged: the flag has to mean "this
+        // one was rewritten", or an export's notice means nothing.
+        assert!(!batch[1].masked);
+    }
+
+    /// The cheap path, and the one nearly every session takes.
+    #[test]
+    fn a_session_with_no_rules_leaves_a_batch_alone() {
+        let mut batch = vec![masked_record("k-1111", "v-2222")];
+        assert!(!mask_batch(&MaskSet::none(), &mut batch));
+        assert_eq!(batch[0].key.as_ref().expect("a key").text, "k-1111");
+        assert!(!batch[0].masked);
+    }
+
+    /// The four columns of the `messages` table whose provenance is known are
+    /// masked AS that part of a record — so a rule scoped to keys behaves in a
+    /// result set exactly as it does in the grid.
+    #[test]
+    fn a_key_scoped_rule_masks_key_text_and_not_value_text() {
+        let set = rules(r"\d{4}", MaskTarget::Key);
+        let columns = columns(&["key_text", "value_text"]);
+        let mut rows = vec![vec![
+            serde_json::json!("key-1111"),
+            serde_json::json!("value-2222"),
+        ]];
+        assert!(mask_rows(&set, &columns, &mut rows));
+        assert_eq!(rows[0][0], serde_json::json!("key-•••"));
+        assert_eq!(rows[0][1], serde_json::json!("value-2222"));
+    }
+
+    /// THE UNDER-MASKING RULE. A column that is not one of the four has no
+    /// provenance Kavka can know — `upper(key_text) || value_text` came from
+    /// where? — so every enabled rule runs over it, whatever each is scoped to.
+    #[test]
+    fn a_computed_column_is_masked_by_every_rule_whatever_its_scope() {
+        let set = rules(r"\d{4}", MaskTarget::Key);
+        let columns = columns(&["mixed"]);
+        let mut rows = vec![vec![serde_json::json!("anything-1111")]];
+        assert!(mask_rows(&set, &columns, &mut rows));
+        assert_eq!(rows[0][0], serde_json::json!("anything-•••"));
+    }
+
+    /// Numbers are left alone in a result set for the reason they are left
+    /// alone inside a payload: a regex over a rendered number masks an account
+    /// id and a quantity with equal enthusiasm.
+    #[test]
+    fn numbers_booleans_and_nulls_pass_through_a_result_set_untouched() {
+        let set = rules(r"\d{4}", MaskTarget::All);
+        let columns = columns(&["n", "flag", "nothing"]);
+        let mut rows = vec![vec![
+            serde_json::json!(1111),
+            serde_json::json!(true),
+            serde_json::Value::Null,
+        ]];
+        assert!(!mask_rows(&set, &columns, &mut rows));
+        assert_eq!(rows[0][0], serde_json::json!(1111));
+    }
+
+    /// A nested cell — a DataFusion `array_agg`, say — is walked to its
+    /// strings. A masked value hiding one level down is still a masked value.
+    #[test]
+    fn a_nested_cell_is_walked_to_its_strings() {
+        let set = rules(r"\d{4}", MaskTarget::All);
+        let columns = columns(&["agg"]);
+        let mut rows = vec![vec![serde_json::json!([{"card": "4111"}, "x-2222"])]];
+        assert!(mask_rows(&set, &columns, &mut rows));
+        assert_eq!(rows[0][0], serde_json::json!([{"card": "•••"}, "x-•••"]));
+    }
+
+    #[test]
+    fn a_result_set_with_no_rules_is_not_walked_at_all() {
+        let columns = columns(&["value_text"]);
+        let mut rows = vec![vec![serde_json::json!("value-2222")]];
+        assert!(!mask_rows(&MaskSet::none(), &columns, &mut rows));
+        assert_eq!(rows[0][0], serde_json::json!("value-2222"));
+    }
+
+    // ── The export notice ──────────────────────────────────────────────────
+
+    /// The marker is the string somebody greps a file for to find out whether
+    /// it was masked, so it comes from the core rather than from here.
+    #[test]
+    fn the_notice_carries_the_core_s_marker() {
+        assert!(mask_notice_text().starts_with(MASK_NOTICE_MARKER));
+    }
+
+    #[test]
+    fn an_unmasked_selection_gets_no_notice() {
+        assert!(mask_notice_for(&[record(1), record(2)]).is_none());
+    }
+
+    #[test]
+    fn one_masked_record_puts_the_notice_on_the_whole_file() {
+        let mut records = vec![record(1), record(2)];
+        records[1].masked = true;
+        assert!(mask_notice_for(&records).is_some());
+    }
+
+    /// CSV has no comment syntax, so the notice is a `#` line above the header
+    /// — visible in every tool that opens the file, which is the point.
+    #[test]
+    fn a_masked_csv_says_so_above_its_header_row() {
+        let mut out = Vec::new();
+        let mut records = vec![record(1)];
+        records[0].masked = true;
+        let notice = mask_notice_for(&records).expect("a masked selection");
+        write_csv(&mut out, &records, Some(&notice)).expect("a Vec never fails to write");
+        let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
+        let first = text.lines().next().expect("a first line");
+        assert!(first.starts_with("# "), "{first}");
+        assert!(first.contains(MASK_NOTICE_MARKER), "{first}");
+        // And the header row is still the header row, on line two.
+        assert_eq!(
+            text.lines().nth(1),
+            Some("partition,offset,timestamp_ms,key_text,value_text,headers_json")
+        );
+    }
+
+    /// The ARRAY SHAPE SURVIVES: a masked JSON export is still a list, so every
+    /// reader that maps over it still works — the notice is its first element.
+    #[test]
+    fn a_masked_json_export_keeps_its_array_and_leads_with_the_notice() {
+        let mut out = Vec::new();
+        let records = vec![record(1), record(2)];
+        write_json(&mut out, &records, Some(&mask_notice_text()))
+            .expect("a Vec never fails to write");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&out).expect("the whole file is one JSON document");
+        let array = parsed.as_array().expect("an array");
+        assert_eq!(array.len(), 3);
+        assert!(array[0][MASK_NOTICE_KEY]
+            .as_str()
+            .expect("the notice is a string")
+            .contains(MASK_NOTICE_MARKER));
+        assert_eq!(array[1]["offset"], 1);
+        assert_eq!(array[2]["offset"], 2);
+    }
+
+    /// `head -1` is how somebody looks at an NDJSON file, so that is where the
+    /// notice goes.
+    #[test]
+    fn a_masked_ndjson_export_leads_with_the_notice_line() {
+        let mut out = Vec::new();
+        write_ndjson(&mut out, &[record(1)], Some(&mask_notice_text()))
+            .expect("a Vec never fails to write");
+        let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let first: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("the notice line is JSON");
+        assert!(first[MASK_NOTICE_KEY]
+            .as_str()
+            .expect("a string")
+            .contains(MASK_NOTICE_MARKER));
+        let second: serde_json::Value =
+            serde_json::from_str(lines[1]).expect("the record line is JSON");
+        assert_eq!(second["offset"], 1);
+    }
+
+    /// AN UNMASKED EXPORT IS BYTE-FOR-BYTE WHAT IT ALWAYS WAS. The notice is
+    /// additive and conditional; a session with no rules on must not have its
+    /// files change shape.
+    #[test]
+    fn an_unmasked_export_is_unchanged_in_every_format() {
+        let records = [record(1)];
+        for (format, expected_lines) in [("json", 0usize), ("ndjson", 1), ("csv", 2)] {
+            let mut out = Vec::new();
+            match format {
+                "json" => write_json(&mut out, &records, None),
+                "ndjson" => write_ndjson(&mut out, &records, None),
+                _ => write_csv(&mut out, &records, None),
+            }
+            .expect("a Vec never fails to write");
+            let text = String::from_utf8(out).expect("the writer only ever emits UTF-8");
+            assert!(
+                !text.contains(MASK_NOTICE_MARKER),
+                "{format} leaked a notice"
+            );
+            if expected_lines > 0 {
+                assert_eq!(text.lines().count(), expected_lines, "{format}");
+            }
+        }
+    }
+
+    /// A masked result set is labelled the same way, once the caller says it is
+    /// one — see the note on `export_rows` about the UI not sending it yet.
+    #[test]
+    fn a_masked_result_set_is_labelled_in_every_format() {
+        let cols = columns(&["value_text"]);
+        let rows = vec![vec![serde_json::json!("x")]];
+        let notice = mask_notice_text();
+
+        let mut csv = Vec::new();
+        write_rows_csv(&mut csv, &cols, &rows, Some(&notice)).expect("a Vec never fails");
+        let csv = String::from_utf8(csv).expect("UTF-8");
+        assert!(csv
+            .lines()
+            .next()
+            .expect("a line")
+            .contains(MASK_NOTICE_MARKER));
+
+        let mut json = Vec::new();
+        write_rows_json(&mut json, &cols, &rows, Some(&notice)).expect("a Vec never fails");
+        let parsed: serde_json::Value = serde_json::from_slice(&json).expect("one document");
+        assert_eq!(parsed.as_array().expect("an array").len(), 2);
+
+        let mut ndjson = Vec::new();
+        write_rows_ndjson(&mut ndjson, &cols, &rows, Some(&notice)).expect("a Vec never fails");
+        let ndjson = String::from_utf8(ndjson).expect("UTF-8");
+        assert_eq!(ndjson.lines().count(), 2);
+    }
+
+    // ── The NL translator, as this file forwards it ────────────────────────
+
+    /// The command's only decision: an unknown mode is the CORE's sentence,
+    /// which names the two it accepts, rather than a serde error about an enum
+    /// variant nobody typed.
+    #[test]
+    fn an_unknown_query_mode_is_refused_by_name() {
+        let error = nl_to_query(
+            "status is failed".into(),
+            "sparql".into(),
+            SchemaHint::default(),
+        )
+        .expect_err("sparql is not a mode Kavka has");
+        assert!(error.contains("cel"), "{error}");
+        assert!(error.contains("sql"), "{error}");
+    }
+
+    /// A translation is forwarded whole — the query, the confidence, the
+    /// explanation and the phrases the grammar could not place. The grammar
+    /// itself is the core's and is tested exhaustively there.
+    #[test]
+    fn a_translation_is_forwarded_with_all_four_fields() {
+        let hint = SchemaHint {
+            json_fields: vec!["status".to_string()],
+        };
+        let answer =
+            nl_to_query("status is failed".into(), "cel".into(), hint).expect("cel is a mode");
+        assert!(!answer.query.is_empty());
+        assert!(!answer.explanation.is_empty());
+    }
+
+    /// The cheatsheet is a call rather than a copy for one reason: the core's
+    /// own test checks it against the implementation, so a pattern the grammar
+    /// grew and the doc did not mention fails the build.
+    #[test]
+    fn the_grammar_command_answers_with_the_core_s_text() {
+        assert_eq!(nl_grammar(), kavka_core::nlq::NLQ_GRAMMAR);
     }
 }

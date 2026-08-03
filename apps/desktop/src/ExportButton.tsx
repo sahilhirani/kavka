@@ -94,6 +94,16 @@ interface ExportButtonProps {
   push: (spec: ToastSpec) => void;
   /** Extra reason the control is unavailable — a running fetch, say. */
   disabledReason?: string;
+  /**
+   * Whether the rows in `table` carry masked text.
+   *
+   * ONLY FOR A RESULT SET. A message list answers this for itself — every
+   * `MessageRecord` carries the core's own `masked` flag, and reading it off
+   * the records about to be written is the only honest source. A projected row
+   * has no such flag and no room for one, so the SQL view states it from the
+   * session that produced the rows. Ignored when `records` is set.
+   */
+  masked?: boolean;
 }
 
 /** The sentence the toast carries after a capped export. */
@@ -114,6 +124,23 @@ function cappedDetail(capped: CappedView, path: string): string {
     capped.total,
   )} the live tail has seen. A tail keeps a rolling window; the rest are gone from this view.`;
 }
+
+/**
+ * THE MASK NOTICE — the third thing an export owes the user, and it rides
+ * alongside the cap rather than replacing it.
+ *
+ * A masked session's records reach this window already rewritten: the core
+ * replaced the matched text on the decoded record before it crossed IPC, so
+ * the file this button writes carries the replacement and there is no path
+ * from here to the original. A CSV that quietly holds `•••` where a card
+ * number was is not a problem — a CSV that holds it and doesn't say so is,
+ * because it looks exactly like a CSV of a topic that never had one.
+ */
+const MASK_NOTICE =
+  "Masking was on, so the file carries the replacements and not the original values — Kavka masks before records reach this window.";
+
+const MASK_REASON =
+  "Masking is on, so the file will carry the replacements rather than the real values";
 
 /** The same fact, in the button's title, before the click rather than after. */
 function cappedReason(capped: CappedView): string {
@@ -141,6 +168,7 @@ export default function ExportButton({
   capped = null,
   push,
   disabledReason,
+  masked: tableMasked = false,
 }: ExportButtonProps) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -148,6 +176,15 @@ export default function ExportButton({
   const rows = table?.rows ?? null;
   const count = rows !== null ? rows.length : (records?.length ?? 0);
   const noun = rows !== null ? "row" : "message";
+  // For a message list, read off the records themselves rather than taken as a
+  // prop: the flag is per record and set by the core, so the only honest source
+  // is what is actually about to be written. A view whose rows arrived before a
+  // rule was switched on exports unmasked rows, and says nothing — correctly.
+  // A result set has no per-row flag to read, so its caller says.
+  const masked =
+    records !== undefined
+      ? records.some((record) => record.masked === true)
+      : tableMasked;
 
   const run = useCallback(async () => {
     if (busyRef.current) return;
@@ -165,15 +202,19 @@ export default function ExportButton({
       // Cancelling is not an error and must raise nothing at all.
       if (path === null) return;
       const format = formatFromPath(path);
-      if (table !== null) await exportRows(path, format, table.columns, table.rows);
+      if (table !== null)
+        await exportRows(path, format, table.columns, table.rows, masked);
       else await exportRecords(path, format, records ?? []);
+      const capNote = capped === null ? path : cappedDetail(capped, path);
       push({
         kind: "ok",
         title: `Exported ${groupDigits(count)} ${
           count === 1 ? noun : `${noun}s`
         } as ${format.toUpperCase()}`,
-        detail: capped === null ? path : cappedDetail(capped, path),
-        mono: capped === null,
+        detail: masked ? `${capNote} ${MASK_NOTICE}` : capNote,
+        // The path alone is a literal and reads as mono; the moment a sentence
+        // is appended to it, it is prose.
+        mono: capped === null && !masked,
       });
     } catch (err) {
       const { title, detail } = classifyError(errorMessage(err));
@@ -184,10 +225,10 @@ export default function ExportButton({
       busyRef.current = false;
       setBusy(false);
     }
-  }, [records, table, count, noun, topic, capped, push]);
+  }, [records, table, count, noun, topic, capped, masked, push]);
 
   const nothing = count === 0;
-  const reason = busy
+  const base = busy
     ? "Kavka is writing the file"
     : nothing
       ? "There is nothing on screen to export yet"
@@ -195,6 +236,13 @@ export default function ExportButton({
         (capped === null
           ? `Write these ${groupDigits(count)} ${noun}s to a file`
           : cappedReason(capped)));
+  // The mask notice is additive: a capped, masked view owes both sentences,
+  // and dropping either one to keep the title short loses a fact about the
+  // file somebody is about to hand to someone else.
+  const reason =
+    masked && !busy && !nothing && disabledReason === undefined
+      ? `${base} — ${MASK_REASON}`
+      : base;
 
   return (
     <button

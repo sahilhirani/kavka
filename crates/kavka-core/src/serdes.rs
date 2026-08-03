@@ -86,7 +86,79 @@ pub struct DecodedPayload {
     /// `text` shows less than `raw_len` bytes' worth of the payload.
     pub truncated: bool,
     pub schema: Option<SchemaMeta>,
+    /// The name of the WASM serde plugin that produced this, when one did
+    /// (Phase 5b, [`CustomDecoder`]). `None` for everything the built-in ladder
+    /// decoded, which is nearly everything.
+    ///
+    /// **`encoding` stays [`Encoding::Json`] for a plugin's answer**, and that
+    /// is deliberate rather than lazy: a plugin returns canonical JSON, so
+    /// `json` holds a tree and `text` holds pretty JSON, and `"json"` is a true
+    /// answer to "how do I read this". Adding an `Encoding` variant would have
+    /// put a string the UI does not know in a field it switches on, for a fact
+    /// that belongs in the provenance line anyway (docs/DESIGN.md §5.10:
+    /// *Decoded as Avro · orders-value v4*). A build that has never heard of
+    /// plugins renders "JSON" and is not lying; one that has renders the
+    /// plugin's name.
+    ///
+    /// Additive on the same terms as [`MessageRecord::dlq`]: defaulted on the
+    /// way in, skipped on the way out when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoded_by: Option<String>,
 }
+
+/// The front step of the decode ladder: a decoder the *user* supplied.
+///
+/// The trait lives here, ungated, and its only implementation
+/// ([`crate::wasm_serde::WasmSerde`]) lives behind the `wasm-serdes` feature.
+/// That split is what lets the pipeline have the step without the bare tier
+/// having wasmtime: `decode_with` takes a `&dyn CustomDecoder`, and a build
+/// without the feature simply has nothing that implements it.
+///
+/// # Where it runs, and why there
+///
+/// **Before everything in the built-in ladder, and after the size guard.**
+/// Before, because the whole point is a format Kavka cannot recognise — a
+/// custom decoder that ran after the guesses would be reached only for payloads
+/// that already fell through to hex, and any in-house format whose bytes happen
+/// to parse as MessagePack would be decoded wrongly and confidently. After the
+/// size guard, because the guard's reasoning is unchanged by whose decoder it
+/// is: a 40 MB payload is not going to be read on screen, and pushing it
+/// through a sandbox to render its first 256 KB spends the whole cost for none
+/// of the benefit.
+///
+/// # Failure falls through
+///
+/// [`Self::decode`] answering `None` means "the ladder decides", whether that
+/// is because the plugin declined the bytes or because it failed. A decoder is
+/// expected to record its own failure once per session (see
+/// [`crate::wasm_serde::WasmSerde::note_error`], and
+/// [`crate::sr::SchemaRegistry::note_error`] before it) rather than returning
+/// an error per record for a caller to swallow 400,000 times.
+///
+/// # `Send + Sync`, and why it is on the trait
+///
+/// A search scans with eight worker threads and a live tail runs on its own, so
+/// the pipeline holds a decoder as a [`SharedDecoder`] and hands a clone to each
+/// one. Requiring the bound here rather than at every `Arc<dyn CustomDecoder +
+/// Send + Sync>` is what keeps that spelling out of five modules; the only
+/// implementation ([`crate::wasm_serde::WasmSerde`]) is both already, because
+/// its instances live behind a mutex-guarded free list for exactly this reason.
+pub trait CustomDecoder: Send + Sync {
+    /// The plugin's name, for the provenance line.
+    fn name(&self) -> &str;
+
+    /// `Some(json)` when this decoder read the bytes; `None` when it declined
+    /// them or failed on them.
+    fn decode(&self, bytes: &[u8]) -> Option<serde_json::Value>;
+}
+
+/// A decoder as the read paths carry it: shared, because one plugin serves
+/// every worker of a scan, and cloned rather than borrowed because those
+/// workers outlive the call that started them.
+///
+/// `None` — the common case — is a session with no plugin claiming the topic,
+/// and costs an `Option` check per record.
+pub type SharedDecoder = std::sync::Arc<dyn CustomDecoder>;
 
 /// One Kafka record header. `value` is `None` only for a genuinely null header
 /// value (Kafka allows them); `is_text` says whether the rendered `value` is
@@ -121,6 +193,25 @@ pub struct MessageRecord {
     /// feature none of them use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dlq: Option<DlqMeta>,
+    /// A masking rule rewrote something in this record before it crossed IPC
+    /// (Phase 5b, [`crate::masking`]). The UI says so beside the row; the
+    /// export writer says so in the file.
+    ///
+    /// **Additive by construction**, on exactly the terms [`Self::dlq`] set:
+    /// `#[serde(default)]` so a payload written before this field existed still
+    /// parses, and skipped when `false` so an unmasked record's wire form is
+    /// byte-for-byte what it was. A session with masking off pays nothing for
+    /// it on 10,000 search hits.
+    ///
+    /// It is set by [`crate::masking::MaskSet::mask_record`] and by nothing
+    /// else. Nothing clears it: a record that was masked stays marked, so a
+    /// second pass over an already-masked record cannot quietly un-say it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub masked: bool,
+}
+
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +481,20 @@ pub fn decode(
     registry: Option<&SchemaRegistry>,
     max_display_bytes: usize,
 ) -> DecodedPayload {
+    decode_with(bytes, registry, max_display_bytes, None)
+}
+
+/// [`decode`], with a user-supplied decoder given first refusal.
+///
+/// The two are one function; `decode` is the spelling for the callers that have
+/// no plugin, which is most of them. See [`CustomDecoder`] for where the step
+/// sits in the ladder and why.
+pub fn decode_with(
+    bytes: &[u8],
+    registry: Option<&SchemaRegistry>,
+    max_display_bytes: usize,
+    custom: Option<&dyn CustomDecoder>,
+) -> DecodedPayload {
     let raw_len = bytes.len();
     let framing = confluent_schema_id(bytes);
 
@@ -413,7 +518,19 @@ pub fn decode(
             // The framing bytes are in the first five, so the id survives even
             // here: the inspector can still name the subject it would decode as.
             schema: framing.map(schema_meta_id_only),
+            decoded_by: None,
         };
+    }
+
+    // The front step. See [`CustomDecoder`]: first refusal over the whole
+    // ladder, and a decline or a failure falls straight through to it.
+    if let Some(decoder) = custom {
+        if let Some(json) = decoder.decode(bytes) {
+            let mut decoded = structured(Encoding::Json, json, raw_len, None);
+            decoded.decoded_by = Some(decoder.name().to_string());
+            cap_rendered(&mut decoded, max_display_bytes);
+            return decoded;
+        }
     }
 
     if let Some(schema_id) = framing {
@@ -431,6 +548,7 @@ pub fn decode(
             raw_len,
             truncated: false,
             schema: None,
+            decoded_by: None,
         };
     }
     if let Some(json) = decode_msgpack(bytes) {
@@ -440,6 +558,38 @@ pub fn decode(
         return structured(Encoding::Cbor, json, raw_len, None);
     }
     hex_payload(bytes, None)
+}
+
+/// Cuts a payload's rendered `text` to the display cap, exactly as the guard at
+/// the top of [`decode_with`] does — and this is the ONE caller that needs it
+/// after the fact.
+///
+/// **The guard bounds the input; a plugin breaks that arithmetic.** Every step
+/// of the built-in ladder renders something whose size is a function of the
+/// bytes it was given, so a payload under `max_display_bytes` produces a `text`
+/// of roughly that order. A [`CustomDecoder`] answers with whatever it decided
+/// to write: 200 bytes of an in-house format can legitimately expand into a
+/// megabyte of JSON, and 10,000 of those in a search buffer is precisely the
+/// webview stall the cap exists to prevent — reached through the one door the
+/// cap was not standing at.
+///
+/// **The tree goes with the text.** A `json` that outlived the `text` rendered
+/// from it would carry the whole answer across IPC anyway (the inspector's JSON
+/// tab reads it), so keeping it would bound nothing and would show two
+/// different payloads under two tabs.
+///
+/// `raw_len` is untouched: it is the length on the wire, not of the rendering.
+fn cap_rendered(decoded: &mut DecodedPayload, max_display_bytes: usize) {
+    if decoded.text.len() <= max_display_bytes {
+        return;
+    }
+    let mut cut = max_display_bytes;
+    while cut > 0 && !decoded.text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    decoded.text.truncate(cut);
+    decoded.json = None;
+    decoded.truncated = true;
 }
 
 /// Decodes a header value: text-or-hex, with no ladder.
@@ -598,6 +748,7 @@ fn structured(
         raw_len,
         truncated: false,
         schema,
+        decoded_by: None,
     }
 }
 
@@ -609,6 +760,7 @@ fn hex_payload(bytes: &[u8], schema: Option<SchemaMeta>) -> DecodedPayload {
         raw_len: bytes.len(),
         truncated: false,
         schema,
+        decoded_by: None,
     }
 }
 
@@ -1403,6 +1555,7 @@ mod tests {
             value: None,
             headers: vec![decode_header("trace-id", Some(b"abc"))],
             dlq: None,
+            masked: false,
         };
         assert_eq!(
             serde_json::to_value(&record).unwrap(),
@@ -1448,6 +1601,7 @@ mod tests {
             value: None,
             headers: Vec::new(),
             dlq: None,
+            masked: false,
         };
         let wire = serde_json::to_value(&record).unwrap();
         assert!(
@@ -1961,5 +2115,210 @@ mod dlq {
             meta,
             "round trip"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The two Phase 5b additions to this pipeline: the custom-decoder front step
+// and the `masked` flag. Both are tested here with a stand-in decoder rather
+// than with wasmtime, so the *pipeline* is checked on the bare tier and the
+// *engine* is checked in `crate::wasm_serde` behind its feature.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod front_step {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A decoder that claims the bytes starting with `!`, declines the rest,
+    /// and counts how often it was asked.
+    struct Stub {
+        calls: AtomicUsize,
+    }
+
+    impl Stub {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CustomDecoder for Stub {
+        fn name(&self) -> &str {
+            "acme"
+        }
+
+        fn decode(&self, bytes: &[u8]) -> Option<serde_json::Value> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            bytes
+                .strip_prefix(b"!")
+                .map(|rest| serde_json::json!({"acme": String::from_utf8_lossy(rest)}))
+        }
+    }
+
+    const CAP: usize = DEFAULT_MAX_VALUE_BYTES;
+
+    #[test]
+    fn a_plugin_that_claims_the_bytes_produces_the_payload_and_names_itself() {
+        let stub = Stub::new();
+        let decoded = decode_with(b"!hello", None, CAP, Some(&stub));
+
+        assert_eq!(decoded.decoded_by.as_deref(), Some("acme"));
+        assert_eq!(decoded.json.unwrap()["acme"], "hello");
+        assert_eq!(decoded.raw_len, 6);
+        // The encoding stays `json` on purpose — see `DecodedPayload::decoded_by`.
+        assert_eq!(decoded.encoding, Encoding::Json);
+    }
+
+    /// The front step runs **before** the built-in ladder, which is the whole
+    /// point: an in-house format whose bytes happen to parse as JSON must reach
+    /// the plugin, not the guess.
+    #[test]
+    fn the_plugin_gets_first_refusal_over_the_built_in_ladder() {
+        let stub = Stub::new();
+        // Valid JSON, and the plugin claims it anyway.
+        let decoded = decode_with(br#"!{"a":1}"#, None, CAP, Some(&stub));
+        assert_eq!(decoded.decoded_by.as_deref(), Some("acme"));
+        assert_eq!(decoded.json.unwrap()["acme"], "{\"a\":1}");
+
+        // …including over Confluent framing, which is otherwise step one.
+        let mut framed = vec![b'!', 0x00];
+        framed.extend_from_slice(&217u32.to_be_bytes());
+        let decoded = decode_with(&framed, None, CAP, Some(&stub));
+        assert_eq!(decoded.decoded_by.as_deref(), Some("acme"));
+        assert!(decoded.schema.is_none());
+    }
+
+    /// A decline falls straight through to the ladder, with nothing lost.
+    #[test]
+    fn a_decline_falls_through_to_the_ladder() {
+        let stub = Stub::new();
+        for (bytes, expected) in [
+            (&b"{\"orderId\":7}"[..], Encoding::Json),
+            (b"order-42", Encoding::Utf8),
+            (&[0xfe, 0xff], Encoding::Hex),
+        ] {
+            let decoded = decode_with(bytes, None, CAP, Some(&stub));
+            assert_eq!(decoded.encoding, expected, "{bytes:?}");
+            assert_eq!(decoded.decoded_by, None, "{bytes:?}");
+        }
+        // Confluent framing still resolves the way it always did.
+        let mut framed = vec![0x00];
+        framed.extend_from_slice(&217u32.to_be_bytes());
+        framed.extend_from_slice(&[0x02]);
+        let decoded = decode_with(&framed, None, CAP, Some(&stub));
+        assert_eq!(decoded.schema.unwrap().schema_id, 217);
+        assert_eq!(decoded.decoded_by, None);
+    }
+
+    /// The size guard runs first, and the plugin is not asked: pushing 40 MB
+    /// through a sandbox to render its first 256 KB spends the whole cost for
+    /// none of the benefit.
+    #[test]
+    fn an_oversized_payload_never_reaches_the_plugin() {
+        let stub = Stub::new();
+        let big = format!("!{}", "x".repeat(200));
+        let decoded = decode_with(big.as_bytes(), None, 64, Some(&stub));
+
+        assert!(decoded.truncated);
+        assert_eq!(decoded.decoded_by, None);
+        assert_eq!(
+            stub.calls.load(Ordering::Relaxed),
+            0,
+            "the plugin was asked"
+        );
+    }
+
+    /// A decoder that expands: a handful of bytes in, a very large document
+    /// out. The shape the input-side size guard cannot see.
+    struct Expanding;
+
+    impl CustomDecoder for Expanding {
+        fn name(&self) -> &str {
+            "balloon"
+        }
+
+        fn decode(&self, _bytes: &[u8]) -> Option<serde_json::Value> {
+            Some(serde_json::json!({ "blob": "x".repeat(100_000) }))
+        }
+    }
+
+    /// THE PLUGIN'S ANSWER IS CAPPED LIKE ANY OTHER PAYLOAD. The guard at the
+    /// top of the ladder bounds the bytes that went IN; nothing bounded what a
+    /// plugin chose to hand back, so a 6-byte record could arrive in the
+    /// webview as 100 KB — 10,000 times over, in a search buffer.
+    #[test]
+    fn a_plugins_answer_is_cut_to_the_display_cap() {
+        let decoded = decode_with(b"!hello", None, 4_096, Some(&Expanding));
+
+        assert_eq!(decoded.decoded_by.as_deref(), Some("balloon"));
+        assert!(decoded.truncated, "the cut has to be reported");
+        assert_eq!(decoded.text.len(), 4_096);
+        // The tree goes with the text — otherwise the whole answer crosses IPC
+        // anyway and the two halves of the payload disagree.
+        assert!(decoded.json.is_none());
+        // …and `raw_len` is still the length on the WIRE.
+        assert_eq!(decoded.raw_len, 6);
+    }
+
+    /// An answer under the cap is untouched and unmarked, so a truncated
+    /// payload can never be mistaken for a complete one.
+    #[test]
+    fn a_plugins_answer_under_the_cap_keeps_its_tree() {
+        let decoded = decode_with(b"!hello", None, CAP, Some(&Stub::new()));
+        assert!(!decoded.truncated);
+        assert_eq!(decoded.json.unwrap()["acme"], "hello");
+    }
+
+    /// `decode` is `decode_with` with no plugin, and every existing caller of
+    /// it is unchanged.
+    #[test]
+    fn decode_is_decode_with_and_no_plugin() {
+        let bytes = br#"{"orderId":7}"#;
+        let plain = decode(bytes, None, CAP);
+        let explicit = decode_with(bytes, None, CAP, None);
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::to_value(&explicit).unwrap()
+        );
+        assert_eq!(plain.decoded_by, None);
+    }
+
+    /// Both Phase 5b fields are additive on the wire: absent from a record that
+    /// has neither, parsed from a payload written before they existed.
+    #[test]
+    fn the_new_fields_are_additive_on_the_wire() {
+        let record = MessageRecord {
+            partition: 3,
+            offset: 8412,
+            timestamp_ms: Some(1_700_000_000_000),
+            key: None,
+            value: Some(decode(b"hello", None, CAP)),
+            headers: Vec::new(),
+            dlq: None,
+            masked: false,
+        };
+        let json = serde_json::to_value(&record).unwrap();
+        assert!(json.get("masked").is_none(), "{json}");
+        assert!(json["value"].get("decoded_by").is_none(), "{json}");
+
+        // A masked record says so, once, in one place.
+        let masked = MessageRecord {
+            masked: true,
+            ..record
+        };
+        assert_eq!(serde_json::to_value(&masked).unwrap()["masked"], true);
+
+        // A payload written before either field existed still parses.
+        let legacy: MessageRecord = serde_json::from_str(
+            r#"{"partition":0,"offset":1,"timestamp_ms":null,"key":null,
+                "value":{"encoding":"utf8","text":"hi","json":null,"raw_len":2,
+                         "truncated":false,"schema":null},
+                "headers":[]}"#,
+        )
+        .expect("a Phase 5a record still parses");
+        assert!(!legacy.masked);
+        assert!(legacy.value.unwrap().decoded_by.is_none());
     }
 }

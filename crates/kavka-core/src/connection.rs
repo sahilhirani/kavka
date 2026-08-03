@@ -11,6 +11,7 @@ use crate::profiles::ConnectionProfile;
 use crate::profiles::{AuthConfig, ScramMechanism};
 #[cfg(feature = "kafka")]
 use crate::secrets;
+use crate::serdes::SharedDecoder;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +84,15 @@ pub struct ClusterConnection {
     /// Built on first admin call, then reused — see [`ClusterConnection::admin`].
     #[cfg(feature = "kafka")]
     admin: OnceLock<AdminClient<KavkaClientContext>>,
+    /// The profile's WASM decoder plugins, compiled once when the connection
+    /// opened — see [`ClusterConnection::decoder_for`].
+    #[cfg(feature = "wasm-serdes")]
+    serdes: crate::wasm_serde::WasmSerdes,
+    /// A sentence for each plugin that would not load, kept so the shell can
+    /// say so once rather than per record — see
+    /// [`ClusterConnection::serde_problems`].
+    #[cfg(feature = "wasm-serdes")]
+    serde_problems: Vec<String>,
 }
 
 impl ClusterConnection {
@@ -93,10 +103,21 @@ impl ClusterConnection {
         let (config, context) = client_config(&profile)?;
         let consumer: BaseConsumer<KavkaClientContext> =
             config.create_with_context(context).map_err(client_error)?;
+        // Compiled here, once, for the same reason the mask set is compiled
+        // once: a decode path that instantiated a WebAssembly module per record
+        // would be slower than the format it is decoding. A plugin that will
+        // not load is a sentence kept for the caller, never a refusal to open
+        // the cluster — the built-in ladder is always there.
+        #[cfg(feature = "wasm-serdes")]
+        let (serdes, serde_problems) = crate::wasm_serde::WasmSerdes::load(&profile.wasm_serdes);
         let conn = Self {
             profile,
             consumer,
             admin: OnceLock::new(),
+            #[cfg(feature = "wasm-serdes")]
+            serdes,
+            #[cfg(feature = "wasm-serdes")]
+            serde_problems,
         };
         conn.metadata()?;
         Ok(conn)
@@ -254,6 +275,70 @@ impl ClusterConnection {
 
     pub fn profile(&self) -> &ConnectionProfile {
         &self.profile
+    }
+
+    /// The user-supplied decoder that claims `topic`, if the profile configures
+    /// one that does.
+    ///
+    /// **This is the seam every read path uses.** `consume`, `search`, `sql` and
+    /// `xcluster` each ask the connection once — before their scan starts, never
+    /// per record — and pass the answer to [`crate::serdes::decode_with`], which
+    /// gives it first refusal over the built-in ladder
+    /// ([`crate::serdes::CustomDecoder`] says why there and nowhere else).
+    ///
+    /// Hanging it off the connection rather than off each spec is what keeps the
+    /// plugin set a property of the cluster the user opened: it is configured on
+    /// the profile, it is compiled when the connection opens, and every path
+    /// that reads that cluster — including the MCP server, which opens the same
+    /// connection from the same profile — gets the same answer without a fifth
+    /// caller having to remember to thread it through.
+    ///
+    /// **A plugin change takes effect on the next connect**, deliberately: a
+    /// module swapped underneath a running search would decode the first half of
+    /// a scan one way and the second half another, and a result set assembled
+    /// from two decoders is one nobody can reason about.
+    #[cfg(feature = "wasm-serdes")]
+    pub fn decoder_for(&self, topic: &str) -> Option<SharedDecoder> {
+        // The `map` closure's return type is the coercion site that turns an
+        // `Arc<WasmSerde>` into an `Arc<dyn CustomDecoder>`.
+        self.serdes
+            .for_topic(topic)
+            .map(|plugin| -> SharedDecoder { plugin })
+    }
+
+    /// Without the feature there is nothing that implements the trait, so there
+    /// is nothing to find — see the module gate in `lib.rs`.
+    #[cfg(not(feature = "wasm-serdes"))]
+    pub fn decoder_for(&self, _topic: &str) -> Option<SharedDecoder> {
+        None
+    }
+
+    /// One sentence per plugin the profile configures that would not load,
+    /// captured when the connection opened.
+    ///
+    /// Reported once by the caller rather than per record, on the same rule as
+    /// [`crate::sr::SchemaRegistry::take_error`]: a missing `.wasm` file would
+    /// otherwise produce one message per record of a 400,000-record scan.
+    #[cfg(feature = "wasm-serdes")]
+    pub fn serde_problems(&self) -> &[String] {
+        &self.serde_problems
+    }
+
+    #[cfg(not(feature = "wasm-serdes"))]
+    pub fn serde_problems(&self) -> &[String] {
+        &[]
+    }
+
+    /// The first runtime failure each loaded plugin hit, taken so it is reported
+    /// once per session. Empty is the normal state.
+    #[cfg(feature = "wasm-serdes")]
+    pub fn take_serde_errors(&self) -> Vec<String> {
+        self.serdes.take_errors()
+    }
+
+    #[cfg(not(feature = "wasm-serdes"))]
+    pub fn take_serde_errors(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// The cluster's own id, as its brokers report it.
@@ -665,6 +750,7 @@ mod tests {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         }
     }
 

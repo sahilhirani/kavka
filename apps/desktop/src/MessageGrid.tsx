@@ -423,7 +423,24 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
                           <span className="cell-tag"> tombstone</span>
                         </>
                       ) : (
-                        previewText(record.value)
+                        <>
+                          {previewText(record.value)}
+                          {/* A masking rule rewrote this row on its way here.
+                              The tag is per ROW because a session can hold
+                              both: rows fetched before a rule was switched on
+                              are verbatim, and the status-bar chip alone
+                              cannot tell those two apart. Same device as the
+                              tombstone tag — a word, never a colour. */}
+                          {record.masked === true && (
+                            <span
+                              className="cell-tag"
+                              title="A masking rule replaced part of this record before it reached this window. Copies and exports carry the replacement."
+                            >
+                              {" "}
+                              masked
+                            </span>
+                          )}
+                        </>
                       )}
                     </td>
                     {hasDlq && (

@@ -57,7 +57,7 @@ use crate::produce::{self, DeliverySink};
 #[cfg(feature = "kafka")]
 use crate::search::{CelFilter, CompiledQuery};
 #[cfg(feature = "kafka")]
-use crate::serdes::{self, MessageRecord, DEFAULT_MAX_VALUE_BYTES};
+use crate::serdes::{self, MessageRecord, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
 #[cfg(feature = "kafka")]
@@ -921,6 +921,10 @@ struct CopyRun {
     dest_topic: String,
     filter: CompiledQuery,
     registry: Option<SchemaRegistry>,
+    /// The SOURCE profile's plugin for the source topic. Only ever consulted by
+    /// a CEL filter's decode — the copy itself moves raw bytes, so a plugin
+    /// never changes what is written.
+    decoder: Option<SharedDecoder>,
     preserve_partition: bool,
     provenance: bool,
     max_messages: Option<u64>,
@@ -1043,6 +1047,7 @@ impl CopySession {
                 .schema_registry
                 .as_ref()
                 .map(SchemaRegistry::new),
+            decoder: source.decoder_for(&spec.source_topic),
             preserve_partition: spec.preserve_partition,
             provenance: spec.provenance_headers,
             max_messages: spec.max_messages.map(u64::from),
@@ -1138,6 +1143,7 @@ fn pump(run: CopyRun, shared: &CopyShared, cancel: &CancelToken) {
         dest_topic,
         filter,
         registry,
+        decoder,
         preserve_partition,
         provenance,
         max_messages,
@@ -1221,7 +1227,13 @@ fn pump(run: CopyRun, shared: &CopyShared, cancel: &CancelToken) {
         }
         shared.scanned.fetch_add(1, Ordering::Relaxed);
 
-        let verdict = keep(&message, &filter, evaluator.as_ref(), registry.as_ref());
+        let verdict = keep(
+            &message,
+            &filter,
+            evaluator.as_ref(),
+            registry.as_ref(),
+            decoder.as_ref(),
+        );
         // Re-armed BEFORE the verdict is acted on, because two of its three arms
         // go straight back to the expiry check at the top of the loop without
         // passing a destination wait: a CEL filter's decode can sit on a schema
@@ -1371,6 +1383,7 @@ fn keep(
     filter: &CompiledQuery,
     evaluator: Option<&CelFilter>,
     registry: Option<&SchemaRegistry>,
+    decoder: Option<&SharedDecoder>,
 ) -> std::result::Result<bool, String> {
     if !filter.matches_raw(message.key(), message.payload(), raw_headers(message)) {
         return Ok(false);
@@ -1378,13 +1391,18 @@ fn keep(
     let Some(evaluator) = evaluator else {
         return Ok(true);
     };
-    evaluator.matches(&decoded(message, registry))
+    evaluator.matches(&decoded(message, registry, decoder))
 }
 
 /// One record decoded far enough for a CEL expression to judge it. Only ever
 /// built when there *is* an expression — the copy itself writes raw bytes.
 #[cfg(feature = "kafka")]
-fn decoded(message: &BorrowedMessage<'_>, registry: Option<&SchemaRegistry>) -> MessageRecord {
+fn decoded(
+    message: &BorrowedMessage<'_>,
+    registry: Option<&SchemaRegistry>,
+    decoder: Option<&SharedDecoder>,
+) -> MessageRecord {
+    let custom = decoder.map(|plugin| plugin.as_ref());
     let headers: Vec<_> = message.headers().map_or_else(Vec::new, |headers| {
         (0..headers.count())
             .map(|i| {
@@ -1399,11 +1417,12 @@ fn decoded(message: &BorrowedMessage<'_>, registry: Option<&SchemaRegistry>) -> 
         timestamp_ms: message.timestamp().to_millis(),
         key: message
             .key()
-            .map(|bytes| serdes::decode(bytes, registry, DEFAULT_MAX_VALUE_BYTES)),
+            .map(|bytes| serdes::decode_with(bytes, registry, DEFAULT_MAX_VALUE_BYTES, custom)),
         value: message
             .payload()
-            .map(|bytes| serdes::decode(bytes, registry, DEFAULT_MAX_VALUE_BYTES)),
+            .map(|bytes| serdes::decode_with(bytes, registry, DEFAULT_MAX_VALUE_BYTES, custom)),
         dlq: serdes::dlq_inspect(&headers),
+        masked: false,
         headers,
     }
 }
@@ -2958,6 +2977,7 @@ mod it {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         })
         .expect("connect")
     }

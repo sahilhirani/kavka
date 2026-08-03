@@ -36,6 +36,27 @@ jobs:
       - name: Clippy (kafka)
         run: cargo clippy -p kavka-core --features kafka -- -D warnings
 
+      # The WASM serde tier stands alone (a decoder needs no cluster), so it
+      # lints on its own.
+      - name: Clippy (wasm serdes)
+        run: cargo clippy -p kavka-core --features wasm-serdes --all-targets -- -D warnings
+
+      # And at the tier the desktop app ships, which is the only one where the
+      # plugin actually meets the read paths: `ClusterConnection::decoder_for`
+      # and its four callers in `consume`, `search`, `sql` and `xcluster` are
+      # compiled only when `kafka` and `wasm-serdes` are both on, and
+      # `kafka-ssl` is the combination that is green with `--all-targets`
+      # (plain `kafka` leaves the ssl-gated test helpers in `connection.rs`
+      # unreferenced, which is why the step above it has no `--all-targets`).
+      - name: Clippy (kafka-ssl, all targets)
+        run: cargo clippy -p kavka-core --features kafka-ssl --all-targets -- -D warnings
+
+      # The MCP server (crates/kavka-mcp). It builds kavka-core at the
+      # kafka-ssl tier — the same one the desktop app ships — because it opens
+      # the same connections from the same profiles.json.
+      - name: Clippy (MCP server)
+        run: cargo clippy -p kavka-mcp --all-targets -- -D warnings
+
       - name: Start local Kafka (KRaft)
         run: docker compose -f dev/docker-compose.yml up -d --wait
 
@@ -43,6 +64,14 @@ jobs:
       # ssl-asserting unit tests (vendored OpenSSL needs the runner's perl).
       - name: Unit + integration tests
         run: cargo test -p kavka-core --features kafka-ssl
+        env:
+          KAVKA_IT: "1"
+
+      # The MCP suite spawns the built binary and drives it over real pipes
+      # against the cluster started above, so it runs here rather than beside
+      # the core's own tests.
+      - name: MCP server tests
+        run: cargo test -p kavka-mcp
         env:
           KAVKA_IT: "1"
 

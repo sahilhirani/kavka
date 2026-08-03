@@ -509,6 +509,7 @@ mod tests {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         }
     }
 

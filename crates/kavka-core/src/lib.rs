@@ -46,7 +46,13 @@ pub mod connect;
 pub mod connection;
 pub mod consume;
 pub mod history;
+/// Ungated: masking is a regex over decoded text, and the whole feature is
+/// testable — rules, store and all — with no cluster in sight.
+pub mod masking;
 pub mod metrics;
+/// Ungated: a grammar is a table of strings, and the whole point of it is that
+/// it can be checked exhaustively without a cluster, a model or a network.
+pub mod nlq;
 pub mod produce;
 pub mod profiles;
 pub mod search;
@@ -59,6 +65,12 @@ pub mod serdes;
 pub mod sql;
 pub mod sr;
 pub mod streams;
+/// Behind `wasm-serdes` (which `kafka-ssl` includes), because `wasmtime` is:
+/// see Cargo.toml for what that costs and why it is worth it. The *trait* the
+/// pipeline calls through — [`serdes::CustomDecoder`] — is ungated, so the
+/// decode ladder has the step whether or not this module is compiled.
+#[cfg(feature = "wasm-serdes")]
+pub mod wasm_serde;
 pub mod xcluster;
 
 /// Behind `kafka` for one reason, spelled out at the top of the module: its

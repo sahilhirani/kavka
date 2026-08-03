@@ -134,9 +134,37 @@ export function previewText(payload: DecodedPayload | null, max = 240): string {
  * How the inspector describes where a payload came from.
  * DESIGN §5.10: provenance is pinned at the bottom, and it never claims a
  * schema that did not match.
+ *
+ * A PLUGIN IS NAMED, ALWAYS AND FIRST. When a custom WebAssembly decoder
+ * produced the payload the core names it in `decoded_by` (Phase 5b) and leaves
+ * `encoding` as `"json"`, because a plugin answers with canonical JSON and
+ * that is a true answer to "how do I read this". The name is a different kind
+ * of claim from every other line here — the bytes were read by code the user
+ * supplied rather than by anything Kavka ships, so "this is what the record
+ * says" is only as true as their module — which is why it leads the sentence
+ * rather than sitting inside `encodingWord`.
+ *
+ * `decoded_by` is optional on the wire and absent for everything the built-in
+ * ladder decoded, so the test is `!= null` and covers both "an older core" and
+ * "no plugin claimed these bytes".
  */
 export function provenance(payload: DecodedPayload): string {
+  const plugin = payload.decoded_by ?? null;
   const schema = payload.schema;
+  if (plugin !== null) {
+    const parts = [`Decoded by ${plugin} — your own WebAssembly plugin`];
+    if (schema !== null) {
+      if (schema.subject !== null) {
+        parts.push(
+          schema.version !== null
+            ? `${schema.subject} v${schema.version}`
+            : schema.subject,
+        );
+      }
+      parts.push(`id ${schema.schema_id}`);
+    }
+    return parts.join(" · ");
+  }
   if (schema === null) {
     return payload.encoding === "json"
       ? "Read as JSON — these bytes parsed on their own, with no schema involved."

@@ -69,6 +69,99 @@ pub struct ConnectionProfile {
     /// are read on every launch.
     #[serde(default)]
     pub sampler_interval_ms: Option<u32>,
+    /// Custom decoders for this cluster's payloads, as sandboxed WebAssembly
+    /// modules (Phase 5b, [`crate::wasm_serde`]).
+    ///
+    /// A list rather than an `Option`, like `connect_clusters` and unlike
+    /// `metrics_endpoint`: a cluster routinely carries more than one in-house
+    /// format, and the whole point of the glob is that each plugin claims the
+    /// topics it understands. Empty is the normal state and means the built-in
+    /// ladder decides everything.
+    ///
+    /// `#[serde(default)]` for the fifth time and the same reason as the four
+    /// fields above it: every profile on disk today has no such key, and they
+    /// are read on every launch. The failure this guards is not "the new
+    /// feature is missing", it is "the sidebar is empty and every connection is
+    /// gone".
+    ///
+    /// **Not a secret and not a keychain entry**: a plugin is a file path and a
+    /// list of globs, so it travels in a profile export like the rest of the
+    /// document. The path on the machine that imports it may not exist, which
+    /// is reported the same way a missing CA file is — see
+    /// [`crate::wasm_serde::WasmSerdes::load`].
+    #[serde(default)]
+    pub wasm_serdes: Vec<WasmSerdeConfig>,
+}
+
+/// One custom decoder: a WebAssembly module on disk, and the topics it reads.
+///
+/// The ABI the module has to implement is documented once, on
+/// [`crate::wasm_serde`], and an example implementation with build instructions
+/// is in `docs/examples/wasm-serde/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasmSerdeConfig {
+    /// How the user refers to this plugin. Appears in the payload inspector's
+    /// provenance line and in any error the plugin produces.
+    pub name: String,
+    /// Absolute path to the `.wasm` (or `.wat`) file.
+    pub path: String,
+    /// Topic-name globs. A plugin with no globs reads nothing — an empty list
+    /// is "registered but off", not "everything", because the alternative
+    /// silently routes every topic on the cluster through a decoder the user
+    /// has not finished configuring.
+    #[serde(default)]
+    pub applies_to_topics: Vec<String>,
+}
+
+impl WasmSerdeConfig {
+    /// Whether this plugin claims `topic`.
+    ///
+    /// The glob is `*` (any run of characters, including none) and `?` (exactly
+    /// one character), matched against the whole name — the vocabulary a Kafka
+    /// user already has from `kafka-topics.sh --topic 'orders.*'` and from ACL
+    /// prefixes. There is no `**` and no character class: a topic name has no
+    /// path structure to describe, and every extra piece of syntax is another
+    /// thing that behaves differently here than in the shell.
+    ///
+    /// Matching is case-sensitive, because Kafka topic names are.
+    pub fn matches_topic(&self, topic: &str) -> bool {
+        self.applies_to_topics
+            .iter()
+            .any(|pattern| glob_matches(pattern, topic))
+    }
+}
+
+/// `*` and `?` against a whole string, iteratively.
+///
+/// Iterative rather than recursive on purpose: the pattern is user input, and a
+/// recursive matcher on `*a*a*a*a*b` against a long name is the textbook way to
+/// turn a topic list into a hang. This is the standard backtracking-once
+/// algorithm — linear in the common case, and bounded by `pattern * text` in
+/// the worst.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut p, mut t) = (0, 0);
+    // Where to resume if the current `*` turns out to have matched too little.
+    let mut star: Option<(usize, usize)> = None;
+
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some((p, t));
+            p += 1;
+        } else if let Some((star_at, resume)) = star {
+            // Give the last `*` one more character and try again.
+            p = star_at + 1;
+            t = resume + 1;
+            star = Some((star_at, resume + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
 }
 
 impl ConnectionProfile {
@@ -544,6 +637,7 @@ mod tests {
                 }),
             }),
             sampler_interval_ms: Some(30_000),
+            wasm_serdes: Vec::new(),
         }
     }
 
@@ -913,6 +1007,130 @@ mod tests {
         let profile = profile("a", "A");
         assert_eq!(profile.connect_cluster("sinks").unwrap().username, None);
         assert!(profile.connect_cluster("nope").is_none());
+    }
+
+    /// The field arrived in Phase 5b; every profile written before it has no
+    /// such key. Fifth verse, same as the first — and the reason this test
+    /// exists a fifth time is that the failure it guards is not "the new
+    /// feature is missing", it is "the sidebar is empty and every connection
+    /// is gone".
+    #[test]
+    fn profiles_written_before_the_wasm_serde_field_still_load() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "dev",
+                "bootstrap_servers": ["localhost:9092"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false,
+                "metrics_endpoint": {"url": "http://broker-1:9404/metrics"},
+                "sampler_interval_ms": 30000
+            }]
+        }"#;
+        let profiles = import_json(legacy).expect("a Phase 4 profile still parses");
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].wasm_serdes.is_empty());
+        // The rest of the profile is untouched by the addition.
+        assert!(profiles[0].metrics_endpoint.is_some());
+        assert_eq!(profiles[0].sampler_interval_ms, Some(30_000));
+    }
+
+    /// A plugin is a path and some globs — no secret, so it travels in an
+    /// export like the rest of the document, and the secret detector has
+    /// nothing to say about it.
+    #[test]
+    fn wasm_serdes_survive_an_export_import_roundtrip() {
+        let mut original = profile("a", "A");
+        original.wasm_serdes = vec![WasmSerdeConfig {
+            name: "acme-protobuf".into(),
+            path: "/opt/kavka/acme.wasm".into(),
+            applies_to_topics: vec!["acme.*".into(), "orders.v?".into()],
+        }];
+        let back = import_json(&export_json(&[original])).expect("roundtrip");
+
+        assert_eq!(back[0].wasm_serdes.len(), 1);
+        assert_eq!(back[0].wasm_serdes[0].name, "acme-protobuf");
+        assert_eq!(back[0].wasm_serdes[0].path, "/opt/kavka/acme.wasm");
+        assert_eq!(
+            back[0].wasm_serdes[0].applies_to_topics,
+            vec!["acme.*".to_string(), "orders.v?".to_string()]
+        );
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_json(&back)).expect("its own export parses");
+        assert_eq!(leaked_secret_field(&doc), None);
+    }
+
+    /// The glob vocabulary, exhaustively — this is what decides which decoder
+    /// reads a topic, so it is worth a table rather than a spot check.
+    #[test]
+    fn topic_globs_match_the_way_the_shell_does() {
+        let cases = [
+            ("*", "orders.v2", true),
+            ("orders.v2", "orders.v2", true),
+            ("orders.v2", "orders.v3", false),
+            ("orders.*", "orders.v2", true),
+            ("orders.*", "orders.", true),
+            ("orders.*", "orders", false),
+            ("*.v2", "orders.v2", true),
+            ("*.v2", "orders.v2.dlq", false),
+            ("*orders*", "eu.orders.v2", true),
+            ("orders.v?", "orders.v2", true),
+            ("orders.v?", "orders.v20", false),
+            ("orders.v?", "orders.v", false),
+            // The pathological shape a recursive matcher hangs on.
+            (
+                "*a*a*a*a*a*b",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                false,
+            ),
+            ("", "", true),
+            ("", "orders", false),
+            ("*", "", true),
+            // Case-sensitive, because Kafka topic names are.
+            ("Orders.*", "orders.v2", false),
+        ];
+        for (pattern, topic, expected) in cases {
+            let config = WasmSerdeConfig {
+                name: "p".into(),
+                path: "p.wasm".into(),
+                applies_to_topics: vec![pattern.to_string()],
+            };
+            assert_eq!(
+                config.matches_topic(topic),
+                expected,
+                "{pattern:?} against {topic:?}"
+            );
+        }
+    }
+
+    /// A plugin with no globs reads nothing. The alternative — an empty list
+    /// meaning "everything" — routes every topic on the cluster through a
+    /// decoder the user has not finished configuring.
+    #[test]
+    fn a_plugin_with_no_globs_claims_nothing() {
+        let config = WasmSerdeConfig {
+            name: "p".into(),
+            path: "p.wasm".into(),
+            applies_to_topics: Vec::new(),
+        };
+        assert!(!config.matches_topic("orders.v2"));
+        assert!(!config.matches_topic(""));
+    }
+
+    /// Any glob matching is enough — the list is an OR.
+    #[test]
+    fn several_globs_are_an_or() {
+        let config = WasmSerdeConfig {
+            name: "p".into(),
+            path: "p.wasm".into(),
+            applies_to_topics: vec!["acme.*".into(), "legacy-*".into()],
+        };
+        assert!(config.matches_topic("acme.orders"));
+        assert!(config.matches_topic("legacy-orders"));
+        assert!(!config.matches_topic("orders.v2"));
     }
 
     #[test]

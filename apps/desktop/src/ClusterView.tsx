@@ -12,6 +12,8 @@ import ConnectTab from "./ConnectTab";
 import type { DangerReport } from "./danger";
 import GroupsTab from "./GroupsTab";
 import { Term } from "./Glossary";
+import { ensureMaskRules } from "./masking";
+import MaskingTab from "./MaskingTab";
 import MonitoringTab from "./MonitoringTab";
 import { formatDuration } from "./monitoring";
 import QuorumPanel from "./QuorumPanel";
@@ -45,6 +47,7 @@ type TabKey =
   | "connect"
   | "monitoring"
   | "alerts"
+  | "masking"
   | "streams";
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
@@ -56,6 +59,9 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "connect", label: "Connect" },
   { key: "monitoring", label: "Monitoring" },
   { key: "alerts", label: "Alerts" },
+  // Beside Alerts on purpose: both are Kavka's own notes about this
+  // connection, stored on this machine, and neither touches the cluster.
+  { key: "masking", label: "Masking" },
   { key: "streams", label: "Streams" },
 ];
 
@@ -257,6 +263,17 @@ export default function ClusterView({
     () => alertsSubscribe(profile.id, onAlert),
     [profile.id, onAlert],
   );
+
+  // ── Masking ─────────────────────────────────────────────────────────────
+  //
+  // Read once here, for the same reason the alert subscription lives here: the
+  // status bar has to be able to say "Masking on — 3 rules" from the moment a
+  // cluster is on screen, not from the first time somebody opens the Masking
+  // tab. `ensureMaskRules` is deduplicated per connection, so a remount (the
+  // palette's "Refresh topics") costs nothing.
+  useEffect(() => {
+    ensureMaskRules(profile.id);
+  }, [profile.id]);
 
   // The danger collector. A count, not a boolean — see danger.ts: child
   // effects run before parent effects, so an outer component reporting "no
@@ -506,6 +523,10 @@ export default function ClusterView({
             onDanger={reportDanger}
             eventNonce={alertNonce}
           />
+        )}
+
+        {place.tab === "masking" && (
+          <MaskingTab profile={profile} onDanger={reportDanger} />
         )}
 
         {place.tab === "streams" && (

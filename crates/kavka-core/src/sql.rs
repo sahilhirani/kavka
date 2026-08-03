@@ -103,7 +103,7 @@ use crate::connection::ClusterConnection;
 #[cfg(feature = "kafka")]
 use crate::profiles::SchemaRegistryConfig;
 #[cfg(feature = "kafka")]
-use crate::serdes::{self, Encoding, MessageRecord, DEFAULT_MAX_VALUE_BYTES};
+use crate::serdes::{self, Encoding, MessageRecord, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
 #[cfg(feature = "kafka")]
@@ -943,6 +943,9 @@ struct Worker {
     slots: Vec<PartitionSlot>,
     shared: Arc<SqlShared>,
     registry: Option<Arc<SchemaRegistry>>,
+    /// The profile's plugin for this topic, if one claims it — resolved on the
+    /// calling thread because the worker outlives `start`.
+    decoder: Option<SharedDecoder>,
     topic: String,
     query: String,
     scan_cap: u64,
@@ -1006,6 +1009,7 @@ impl SqlSession {
             slots,
             shared: Arc::clone(&shared),
             registry: profile_sr.map(|config| Arc::new(SchemaRegistry::new(config))),
+            decoder: conn.decoder_for(&spec.topic),
             topic: spec.topic.clone(),
             query: spec.query.clone(),
             scan_cap: u64::from(spec.scan_cap.min(MAX_SCANNED)),
@@ -1186,6 +1190,7 @@ fn run(worker: Worker) {
         slots,
         shared,
         registry,
+        decoder,
         topic,
         query,
         scan_cap,
@@ -1197,6 +1202,7 @@ fn run(worker: Worker) {
         &slots,
         &shared,
         registry.as_deref(),
+        decoder.as_ref(),
         &topic,
         scan_cap,
     ) {
@@ -1247,6 +1253,7 @@ fn scan(
     slots: &[PartitionSlot],
     shared: &SqlShared,
     registry: Option<&SchemaRegistry>,
+    decoder: Option<&SharedDecoder>,
     topic: &str,
     scan_cap: u64,
 ) -> Result<Vec<RecordBatch>> {
@@ -1345,7 +1352,7 @@ fn scan(
                     pending.remove(&partition);
                     continue;
                 }
-                let row = Row::from_record(record(&message, registry));
+                let row = Row::from_record(record(&message, registry, decoder));
                 bytes += row.footprint();
                 pack.push(row);
                 scanned += 1;
@@ -1496,7 +1503,9 @@ fn between(haystack: &str, prefix: &str, end: impl Fn(char) -> bool) -> Option<S
 fn record(
     message: &rdkafka::message::BorrowedMessage<'_>,
     registry: Option<&SchemaRegistry>,
+    decoder: Option<&SharedDecoder>,
 ) -> MessageRecord {
+    let custom = decoder.map(|plugin| plugin.as_ref());
     let headers = message.headers().map_or_else(Vec::new, |headers| {
         (0..headers.count())
             .map(|i| {
@@ -1511,11 +1520,11 @@ fn record(
         timestamp_ms: message.timestamp().to_millis(),
         key: message
             .key()
-            .map(|bytes| serdes::decode(bytes, registry, DEFAULT_MAX_VALUE_BYTES)),
+            .map(|bytes| serdes::decode_with(bytes, registry, DEFAULT_MAX_VALUE_BYTES, custom)),
         // `None` here is a tombstone, not an empty value.
         value: message
             .payload()
-            .map(|bytes| serdes::decode(bytes, registry, DEFAULT_MAX_VALUE_BYTES)),
+            .map(|bytes| serdes::decode_with(bytes, registry, DEFAULT_MAX_VALUE_BYTES, custom)),
         // NOT inspected here, unlike `consume` and `search`. The `messages`
         // table has no dead-letter column, and this record is reduced to a
         // [`Row`] by its caller and dropped — so a pass over the headers of
@@ -1525,6 +1534,7 @@ fn record(
         //   WHERE headers_json LIKE '%__connect.errors.topic%'
         // A dead-letter column here would change that, and this line with it.
         dlq: None,
+        masked: false,
         headers,
     }
 }
@@ -1770,6 +1780,7 @@ mod engine {
             value: value.map(|bytes| decode(bytes, None, DEFAULT_MAX_VALUE_BYTES)),
             headers,
             dlq: None,
+            masked: false,
         })
     }
 
@@ -1787,6 +1798,7 @@ mod engine {
                     value: value.map(|v| decode(v.as_bytes(), None, DEFAULT_MAX_VALUE_BYTES)),
                     headers: Vec::new(),
                     dlq: None,
+                    masked: false,
                 })
             })
             .collect()
@@ -1958,6 +1970,7 @@ mod engine {
             value: None,
             headers: Vec::new(),
             dlq: None,
+            masked: false,
         };
         assert_eq!(Row::from_record(record.clone()).timestamp_ms, None);
         record.timestamp_ms = Some(7);
@@ -2431,6 +2444,7 @@ mod cluster {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         })
         .expect("connect")
     }

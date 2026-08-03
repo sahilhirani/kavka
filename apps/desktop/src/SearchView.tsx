@@ -12,6 +12,7 @@ import {
   type SearchSpec,
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { replayBlockedWhy } from "./dlq";
 import { classifyError } from "./errors";
 import ExportButton from "./ExportButton";
 import { approxCount, groupDigits } from "./format";
@@ -21,6 +22,14 @@ import MessageGrid, {
   type MessageGridHandle,
 } from "./MessageGrid";
 import MessageInspector from "./MessageInspector";
+import {
+  maskingChipLabel,
+  maskingChipTitle,
+  noteMaskedRecords,
+  useMasking,
+} from "./masking";
+import { noteJsonFields } from "./nl";
+import NlQueryBar from "./NlQueryBar";
 import { ErrorBanner } from "./ProfileEditor";
 import SeekBar, {
   buildSeek,
@@ -264,6 +273,12 @@ export default function SearchView({
           {
             onResults: (payload) => {
               if (payload.records.length === 0) return;
+              // Two facts about a batch, recorded before it is rendered: what
+              // the payload's fields are called (the plain-English bar's only
+              // source of field names) and whether the core masked any of it
+              // (the status bar's, and the export's).
+              noteJsonFields(profile.id, topic, payload.records);
+              noteMaskedRecords(profile.id, payload.records);
               setRows((prev) =>
                 prev.length >= MAX_SEARCH_BUFFERED
                   ? prev
@@ -313,7 +328,9 @@ export default function SearchView({
       if (started !== null) void searchStop(started);
       searchId.current = null;
     };
-  }, [run, profile.id]);
+    // `topic` only moves when this component is remounted (TopicsTab keys it by
+    // topic), but it is read inside the effect now, so it is declared.
+  }, [run, profile.id, topic]);
 
   // `Esc` cancels the running search (§7's expert shortcuts). It yields to
   // anything that already handled the key — the grid clears its selection with
@@ -396,6 +413,11 @@ export default function SearchView({
     : running
       ? "Kavka is already scanning — stop it to start a different search"
       : undefined;
+
+  // Masking, in the view's own status line as well as the app's: this is where
+  // the rewritten payloads actually are, and the export button beside them
+  // carries the same fact into the file.
+  const masking = useMasking(profile.id);
 
   return (
     <section className="messages-view">
@@ -536,6 +558,24 @@ export default function SearchView({
             </button>
           )}
         </div>
+
+        {/* PLAIN ENGLISH, ABOVE THE FILTER IT WRITES INTO. It fills the CEL box
+            and turns ƒx on so the result is visible in the control that will
+            run it — and it never starts a search itself. See NlQueryBar: it is
+            a grammar in the core, not an assistant, and it says so. */}
+        <NlQueryBar
+          mode="cel"
+          profileId={profile.id}
+          topic={topic}
+          idPrefix="sv"
+          disabled={running || stopping}
+          disabledReason={searchDisabledWhy}
+          onFill={(query) => {
+            setCelText(query);
+            setCel(true);
+            setCelError(null);
+          }}
+        />
 
         {/* THE SEARCH BAR (§5.7). Plain text is the landing state; the CEL
             editor lives behind the ƒx toggle at the right edge — visible so an
@@ -911,11 +951,10 @@ export default function SearchView({
             onClose={() => setSelectedKey(null)}
             onBrowseOriginal={onBrowseOriginal}
             onReproduce={onReproduce}
-            reproduceBlocked={
-              profile.read_only
-                ? "This connection is read-only. Turn that off in the connection's settings to produce or edit."
-                : undefined
-            }
+            // The same two answers the browser gives, from the same function:
+            // a search result is the same record, and a masked one is just as
+            // unsendable here as it is there.
+            reproduceBlocked={replayBlockedWhy(profile.read_only, selected)}
           />
         )}
       </div>
@@ -976,6 +1015,16 @@ export default function SearchView({
               ·
             </span>
             <span className="statusbar-item">Stopped</span>
+          </>
+        )}
+        {masking.enabled > 0 && (
+          <>
+            <span className="statusbar-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="mask-chip" title={maskingChipTitle(masking)}>
+              {maskingChipLabel(masking)}
+            </span>
           </>
         )}
         <span className="statusbar-right">

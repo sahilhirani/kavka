@@ -159,10 +159,14 @@ export default function MessageInspector({
     [record, topic],
   );
 
+  const masked = record.masked === true;
+
   return (
     <aside
-      className="inspector"
-      aria-label={`Message at offset ${record.offset}, partition ${record.partition}`}
+      className={`inspector${masked ? " inspector-masked" : ""}`}
+      aria-label={`Message at offset ${record.offset}, partition ${record.partition}${
+        masked ? ", masked" : ""
+      }`}
     >
       <header className="inspector-head">
         {/* No gloss here: this line is the record's address in mono, and a
@@ -198,6 +202,25 @@ export default function MessageInspector({
           onReproduce={onReproduce}
           reproduceBlocked={reproduceBlocked}
         />
+      )}
+
+      {/* MASKED, AND SAID BEFORE THE PAYLOAD IS READ. The replacement text is
+          what arrived — the core rewrote it on the decoded record before it
+          crossed IPC, so nothing in this window ever held the original and
+          there is deliberately no reveal control. Above the tabs for the same
+          reason the dead-letter section is: it changes what everything below
+          it means. */}
+      {masked && (
+        <p className="mask-notice" role="note">
+          <span className="mask-notice-mark" aria-hidden="true">
+            •••
+          </span>
+          A masking rule rewrote part of this record on its way here. What you
+          are reading is not verbatim, and copies and exports carry the same
+          replacement — Kavka masks in its core, so the original bytes are not
+          in this window. Turn the rule off in the Masking tab and fetch again
+          to see the real values.
+        </p>
       )}
 
       <div className="modal-tabs inspector-tabs" role="tablist" aria-label="Payload">

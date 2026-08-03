@@ -54,7 +54,17 @@ msk-iam = [
 # this is the tier the desktop app ships). Kerberos/GSSAPI is added per-platform
 # later (SSPI is built into librdkafka's Windows cmake build; cyrus-sasl on unix
 # via CI).
-kafka-ssl = ["kafka", "rdkafka/ssl-vendored", "msk-iam"]
+kafka-ssl = ["kafka", "rdkafka/ssl-vendored", "msk-iam", "wasm-serdes"]
+# Custom serde plugins as sandboxed WASM modules (docs/ARCHITECTURE.md D4,
+# Phase 5b). `src/wasm_serde.rs` and the front step of the decode ladder.
+#
+# Standing alone rather than riding on `kafka` — unlike `datafusion` — because a
+# decoder needs no cluster: it takes bytes and answers JSON, so
+# `cargo test -p kavka-core --features wasm-serdes` runs the whole thing on a
+# bare toolchain with no librdkafka. It is folded into `kafka-ssl` (the tier the
+# desktop app ships) so the ProfileEditor's plugin section reaches a real engine
+# rather than a stub. The cost is on the `wasmtime` entry below.
+wasm-serdes = ["dep:wasmtime"]
 
 [dependencies]
 serde.workspace = true
@@ -103,6 +113,78 @@ apache-avro = { version = "0.21", default-features = false }
 # have to undo to reach serde_json::Value.
 rmpv = "1"
 ciborium = "0.2"
+
+# --- Display masking (src/masking.rs, docs/ROADMAP.md Phase 5b) -------------
+# ZERO new crates: `regex` is already in this crate's graph, at this version,
+# because `cel` above enables its `regex` feature for CEL's `matches()`. Naming
+# it here rather than reaching through cel's re-exports is the difference
+# between a dependency this crate declares and one it borrows by accident.
+#
+# `regex-syntax` is regex's own parser, and it is here for one reason: a mask
+# rule is rejected at SAVE with the POSITION of the mistake, and
+# `regex::Error`'s message carries a caret drawing rather than an offset a UI
+# can put a caret at. `Parser::parse` hands back `ast::Error::span()`, which is
+# the number. Also already in the graph, as regex's own dependency, so it is
+# +0 crates as well.
+#
+# NOT optional, like `cel` and `apache-avro`: masking is applied to decoded
+# payloads and has no librdkafka involvement, so it compiles on the bare tier.
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode"] }
+
+# --- WASM serde plugins (src/wasm_serde.rs, docs/ARCHITECTURE.md D4) --------
+# THE SECOND EXPENSIVE DEPENDENCY IN THIS FILE, measured to the same standard as
+# `datafusion` above. Numbers on this machine (Windows, rustc 1.97.1), before
+# and after this entry:
+#
+#   crates in the tree      bare tier          118 ->  118   (+0, gated)
+#                           wasm-serdes alone  118 ->  177   (+59)
+#                           kafka-ssl          344 ->  388   (+44, 15 shared)
+#   cargo check, wasm-serdes (cold, the +59)          51s
+#   cold release build of that tier                   4m 00s
+#   linked release binary (kavka-core + its tests)
+#     bare tier                                       10.3 MiB
+#     with wasm-serdes                                21.8 MiB   (+11.5)
+#
+# (The binary figures are an ordinary `--release` link — no LTO, no strip, no
+# `panic = "abort"`, none of which the test harness can be built with. The
+# shipped app's own profile takes a large bite out of the delta, exactly as it
+# does out of datafusion's above; the honest headline is the +11.5 MiB, and it
+# is a ceiling rather than a shipping figure.)
+#
+# **+59 crates and a Cranelift code generator, against D1's "small
+# installers" — this is the trade, stated plainly.** It buys the one thing a
+# built-in decoder ladder can never buy: a team whose payloads are in a format
+# nobody outside their company has heard of can read them in Kavka without
+# Kavka shipping their format. Every alternative was worse:
+#
+# - **`wasmi`** (an interpreter, ~15 crates, no Cranelift) is genuinely
+#   smaller, and it is 10-50x slower per record. A decoder runs once per
+#   message on a search that scans millions of them, so the interpreter's cost
+#   lands exactly where this app's crown jewel (D3) is measured.
+# - **A subprocess with a pipe protocol** needs no dependency at all and needs
+#   a per-platform sandbox story instead — this one is `Config::new()` plus a
+#   fuel limit, and it is the same sandbox on both OSes.
+# - **`default-features = false` is doing real work.** It drops
+#   `component-model` (+ the whole wit/component tooling), `async`, `gc`,
+#   `threads`, `coredump`, `demangle`, `addr2line`/`debug-builtins`,
+#   `parallel-compilation` (rayon), `pooling-allocator` and `profiling`. What
+#   is kept is the minimum an ABI-v1 module needs: `cranelift` to compile it,
+#   `runtime` to run it, `std`, and `wat`.
+# - **`wat` is kept deliberately**, and it is what keeps a binary fixture out
+#   of this repo: every test in `src/wasm_serde.rs` compiles its plugin from
+#   WebAssembly text at test time (see `MODULE_V1`), so the test corpus is
+#   readable source in a `.rs` file rather than an opaque blob nobody can
+#   review. It also means a user may point a plugin at a `.wat` file, which is
+#   a small, honest bonus rather than the reason it is on.
+#
+# OPTIONAL, and NOT on the `kafka` list: see the `wasm-serdes` feature above.
+wasmtime = { version = "47", default-features = false, features = [
+    "cranelift",
+    "runtime",
+    "std",
+    "wat",
+], optional = true }
 
 # --- Search filters (src/search.rs, docs/ARCHITECTURE.md D3) ----------------
 # `cel` is cel-rust, the maintained crate: the `cel-interpreter` name D3 was

@@ -13,12 +13,19 @@ import {
   type TailPayload,
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
-import { looksLikeDlqTopic } from "./dlq";
+import { looksLikeDlqTopic, replayBlockedWhy } from "./dlq";
 import ExportButton from "./ExportButton";
 import { groupDigits } from "./format";
 import { Term } from "./Glossary";
 import MessageGrid, { rowKey, type MessageGridHandle } from "./MessageGrid";
 import MessageInspector from "./MessageInspector";
+import {
+  maskingChipLabel,
+  maskingChipTitle,
+  noteMaskedRecords,
+  useMasking,
+} from "./masking";
+import { noteJsonFields } from "./nl";
 import { ErrorBanner } from "./ProfileEditor";
 import SeekBar, {
   buildSeek,
@@ -192,6 +199,11 @@ export default function MessagesView({
     try {
       const records = await messagesFetch(profile.id, spec);
       if (fetchSeq.current !== seq) return;
+      // What this batch teaches the rest of the window: the payload's field
+      // names (the plain-English bar's only source for them) and whether the
+      // core masked any of it (the status bar's chip, and the export note).
+      noteJsonFields(profile.id, topic, records);
+      noteMaskedRecords(profile.id, records);
       setRows(records);
       setSelectedKey(null);
       setTrimmed(false);
@@ -207,7 +219,7 @@ export default function MessagesView({
     } finally {
       if (fetchSeq.current === seq) setFetching(false);
     }
-  }, [buildSpec, profile.id]);
+  }, [buildSpec, profile.id, topic]);
 
   // First paint fetches the default range rather than showing an empty table
   // with a button: the user asked for this topic's messages by clicking
@@ -232,32 +244,40 @@ export default function MessagesView({
 
   // ── Tail ───────────────────────────────────────────────────────────────
 
-  const onBatch = useCallback((payload: TailPayload) => {
-    setDropped(payload.dropped);
-    if (payload.records.length > 0) {
-      lastRecordAt.current = Date.now();
-      setQuiet(false);
-      // Counted outside the updater: a state setter called from inside another
-      // setter's updater runs during render, which React is right to complain
-      // about and StrictMode would run twice.
-      received.current += payload.records.length;
-      if (received.current > TAIL_BUFFER) setTrimmed(true);
-      setSeen(received.current);
-      setRows((prev) => {
-        const next = prev.concat(payload.records);
-        return next.length > TAIL_BUFFER
-          ? next.slice(next.length - TAIL_BUFFER)
-          : next;
-      });
-      if (!pinnedRef.current) {
-        setUnseen((prev) => prev + payload.records.length);
+  const onBatch = useCallback(
+    (payload: TailPayload) => {
+      setDropped(payload.dropped);
+      if (payload.records.length > 0) {
+        lastRecordAt.current = Date.now();
+        setQuiet(false);
+        // Same two facts as a fetch, on every batch: a tail is where a masking
+        // rule most often first bites, and where the payload's field names
+        // arrive from on a topic nobody has browsed yet.
+        noteJsonFields(profile.id, topic, payload.records);
+        noteMaskedRecords(profile.id, payload.records);
+        // Counted outside the updater: a state setter called from inside
+        // another setter's updater runs during render, which React is right to
+        // complain about and StrictMode would run twice.
+        received.current += payload.records.length;
+        if (received.current > TAIL_BUFFER) setTrimmed(true);
+        setSeen(received.current);
+        setRows((prev) => {
+          const next = prev.concat(payload.records);
+          return next.length > TAIL_BUFFER
+            ? next.slice(next.length - TAIL_BUFFER)
+            : next;
+        });
+        if (!pinnedRef.current) {
+          setUnseen((prev) => prev + payload.records.length);
+        }
       }
-    }
-    if (payload.ended === true) {
-      setTailEnded(true);
-      setTailing(false);
-    }
-  }, []);
+      if (payload.ended === true) {
+        setTailEnded(true);
+        setTailing(false);
+      }
+    },
+    [profile.id, topic],
+  );
 
   const filterKey = seek.filter.trim();
   useEffect(() => {
@@ -351,6 +371,9 @@ export default function MessagesView({
   // ── Render ─────────────────────────────────────────────────────────────
 
   const topicIsEmpty = partitions.length > 0 && totalMessages === 0;
+
+  /** The masking rules in force on this connection — see the status line. */
+  const masking = useMasking(profile.id);
 
   /**
    * THE DLQ EMPTY STATE, which is a teaching state rather than an error.
@@ -605,11 +628,11 @@ export default function MessagesView({
             onClose={() => setSelectedKey(null)}
             onBrowseOriginal={onBrowseOriginal}
             onReproduce={onReproduce}
-            reproduceBlocked={
-              profile.read_only
-                ? "This connection is read-only. Turn that off in the connection's settings to produce or edit."
-                : undefined
-            }
+            // Read-only is a fact about the connection; masked is a fact about
+            // THIS record — the core rewrote it before it crossed IPC, so the
+            // original bytes are not in this window to send. Both are the same
+            // kind of answer, so they share one function.
+            reproduceBlocked={replayBlockedWhy(profile.read_only, selected)}
           />
         )}
       </div>
@@ -644,6 +667,18 @@ export default function MessagesView({
               title="Messages arrived faster than Kavka could hand them to the window, so the session dropped these rather than falling behind."
             >
               {groupDigits(dropped)} dropped
+            </span>
+          </>
+        )}
+        {/* Masking belongs beside the rows it changed, not only in the app's
+            status bar: this is the table someone is about to screenshot. */}
+        {masking.enabled > 0 && (
+          <>
+            <span className="statusbar-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="mask-chip" title={maskingChipTitle(masking)}>
+              {maskingChipLabel(masking)}
             </span>
           </>
         )}

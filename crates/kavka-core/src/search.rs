@@ -77,7 +77,7 @@ use crate::connection::ClusterConnection;
 #[cfg(feature = "kafka")]
 use crate::profiles::SchemaRegistryConfig;
 #[cfg(feature = "kafka")]
-use crate::serdes::{self, DEFAULT_MAX_VALUE_BYTES};
+use crate::serdes::{self, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
 #[cfg(feature = "kafka")]
@@ -624,6 +624,9 @@ struct Worker {
     shared: Arc<SearchShared>,
     filter: Arc<CompiledQuery>,
     registry: Option<Arc<SchemaRegistry>>,
+    /// The profile's plugin for this topic, cloned per worker — one compiled
+    /// module, eight sandboxes (see `crate::wasm_serde`).
+    decoder: Option<SharedDecoder>,
     topic: String,
     max_display: usize,
     /// partition -> its index in `shared.cursors`. A worker owns its partitions
@@ -698,6 +701,9 @@ impl SearchSession {
         });
 
         let registry = profile_sr.map(|config| Arc::new(SchemaRegistry::new(config)));
+        // Asked once, on this thread: the plugin belongs to the connection and
+        // was compiled when it opened, and the workers outlive this call.
+        let decoder = conn.decoder_for(&spec.topic);
         let max_display = spec
             .max_value_bytes
             .map_or(DEFAULT_MAX_VALUE_BYTES, |bytes| bytes as usize);
@@ -733,6 +739,7 @@ impl SearchSession {
                 shared: Arc::clone(&shared),
                 filter: Arc::clone(&filter),
                 registry: registry.clone(),
+                decoder: decoder.clone(),
                 topic: spec.topic.clone(),
                 max_display,
             });
@@ -1035,6 +1042,7 @@ fn scan(worker: Worker) {
         shared,
         filter,
         registry,
+        decoder,
         topic,
         max_display,
         cursors,
@@ -1104,6 +1112,7 @@ fn scan(worker: Worker) {
                     &filter,
                     evaluator.as_ref(),
                     registry.as_deref(),
+                    decoder.as_ref(),
                     max_display,
                 ) {
                     if filter_error.is_none() {
@@ -1152,6 +1161,7 @@ fn consider(
     filter: &CompiledQuery,
     evaluator: Option<&CelFilter>,
     registry: Option<&SchemaRegistry>,
+    decoder: Option<&SharedDecoder>,
     max_display: usize,
 ) -> std::result::Result<(), String> {
     if !filter.matches_raw(message.key(), message.payload(), raw_headers(message)) {
@@ -1163,12 +1173,12 @@ fn consider(
         // between a bounded search and an honest one.
         shared.matched.fetch_add(1, Ordering::Relaxed);
         if shared.reserve() {
-            shared.push(record(message, registry, max_display));
+            shared.push(record(message, registry, max_display, decoder));
         }
         return Ok(());
     };
 
-    let decoded = record(message, registry, max_display);
+    let decoded = record(message, registry, max_display, decoder);
     match evaluator.matches(&decoded) {
         Ok(false) => Ok(()),
         Ok(true) => {
@@ -1206,7 +1216,9 @@ fn record(
     message: &BorrowedMessage<'_>,
     registry: Option<&SchemaRegistry>,
     max_display: usize,
+    decoder: Option<&SharedDecoder>,
 ) -> MessageRecord {
+    let custom = decoder.map(|plugin| plugin.as_ref());
     let headers = message.headers().map_or_else(Vec::new, |headers| {
         (0..headers.count())
             .map(|i| {
@@ -1221,13 +1233,14 @@ fn record(
         timestamp_ms: message.timestamp().to_millis(),
         key: message
             .key()
-            .map(|bytes| serdes::decode(bytes, registry, max_display)),
+            .map(|bytes| serdes::decode_with(bytes, registry, max_display, custom)),
         // `None` here is a tombstone, not an empty value.
         value: message
             .payload()
-            .map(|bytes| serdes::decode(bytes, registry, max_display)),
+            .map(|bytes| serdes::decode_with(bytes, registry, max_display, custom)),
         // Before `headers` moves — see `MessageRecord::dlq`.
         dlq: serdes::dlq_inspect(&headers),
+        masked: false,
         headers,
     }
 }
@@ -1449,6 +1462,7 @@ mod filters {
                 decode_header("retry", None),
             ],
             dlq: None,
+            masked: false,
         }
     }
 
@@ -2000,6 +2014,7 @@ mod cluster {
             connect_clusters: Vec::new(),
             metrics_endpoint: None,
             sampler_interval_ms: None,
+            wasm_serdes: Vec::new(),
         })
         .expect("connect")
     }
