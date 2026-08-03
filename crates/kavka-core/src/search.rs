@@ -1994,6 +1994,7 @@ mod cluster {
             auth: AuthConfig::Plaintext,
             read_only,
             schema_registry: None,
+            connect_clusters: Vec::new(),
         })
         .expect("connect")
     }

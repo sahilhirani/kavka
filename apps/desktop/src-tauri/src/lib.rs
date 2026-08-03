@@ -3,10 +3,13 @@
 //! Anything that blocks (file I/O, keychain, librdkafka calls — including
 //! client drop) runs on the blocking pool, never the event loop.
 
+use kavka_core::acl::{AclBinding, AclFilter};
 use kavka_core::admin::{
-    self, GroupDetail, GroupInfo, GroupOffset, OffsetResetSpec, TopicConfig, TopicDetail, TopicInfo,
+    self, ConfigEntry, GroupDetail, GroupInfo, GroupOffset, OffsetResetSpec, TopicConfig,
+    TopicDetail, TopicInfo,
 };
 use kavka_core::cancel::CancelToken;
+use kavka_core::connect::{ConfigValidation, ConnectorSummary};
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
 use kavka_core::consume::{self, FetchSpec, TailSession};
 use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
@@ -15,9 +18,10 @@ use kavka_core::profiles::{
 };
 use kavka_core::search::{SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
+use kavka_core::sr::{CompatibilityCheck, CompatibilityInForce, RegisteredId, SubjectVersion};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -482,6 +486,20 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
     blocking(move || {
         drop(sessions); // joins each worker thread, off the event loop
         drop(conn); // librdkafka client destroy, off the event loop
+
+        // Read the profile BEFORE it is deleted, for the secrets no constant
+        // can name. A Connect cluster's password entry is
+        // `{id}/connect_password/{cluster}` — the cluster's own name is in it —
+        // so the only enumeration of them is the profile itself, and once
+        // `store.delete` has run there is nothing left to enumerate. Failing to
+        // read is not failing to delete: the purge is best-effort throughout.
+        let connect_entries = store
+            .list()
+            .ok()
+            .and_then(|profiles| profiles.into_iter().find(|p| p.id == profile_id))
+            .map(|profile| profile.connect_secret_entries())
+            .unwrap_or_default();
+
         store.delete(&profile_id)?;
         // Best-effort purge: an orphaned keychain entry is harmless, a ghost
         // profile in the UI is not — so a purge failure doesn't fail the
@@ -492,6 +510,12 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
         for suffix in kavka_core::secrets::SECRET_SUFFIXES {
             let _ =
                 kavka_core::secrets::delete(&kavka_core::secrets::entry_name(&profile_id, suffix));
+        }
+        // The same regression one level down: these are already full entry
+        // names, read off the stored refs, so a cluster renamed by hand still
+        // purges the entry it actually references.
+        for entry in connect_entries {
+            let _ = kavka_core::secrets::delete(&entry);
         }
         Ok(())
     })
@@ -1021,6 +1045,264 @@ async fn bulk_stop(state: State<'_, AppState>, bulk_id: String) -> CmdResult<()>
     }
 }
 
+// ── ACLs ───────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn acls_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+    filter: AclFilter,
+) -> CmdResult<Vec<AclBinding>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::acl::acls_list(&conn, &filter)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`). Not transactional — Kafka
+/// can write some bindings and reject others, and the core's error names the
+/// binding that failed rather than reporting a code for the batch.
+#[tauri::command]
+async fn acls_create(
+    state: State<'_, AppState>,
+    profile_id: String,
+    bindings: Vec<AclBinding>,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::acl::acls_create(&conn, &bindings)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`). Resolves with the bindings
+/// that were *actually* removed, which is the only way the UI can tell "gone"
+/// from "was already gone" — an empty answer means the filter matched nothing
+/// and the click changed the cluster not at all.
+///
+/// The filter is an `AclBinding` because Kafka's own delete API takes an
+/// ACL-shaped filter; blanks read as "any" there, which they do not when
+/// creating. The core owns that asymmetry.
+#[tauri::command]
+async fn acls_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    filter: AclBinding,
+) -> CmdResult<Vec<AclBinding>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::acl::acls_delete(&conn, &filter)).await
+}
+
+// ── Broker configuration ───────────────────────────────────────────────────
+
+#[tauri::command]
+async fn broker_configs(
+    state: State<'_, AppState>,
+    profile_id: String,
+    broker_id: i32,
+) -> CmdResult<Vec<ConfigEntry>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || admin::broker_configs(&conn, broker_id)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`), and *incremental* — only the
+/// named key is touched. `value: None` deletes the dynamic override so the
+/// broker falls back to what it computes as the default; it is "revert", never
+/// "set to empty", and the two are different requests with different outcomes.
+#[tauri::command]
+async fn broker_config_set(
+    state: State<'_, AppState>,
+    profile_id: String,
+    broker_id: i32,
+    name: String,
+    value: Option<String>,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || admin::broker_config_set(&conn, broker_id, &name, value.as_deref())).await
+}
+
+// ── Kafka Connect ──────────────────────────────────────────────────────────
+//
+// Every call names the Connect cluster it goes to: a profile can hold several
+// worker groups (a source cluster and a sink cluster is the ordinary shape),
+// and the core resolves the name — and its keychain credentials — off the
+// profile the connection was opened with. An unknown name is answered with the
+// list of real ones, because the failure mode is a stale UI or a rename.
+
+#[tauri::command]
+async fn connect_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+) -> CmdResult<Vec<ConnectorSummary>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::list(&conn, &cluster)).await
+}
+
+#[tauri::command]
+async fn connect_config(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+) -> CmdResult<BTreeMap<String, String>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::config(&conn, &cluster, &name)).await
+}
+
+/// Not mutating, deliberately: validation runs the candidate config through the
+/// plugin's own config definition on the worker and creates nothing. It is what
+/// lets the form say what is wrong *before* anyone commits to a connector, so a
+/// read-only connection can still use it.
+#[tauri::command]
+async fn connect_validate(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    connector_class: String,
+    config: BTreeMap<String, String>,
+) -> CmdResult<ConfigValidation> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::validate(&conn, &cluster, &connector_class, &config))
+        .await
+}
+
+/// Mutating: guarded in core (see `topic_create`). Create-or-update — Connect's
+/// `PUT /connectors/{name}/config` is one verb for both, and so is this.
+#[tauri::command]
+async fn connect_apply(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+    config: BTreeMap<String, String>,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::apply(&conn, &cluster, &name, &config)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`).
+#[tauri::command]
+async fn connect_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::delete(&conn, &cluster, &name)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`). `task` picks a single task;
+/// with `None`, `include_tasks` decides whether the restart carries the
+/// connector's tasks with it or is the connector instance alone.
+#[tauri::command]
+async fn connect_restart(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+    task: Option<i32>,
+    include_tasks: bool,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::restart(&conn, &cluster, &name, task, include_tasks))
+        .await
+}
+
+/// Mutating: guarded in core (see `topic_create`).
+#[tauri::command]
+async fn connect_pause(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::pause(&conn, &cluster, &name)).await
+}
+
+/// Mutating: guarded in core (see `topic_create`).
+#[tauri::command]
+async fn connect_resume(
+    state: State<'_, AppState>,
+    profile_id: String,
+    cluster: String,
+    name: String,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::connect::resume(&conn, &cluster, &name)).await
+}
+
+// ── Schema Registry ────────────────────────────────────────────────────────
+//
+// The registry is the *profile's*, resolved inside the core rather than passed
+// in: two clusters can have different registries and one of them can have none,
+// and a connection with no registry gets a message saying so instead of a
+// connection error. The mutating pair build the client only after the
+// read-only gate, so a read-only profile costs no keychain read and no socket.
+
+#[tauri::command]
+async fn sr_subject_versions(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subject: String,
+) -> CmdResult<Vec<SubjectVersion>> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::sr::subject_versions(&conn, &subject)).await
+}
+
+#[tauri::command]
+async fn sr_check_compat(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subject: String,
+    schema: String,
+    schema_type: String,
+) -> CmdResult<CompatibilityCheck> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::sr::check_compatibility(&conn, &subject, &schema, &schema_type))
+        .await
+}
+
+/// Mutating: guarded in core (see `topic_create`), which also runs the
+/// compatibility check against the registry itself before it writes. A UI that
+/// skipped the check button therefore still cannot sneak an incompatible schema
+/// past the subject's level, and the registry's own refusal is what surfaces.
+#[tauri::command]
+async fn sr_register(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subject: String,
+    schema: String,
+    schema_type: String,
+) -> CmdResult<RegisteredId> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::sr::register(&conn, &subject, &schema, &schema_type)).await
+}
+
+/// `subject: None` reads the registry-wide default; a subject with no level of
+/// its own falls back to it, and the answer says which of the two happened
+/// (`inherited`). The UI has a sentence for each, and cannot pick one from a
+/// bare level string.
+#[tauri::command]
+async fn sr_get_compat(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subject: Option<String>,
+) -> CmdResult<CompatibilityInForce> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::sr::compatibility(&conn, subject.as_deref())).await
+}
+
+/// Mutating: guarded in core (see `topic_create`). `subject: None` sets the
+/// registry-wide default — every subject without a level of its own.
+#[tauri::command]
+async fn sr_set_compat(
+    state: State<'_, AppState>,
+    profile_id: String,
+    subject: Option<String>,
+    level: String,
+) -> CmdResult<()> {
+    let conn = state.connection(&profile_id)?;
+    blocking(move || kavka_core::sr::set_compatibility(&conn, subject.as_deref(), &level)).await
+}
+
 // ── Export ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -1223,6 +1505,24 @@ pub fn run() {
             produce_send,
             produce_bulk,
             bulk_stop,
+            acls_list,
+            acls_create,
+            acls_delete,
+            broker_configs,
+            broker_config_set,
+            connect_list,
+            connect_config,
+            connect_validate,
+            connect_apply,
+            connect_delete,
+            connect_restart,
+            connect_pause,
+            connect_resume,
+            sr_subject_versions,
+            sr_check_compat,
+            sr_register,
+            sr_get_compat,
+            sr_set_compat,
             export_records,
         ])
         .build(tauri::generate_context!())

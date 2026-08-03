@@ -23,6 +23,17 @@ export interface ConfirmModalProps {
   /** The verb, restated. `Delete topic`, `Reset offsets`. Never "OK". */
   confirmLabel: string;
   /**
+   * `destructive` (the default) paints the 2px `--danger-fill` wire across the
+   * top edge and fills the confirm button red. `plain` is for the consents that
+   * are NOT destructive — pausing a connector, applying a config — where the
+   * red wire would be crying wolf: §5.5's guardrail rule says a filled red
+   * button exists one click from a destructive action, so a modal that isn't
+   * one must not wear it. Everything else (focus on Cancel, Esc, the restated
+   * verb, type-to-confirm on prod) is identical, because the friction is what
+   * the environment asked for, not what the tone is.
+   */
+  tone?: "destructive" | "plain";
+  /**
    * When non-null the user must type this string exactly. Pass the topic name
    * on prod, null everywhere else — the gate is the environment, not the verb.
    */
@@ -41,6 +52,7 @@ export default function ConfirmModal({
   title,
   body,
   confirmLabel,
+  tone = "destructive",
   typeToConfirm = null,
   typePrompt,
   extra,
@@ -70,7 +82,7 @@ export default function ConfirmModal({
 
   return (
     <Overlay
-      surfaceClass="modal modal-destructive"
+      surfaceClass={`modal${tone === "destructive" ? " modal-destructive" : ""}`}
       labelledBy="confirm-title"
       initialFocus={cancelRef}
       onClose={onCancel}
@@ -114,10 +126,13 @@ export default function ConfirmModal({
         >
           Cancel
         </button>
-        {/* A filled red button only ever exists one click from the action. */}
+        {/* A filled red button only ever exists one click from the action —
+            and only when the action is actually destructive. */}
         <button
           type="button"
-          className="btn btn-danger-confirm"
+          className={`btn ${
+            tone === "destructive" ? "btn-danger-confirm" : "btn-primary"
+          }`}
           disabled={!matches || busy}
           aria-busy={busy || undefined}
           title={reason}

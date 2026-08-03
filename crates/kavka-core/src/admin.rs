@@ -5,9 +5,14 @@
 //!
 //! Everything here BLOCKS, like the rest of the core — the Tauri shell wraps
 //! each call in `spawn_blocking`. Every mutating entry point
-//! ([`create_topic`], [`delete_topic`], [`offsets_reset`]) calls
-//! [`ClusterConnection::ensure_writable`] first, so read-only mode is enforced
-//! here rather than in the UI (docs/ARCHITECTURE.md D5).
+//! ([`create_topic`], [`delete_topic`], [`offsets_reset`],
+//! [`broker_config_set`]) calls [`ClusterConnection::ensure_writable`] first,
+//! so read-only mode is enforced here rather than in the UI
+//! (docs/ARCHITECTURE.md D5).
+//!
+//! ACLs live in [`crate::acl`] rather than here: they need librdkafka's C admin
+//! API, which rdkafka 0.37 does not wrap, and that module owns the plumbing —
+//! which [`broker_config_set`] then borrows for IncrementalAlterConfigs.
 
 use crate::connection::ClusterConnection;
 use crate::{Error, Result};
@@ -38,8 +43,13 @@ use std::time::Duration;
 /// that has already been accepted is worth waiting out, because reporting a
 /// timeout for an operation the cluster went on to perform is the one outcome
 /// a user cannot act on.
+///
+/// `pub(crate)` for [`crate::acl`], which drives librdkafka's C admin API
+/// directly (rdkafka 0.37 exposes neither ACLs nor IncrementalAlterConfigs) and
+/// has to spend the same budget — one admin timeout in the app means one
+/// number, not one per module.
 #[cfg(feature = "kafka")]
-const ADMIN_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const ADMIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Wire types. Field names are the IPC contract — the TypeScript in
@@ -269,6 +279,34 @@ fn config_is_default(source: &ConfigSource, reported: bool) -> bool {
     }
 }
 
+/// The broker-resource twin of [`config_is_default`].
+///
+/// The two cannot be one function, because the *same* source means opposite
+/// things on the two resources. `DYNAMIC_BROKER_CONFIG` on a topic is
+/// something the topic inherits from the broker it happens to live on; on the
+/// broker itself it is the override somebody set, and it is the only thing
+/// [`broker_config_set`] can revert. Reusing the topic rule here would render
+/// every broker override as "default", which is precisely backwards for a view
+/// whose job is to show what has been changed from stock.
+///
+/// So for a broker only `DEFAULT_CONFIG` — Kafka's own compiled-in value —
+/// counts as default. `STATIC_BROKER_CONFIG` is `server.properties`: somebody
+/// did set it, Kavka cannot unset it, and calling it "default" would hide a
+/// deliberate operator decision.
+#[cfg(feature = "kafka")]
+fn broker_config_is_default(source: &ConfigSource, reported: bool) -> bool {
+    match source {
+        ConfigSource::Default => true,
+        ConfigSource::DynamicBroker
+        | ConfigSource::DynamicDefaultBroker
+        | ConfigSource::StaticBroker
+        | ConfigSource::DynamicTopic => false,
+        // Same fallback as the topic rule: a pre-1.1.0 broker sends no source
+        // at all, so its own flag is the only signal there is.
+        ConfigSource::Unknown => reported,
+    }
+}
+
 /// Kafka's own name for a config source, so the value in the UI is the value in
 /// the protocol and in `kafka-configs.sh` output.
 #[cfg(feature = "kafka")]
@@ -438,22 +476,32 @@ pub fn topic_detail(conn: &ClusterConnection, topic: &str) -> Result<TopicDetail
 
 #[cfg(feature = "kafka")]
 fn topic_configs(conn: &ClusterConnection, topic: &str) -> Result<Vec<ConfigEntry>> {
-    let resource = ResourceSpecifier::Topic(topic);
-    let described = block_on(
-        conn.admin()?
-            .describe_configs([&resource], &admin_options()),
+    describe_configs(
+        conn,
+        &ResourceSpecifier::Topic(topic),
+        "reading the topic's configuration",
+        config_is_default,
     )
-    .map_err(|e| admin_error(conn, "reading the topic's configuration", &e.to_string()))?
-    .into_iter()
-    .next()
-    .ok_or_else(|| {
-        admin_error(
-            conn,
-            "reading the topic's configuration",
-            "the broker returned no configuration for it",
-        )
-    })?
-    .map_err(|code| admin_error(conn, "reading the topic's configuration", &code.to_string()))?;
+}
+
+/// One DescribeConfigs round trip, mapped to wire rows and sorted by name.
+///
+/// `is_default` is a parameter rather than a match inside, because "is this
+/// value set or inherited" is the one question whose answer depends on which
+/// resource was asked — see [`broker_config_is_default`].
+#[cfg(feature = "kafka")]
+fn describe_configs(
+    conn: &ClusterConnection,
+    resource: &ResourceSpecifier<'_>,
+    what: &str,
+    is_default: fn(&ConfigSource, bool) -> bool,
+) -> Result<Vec<ConfigEntry>> {
+    let described = block_on(conn.admin()?.describe_configs([resource], &admin_options()))
+        .map_err(|e| admin_error(conn, what, &e.to_string()))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| admin_error(conn, what, "the broker returned no configuration for it"))?
+        .map_err(|code| admin_error(conn, what, &code.to_string()))?;
 
     let mut configs: Vec<ConfigEntry> = described
         .entries
@@ -467,7 +515,7 @@ fn topic_configs(conn: &ClusterConnection, topic: &str) -> Result<Vec<ConfigEntr
             } else {
                 entry.value
             },
-            is_default: config_is_default(&entry.source, entry.is_default),
+            is_default: is_default(&entry.source, entry.is_default),
             is_read_only: entry.is_read_only,
             is_sensitive: entry.is_sensitive,
             source: config_source_name(&entry.source).to_string(),
@@ -544,6 +592,106 @@ fn first_topic_result(
             "the broker acknowledged the request without saying what happened",
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Broker configuration
+// ---------------------------------------------------------------------------
+
+/// Everything one broker reports about its own configuration, sorted by name.
+///
+/// Same [`ConfigEntry`] rows as a topic's configuration — same sensitive-value
+/// rule, same provenance string — with the one difference that matters spelled
+/// out in [`broker_config_is_default`].
+#[cfg(feature = "kafka")]
+pub fn broker_configs(conn: &ClusterConnection, broker_id: i32) -> Result<Vec<ConfigEntry>> {
+    describe_configs(
+        conn,
+        &ResourceSpecifier::Broker(broker_id),
+        &format!("reading broker {broker_id}'s configuration"),
+        broker_config_is_default,
+    )
+}
+
+/// Changes one broker configuration entry, or reverts it to what the broker
+/// inherits when `value` is `None`.
+///
+/// **IncrementalAlterConfigs, never AlterConfigs.** The older call replaces a
+/// resource's *entire* dynamic configuration with what the request carries, so
+/// using it to change one key silently deletes every other override on that
+/// broker — a footgun Kafka added KIP-339 specifically to remove, and the
+/// reason this path drops to librdkafka's C API rather than using rdkafka's
+/// `alter_configs` (see [`crate::acl::native`]).
+///
+/// `None` sends a DELETE operation rather than an empty string: those are
+/// different requests with different outcomes, and "revert to default" is the
+/// one an operator undoing a change actually wants.
+#[cfg(feature = "kafka")]
+pub fn broker_config_set(
+    conn: &ClusterConnection,
+    broker_id: i32,
+    name: &str,
+    value: Option<&str>,
+) -> Result<()> {
+    use rdkafka::bindings as rdsys;
+
+    conn.ensure_writable("set broker config")?;
+    if name.trim().is_empty() {
+        return Err(Error::Other(
+            "name the configuration entry to change".into(),
+        ));
+    }
+    let what = match value {
+        Some(_) => format!("setting \"{name}\" on broker {broker_id}"),
+        None => format!("reverting \"{name}\" on broker {broker_id} to its default"),
+    };
+
+    let resource = crate::acl::native::ConfigResource::broker(broker_id)?;
+    resource.set(name.trim(), value)?;
+    let mut resources = [resource.ptr()];
+
+    let event = crate::acl::native::request(
+        conn,
+        &what,
+        rdkafka::types::RDKafkaAdminOp::RD_KAFKA_ADMIN_OP_INCREMENTALALTERCONFIGS,
+        rdsys::RD_KAFKA_EVENT_INCREMENTALALTERCONFIGS_RESULT,
+        |client, options, queue| unsafe {
+            rdsys::rd_kafka_IncrementalAlterConfigs(
+                client,
+                resources.as_mut_ptr(),
+                resources.len(),
+                options,
+                queue,
+            );
+        },
+    )?;
+
+    let result = unsafe { rdsys::rd_kafka_event_IncrementalAlterConfigs_result(event.ptr()) };
+    if result.is_null() {
+        return Err(admin_error(
+            conn,
+            &what,
+            "the broker acknowledged the request without saying what happened",
+        ));
+    }
+    let mut count = 0usize;
+    let altered =
+        unsafe { rdsys::rd_kafka_IncrementalAlterConfigs_result_resources(result, &mut count) };
+    for index in 0..count {
+        let resource = unsafe { *altered.add(index) };
+        let code = unsafe { rdsys::rd_kafka_ConfigResource_error(resource) };
+        if code != rdkafka::types::RDKafkaRespErr::RD_KAFKA_RESP_ERR_NO_ERROR {
+            let detail = unsafe { rdsys::rd_kafka_ConfigResource_error_string(resource) };
+            let detail = crate::acl::native::owned(detail);
+            let cause = if detail.is_empty() {
+                RDKafkaErrorCode::from(code).to_string()
+            } else {
+                detail
+            };
+            return Err(admin_error(conn, &what, &cause));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -896,8 +1044,11 @@ fn admin_options() -> AdminOptions {
 
 /// Wraps an AdminClient failure, preferring a recorded authentication cause
 /// over the generic one (see `ClusterConnection::describe_failure`).
+///
+/// `pub(crate)` for [`crate::acl`]: its calls fail the same ways and carry the
+/// same OAUTHBEARER caveat, and a second copy of this wording would drift.
 #[cfg(feature = "kafka")]
-fn admin_error(conn: &ClusterConnection, what: &str, cause: &str) -> Error {
+pub(crate) fn admin_error(conn: &ClusterConnection, what: &str, cause: &str) -> Error {
     let mut message = format!("{what} failed: {cause}");
     if conn.needs_oauth_token() {
         // See the caveat on `ClusterConnection::admin`: nothing outside rdkafka
@@ -963,6 +1114,21 @@ pub fn create_topic(
 
 #[cfg(not(feature = "kafka"))]
 pub fn delete_topic(_conn: &ClusterConnection, _topic: &str) -> Result<()> {
+    unsupported()
+}
+
+#[cfg(not(feature = "kafka"))]
+pub fn broker_configs(_conn: &ClusterConnection, _broker_id: i32) -> Result<Vec<ConfigEntry>> {
+    unsupported()
+}
+
+#[cfg(not(feature = "kafka"))]
+pub fn broker_config_set(
+    _conn: &ClusterConnection,
+    _broker_id: i32,
+    _name: &str,
+    _value: Option<&str>,
+) -> Result<()> {
     unsupported()
 }
 

@@ -58,6 +58,22 @@ export interface SchemaRegistryConfig {
   password: SecretRef | null;
 }
 
+/**
+ * One Kafka Connect worker group's REST endpoint, as the profile stores it.
+ *
+ * A list rather than one entry, because a cluster routinely has several
+ * Connect groups and every `connect_*` call has to name the one it goes to.
+ * The password is a keychain reference like every other secret: never a value.
+ * Its entry name is `{profileId}/connect_password/{cluster}` — see
+ * ProfileEditor, which is the only thing that mints one.
+ */
+export interface ConnectClusterConfig {
+  name: string;
+  url: string;
+  username: string | null;
+  password: SecretRef | null;
+}
+
 export interface ConnectionProfile {
   id: string;
   name: string;
@@ -66,6 +82,12 @@ export interface ConnectionProfile {
   auth: AuthConfig;
   read_only: boolean;
   schema_registry?: SchemaRegistryConfig | null;
+  /**
+   * Absent on every profile written before Phase 3a — the Rust side serde-
+   * defaults it to an empty Vec, so this is `?` here rather than `| null`
+   * alone, and every reader treats missing and empty as the same thing.
+   */
+  connect_clusters?: ConnectClusterConfig[];
 }
 
 export interface BrokerInfo {
@@ -845,4 +867,383 @@ export function saveDialog(options: {
   filters?: SaveDialogFilter[];
 }): Promise<string | null> {
   return save(options);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3a — ACLs, broker configs, Kafka Connect, Schema Registry writes
+//
+// Same contract shape as every phase before it: snake_case struct fields, and
+// camelCase ONLY in invoke()'s argument keys.
+//
+// EVERY MUTATING COMMAND HERE GOES THROUGH A CORE FUNCTION THAT CALLS
+// ensure_writable FIRST. The disabled-with-a-reason controls in the UI are a
+// courtesy so nobody clicks into a refusal; they are never the enforcement,
+// and a read-only connection refuses these even if a caller forgets.
+// ---------------------------------------------------------------------------
+
+// ── ACLs ───────────────────────────────────────────────────────────────────
+
+/**
+ * The four resource types Kavka's editor can WRITE.
+ *
+ * Kafka itself has more (delegation tokens, users), and a cluster can hold
+ * bindings for them, so every field on the wire type below is a plain `string`
+ * and every label lookup falls back to the raw value. A rule Kavka can't name
+ * is still a rule the user has to be able to see — the same reason internal
+ * topics are dimmed rather than hidden.
+ */
+export type AclResourceType =
+  | "topic"
+  | "group"
+  | "cluster"
+  | "transactional_id";
+
+/** `literal` matches one name; `prefixed` matches every name starting with it. */
+export type AclPatternType = "literal" | "prefixed";
+
+export type AclPermission = "allow" | "deny";
+
+/** Kafka's operation names, lowercased. Order is the order the picker shows. */
+export const ACL_OPERATIONS = [
+  "read",
+  "write",
+  "create",
+  "delete",
+  "alter",
+  "describe",
+  "describe_configs",
+  "alter_configs",
+  "cluster_action",
+  "idempotent_write",
+  "all",
+] as const;
+
+export type AclOperation = (typeof ACL_OPERATIONS)[number];
+
+/**
+ * One access rule, exactly as Kafka stores it. Seven fields, all present:
+ * this is a binding, not a filter, so nothing here is "any".
+ */
+export interface AclBinding {
+  /** One of AclResourceType, but the cluster may hold others — keep it open. */
+  resource_type: string;
+  /** `kafka-cluster` for a cluster-scoped rule; Kafka's own literal. */
+  resource_name: string;
+  pattern_type: string;
+  /** `User:alice` — the prefix is part of what Kafka stores. */
+  principal: string;
+  /** `*` means any host. */
+  host: string;
+  operation: string;
+  permission: string;
+}
+
+/** What to narrow the list to. Every field null lists everything. */
+export interface AclFilter {
+  resource_type: string | null;
+  resource_name: string | null;
+  principal: string | null;
+}
+
+export function aclsList(
+  profileId: string,
+  filter: AclFilter,
+): Promise<AclBinding[]> {
+  return invoke<AclBinding[]>("acls_list", { profileId, filter });
+}
+
+/** Mutating: the core rejects this on a read-only connection. */
+export function aclsCreate(
+  profileId: string,
+  bindings: AclBinding[],
+): Promise<void> {
+  return invoke<void>("acls_create", { profileId, bindings });
+}
+
+/**
+ * Mutating. Resolves with the bindings that were ACTUALLY removed, which is
+ * how the UI can tell "gone" from "was already gone" — an empty array means
+ * the rule had been deleted elsewhere and this click did nothing.
+ */
+export function aclsDelete(
+  profileId: string,
+  filter: AclBinding,
+): Promise<AclBinding[]> {
+  return invoke<AclBinding[]>("acls_delete", { profileId, filter });
+}
+
+// ── Broker configuration ───────────────────────────────────────────────────
+
+/** Reuses Phase 1's ConfigEntry verbatim — a broker setting is a setting. */
+export function brokerConfigs(
+  profileId: string,
+  brokerId: number,
+): Promise<ConfigEntry[]> {
+  return invoke<ConfigEntry[]>("broker_configs", { profileId, brokerId });
+}
+
+/**
+ * Mutating, and INCREMENTAL: only this key is touched, and `null` deletes the
+ * dynamic override so the broker falls back to whatever it computes as the
+ * default. Passing `null` is "revert", never "set to empty".
+ */
+export function brokerConfigSet(
+  profileId: string,
+  brokerId: number,
+  name: string,
+  value: string | null,
+): Promise<void> {
+  return invoke<void>("broker_config_set", {
+    profileId,
+    brokerId,
+    name,
+    value,
+  });
+}
+
+// ── Kafka Connect ──────────────────────────────────────────────────────────
+
+/** One task of one connector. `trace` is the worker's raw stack trace. */
+export interface TaskStatus {
+  id: number;
+  /** RUNNING · PAUSED · FAILED · UNASSIGNED · RESTARTING, as the worker says. */
+  state: string;
+  worker_id: string;
+  trace: string | null;
+}
+
+export interface ConnectorSummary {
+  name: string;
+  connector_state: string;
+  worker_id: string;
+  /** `source` (into Kafka) or `sink` (out of Kafka). */
+  connector_type: string;
+  tasks: TaskStatus[];
+}
+
+export function connectList(
+  profileId: string,
+  cluster: string,
+): Promise<ConnectorSummary[]> {
+  return invoke<ConnectorSummary[]>("connect_list", { profileId, cluster });
+}
+
+/** The connector's flattened config, exactly as the worker holds it. */
+export function connectConfig(
+  profileId: string,
+  cluster: string,
+  name: string,
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("connect_config", {
+    profileId,
+    cluster,
+    name,
+  });
+}
+
+/** One field of a validation response. `errors` is empty when it is fine. */
+export interface ConfigValidationEntry {
+  name: string;
+  value: string | null;
+  errors: string[];
+  required: boolean;
+  documentation: string | null;
+}
+
+/**
+ * What the WORKER thinks of a config, which is not the same as what it will
+ * think in a minute: validation runs against the plugin's config-def on the
+ * worker that answered, so it is a snapshot and the UI says so before it lets
+ * anyone act on a clean result.
+ */
+export interface ConfigValidation {
+  error_count: number;
+  configs: ConfigValidationEntry[];
+}
+
+export function connectValidate(
+  profileId: string,
+  cluster: string,
+  connectorClass: string,
+  config: Record<string, string>,
+): Promise<ConfigValidation> {
+  return invoke<ConfigValidation>("connect_validate", {
+    profileId,
+    cluster,
+    connectorClass,
+    config,
+  });
+}
+
+/** Mutating. PUT config — creates the connector, or updates it in place. */
+export function connectApply(
+  profileId: string,
+  cluster: string,
+  name: string,
+  config: Record<string, string>,
+): Promise<void> {
+  return invoke<void>("connect_apply", { profileId, cluster, name, config });
+}
+
+/** Mutating: the core rejects this on a read-only connection. */
+export function connectDelete(
+  profileId: string,
+  cluster: string,
+  name: string,
+): Promise<void> {
+  return invoke<void>("connect_delete", { profileId, cluster, name });
+}
+
+/**
+ * Mutating. `task === null` restarts the connector itself; `includeTasks`
+ * carries its tasks with it. A single task id restarts exactly that task.
+ */
+export function connectRestart(
+  profileId: string,
+  cluster: string,
+  name: string,
+  task: number | null,
+  includeTasks: boolean,
+): Promise<void> {
+  return invoke<void>("connect_restart", {
+    profileId,
+    cluster,
+    name,
+    task,
+    includeTasks,
+  });
+}
+
+/** Mutating: the core rejects this on a read-only connection. */
+export function connectPause(
+  profileId: string,
+  cluster: string,
+  name: string,
+): Promise<void> {
+  return invoke<void>("connect_pause", { profileId, cluster, name });
+}
+
+/** Mutating: the core rejects this on a read-only connection. */
+export function connectResume(
+  profileId: string,
+  cluster: string,
+  name: string,
+): Promise<void> {
+  return invoke<void>("connect_resume", { profileId, cluster, name });
+}
+
+// ── Schema Registry — versions, compatibility, register ────────────────────
+
+/** The registry's own wire spelling. `AVRO` is the default when it omits it. */
+export type SchemaType = "AVRO" | "JSON" | "PROTOBUF";
+
+export interface SubjectVersion {
+  subject: string;
+  version: number;
+  schema_id: number;
+  /** One of SchemaType, but a registry may serve others — keep it open. */
+  schema_type: string;
+  /** The schema text itself, verbatim. */
+  schema: string;
+}
+
+/** The registry's verdict, and its own words for why. */
+export interface CompatResult {
+  compatible: boolean;
+  /** Empty on a pass. On a failure these are SR's messages, not Kavka's. */
+  messages: string[];
+}
+
+export interface RegisteredSchema {
+  schema_id: number;
+}
+
+/** The seven levels a Confluent-compatible registry accepts. */
+export const COMPAT_LEVELS = [
+  "BACKWARD",
+  "BACKWARD_TRANSITIVE",
+  "FORWARD",
+  "FORWARD_TRANSITIVE",
+  "FULL",
+  "FULL_TRANSITIVE",
+  "NONE",
+] as const;
+
+export type CompatLevel = (typeof COMPAT_LEVELS)[number];
+
+export function srSubjectVersions(
+  profileId: string,
+  subject: string,
+): Promise<SubjectVersion[]> {
+  return invoke<SubjectVersion[]>("sr_subject_versions", {
+    profileId,
+    subject,
+  });
+}
+
+export function srCheckCompat(
+  profileId: string,
+  subject: string,
+  schema: string,
+  schemaType: string,
+): Promise<CompatResult> {
+  return invoke<CompatResult>("sr_check_compat", {
+    profileId,
+    subject,
+    schema,
+    schemaType,
+  });
+}
+
+/**
+ * Mutating. The core checks compatibility itself before it registers, and
+ * surfaces the registry's own refusal verbatim — so a UI that skipped the
+ * check button still cannot sneak an incompatible schema past the level.
+ */
+export function srRegister(
+  profileId: string,
+  subject: string,
+  schema: string,
+  schemaType: string,
+): Promise<RegisteredSchema> {
+  return invoke<RegisteredSchema>("sr_register", {
+    profileId,
+    subject,
+    schema,
+    schemaType,
+  });
+}
+
+/**
+ * The compatibility level in force, and whether the subject merely inherits it.
+ *
+ * `inherited` is the difference between "this subject is set to BACKWARD" and
+ * "this subject follows a registry default that happens to be BACKWARD" — two
+ * different facts, with two different consequences for setting a level here.
+ * A bare level string cannot express it, so this is an object.
+ */
+export interface CompatLevelInForce {
+  level: string;
+  /** true = the subject has no setting of its own and follows the global one. */
+  inherited: boolean;
+}
+
+/**
+ * `subject: null` reads the registry-wide default, which comes back with
+ * `inherited: false` — it inherits from nothing.
+ */
+export function srGetCompat(
+  profileId: string,
+  subject: string | null,
+): Promise<CompatLevelInForce> {
+  return invoke<CompatLevelInForce>("sr_get_compat", { profileId, subject });
+}
+
+/** Mutating. `subject: null` sets the registry-wide default. */
+export function srSetCompat(
+  profileId: string,
+  subject: string | null,
+  level: string,
+): Promise<void> {
+  return invoke<void>("sr_set_compat", { profileId, subject, level });
 }

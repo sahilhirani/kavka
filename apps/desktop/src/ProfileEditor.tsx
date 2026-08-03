@@ -7,6 +7,7 @@ import {
   secretExists,
   secretSet,
   type AuthConfig,
+  type ConnectClusterConfig,
   type ConnectionProfile,
   type ConnStatus,
   type Environment,
@@ -81,16 +82,47 @@ type FieldKey =
   | "clientSecret"
   | "srUrl"
   | "srUsername"
-  | "srPassword";
+  | "srPassword"
+  | "connectName"
+  | "connectUrl";
 
 interface FieldError {
   field: FieldKey;
   message: string;
+  /**
+   * Which Connect row the message belongs to. The Connect list is the only
+   * repeated control group in this form, so the field key alone stops being an
+   * address — and "validation focuses the offending control" (§5.3) needs an
+   * address, not a category.
+   */
+  row?: number;
 }
 
 /** Why Kerberos is disabled. Never a dead option. */
 const NOT_YET =
   "Kavka can't set this up yet. A connection that already uses it keeps working and is preserved exactly as it is when you save.";
+
+/**
+ * One row of the Connect list, while it is being edited.
+ *
+ * `entry` is the keychain entry this cluster ALREADY points at, and it is
+ * carried through a save rather than recomputed: the core names a Connect
+ * password after the cluster (`{profileId}/connect_password/{cluster}`) and
+ * purges by reading the stored refs, so reusing the entry is what makes
+ * renaming a cluster keep its password instead of silently orphaning it.
+ */
+interface ConnectRow {
+  /** Stable across reorders so React never reuses one row's input for another. */
+  key: number;
+  name: string;
+  url: string;
+  username: string;
+  /** Raw password input. NEVER stored in the profile; sent to secret_set only. */
+  password: string;
+  entry: string | null;
+}
+
+let nextConnectKey = 1;
 
 interface FormState {
   name: string;
@@ -128,6 +160,8 @@ interface FormState {
   srUsername: string;
   /** Schema Registry password. NEVER stored in the profile; keychain only. */
   srPassword: string;
+  /** The Kafka Connect clusters this connection can drive. Empty is normal. */
+  connect: ConnectRow[];
   readOnly: boolean;
 }
 
@@ -152,6 +186,7 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     srUrl: "",
     srUsername: "",
     srPassword: "",
+    connect: [],
     readOnly: false,
   };
   if (!profile) return base;
@@ -163,6 +198,18 @@ function initialForm(profile: ConnectionProfile | null): FormState {
   // None, so `?.` here is the same statement the Rust side makes.
   base.srUrl = profile.schema_registry?.url ?? "";
   base.srUsername = profile.schema_registry?.username ?? "";
+  // Absent on every profile written before Phase 3a; the Rust side defaults it
+  // to an empty list, so missing and empty mean the same thing here too.
+  base.connect = (profile.connect_clusters ?? []).map((cluster) => ({
+    key: nextConnectKey++,
+    name: cluster.name,
+    url: cluster.url,
+    username: cluster.username ?? "",
+    // Like every other secret: never read back into the form. Blank means
+    // "leave the stored one alone".
+    password: "",
+    entry: cluster.password?.entry ?? null,
+  }));
   // The registry password lives in the keychain and is never read back into
   // the form: blank means "leave the stored one alone", like every other.
   const auth = profile.auth;
@@ -286,6 +333,18 @@ export default function ProfileEditor({
         controls.current[field] = el;
       });
   }, []);
+  // The Connect list is repeated, so its controls are addressed by row as well
+  // as by field. Same cached-callback rule as `bind`, keyed by both.
+  const connectControls = useRef<Record<string, HTMLElement | null>>({});
+  const connectBind = useMemo(() => {
+    const cache: Record<string, (el: HTMLElement | null) => void> = {};
+    return (row: number, which: "name" | "url") => {
+      const key = `${row}:${which}`;
+      return (cache[key] ??= (el: HTMLElement | null) => {
+        connectControls.current[key] = el;
+      });
+    };
+  }, []);
 
   // Kerberos is the one sign-in method the form can't edit: shown read-only
   // and preserved verbatim on save — never silently downgraded to plaintext.
@@ -308,6 +367,46 @@ export default function ProfileEditor({
   /** Switching methods hides controls, so any message about one goes too. */
   const changeAuthKind = useCallback((authKind: EditableAuthKind) => {
     setForm((prev) => ({ ...prev, authKind }));
+    setFieldError(null);
+  }, []);
+
+  /** Editing any field of a Connect row clears that row's message. */
+  const editConnect = useCallback(
+    (row: number, partial: Partial<ConnectRow>) => {
+      setForm((prev) => ({
+        ...prev,
+        connect: prev.connect.map((entry, i) =>
+          i === row ? { ...entry, ...partial } : entry,
+        ),
+      }));
+      setFieldError((prev) => (prev?.row === row ? null : prev));
+    },
+    [],
+  );
+
+  const addConnect = useCallback(() => {
+    setForm((prev) => ({
+      ...prev,
+      connect: [
+        ...prev.connect,
+        {
+          key: nextConnectKey++,
+          name: "",
+          url: "",
+          username: "",
+          password: "",
+          entry: null,
+        },
+      ],
+    }));
+  }, []);
+
+  /** Removing a row renumbers the rest, so any row-addressed message goes. */
+  const removeConnect = useCallback((row: number) => {
+    setForm((prev) => ({
+      ...prev,
+      connect: prev.connect.filter((_, i) => i !== row),
+    }));
     setFieldError(null);
   }, []);
 
@@ -366,6 +465,47 @@ export default function ProfileEditor({
   const hasStoredClientSecret = stored.clientSecret;
   const hasStoredSrPassword = stored.srPassword;
 
+  // The Connect passwords, asked about the same way and for the same reason —
+  // except there are N of them, so the answer is a map keyed by entry name
+  // rather than four booleans. The effect keys on the JOINED entry list: it
+  // has to re-run when the set of entries changes and not when React hands us
+  // a new array for the same set.
+  // JSON, not a joined string: an entry name ends in the cluster's own name,
+  // which is user text, so there is no separator character that is safe to
+  // split back on. The key is a value to compare, and the array is recovered
+  // by parsing it.
+  const connectEntryKey = JSON.stringify(
+    (profile?.connect_clusters ?? [])
+      .map((cluster) => cluster.password?.entry ?? "")
+      .filter((entry) => entry.length > 0),
+  );
+  const [connectStored, setConnectStored] = useState<Record<string, boolean>>(
+    {},
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    // Reset first, for the same reason as the four above: while the answer is
+    // in flight nothing counts as stored, so the form asks rather than
+    // promising to keep something nobody has verified is there.
+    setConnectStored({});
+    const entries = JSON.parse(connectEntryKey) as string[];
+    if (entries.length === 0) return;
+    void Promise.all(
+      entries.map((entry) => secretExists(entry).catch(() => false)),
+    ).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, boolean> = {};
+      entries.forEach((entry, i) => {
+        map[entry] = results[i];
+      });
+      setConnectStored(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectEntryKey]);
+
   const needsPassword =
     (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") &&
     !hasStoredPassword;
@@ -405,6 +545,55 @@ export default function ProfileEditor({
         message:
           "Add the registry's address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
       };
+
+    // Connect is independent of the sign-in method too — the workers have their
+    // own address and their own credentials — so it is checked here, before the
+    // Kerberos early return.
+    const seen = new Set<string>();
+    for (let row = 0; row < form.connect.length; row += 1) {
+      const cluster = form.connect[row];
+      const clusterName = cluster.name.trim();
+      const url = cluster.url.trim();
+      // A row nobody has touched is dropped on save rather than refused: an
+      // empty row is what "Add a Connect cluster" produces, and being told off
+      // for the thing the button just did is absurd.
+      if (
+        clusterName.length === 0 &&
+        url.length === 0 &&
+        cluster.username.trim().length === 0 &&
+        cluster.password.length === 0
+      )
+        continue;
+      if (clusterName.length === 0)
+        return {
+          field: "connectName",
+          row,
+          message:
+            "Give this Connect cluster a name — every action Kavka sends names the cluster it goes to.",
+        };
+      if (seen.has(clusterName))
+        return {
+          field: "connectName",
+          row,
+          message:
+            "Two Connect clusters on one connection can't share a name — Kavka stores their passwords under it.",
+        };
+      seen.add(clusterName);
+      if (url.length === 0)
+        return {
+          field: "connectUrl",
+          row,
+          message:
+            "Add the workers' REST address — e.g. http://connect-1.internal:8083",
+        };
+      if (!isHttpUrl(url))
+        return {
+          field: "connectUrl",
+          row,
+          message:
+            "Use the whole URL, starting with http:// or https:// — e.g. http://connect-1.internal:8083",
+        };
+    }
 
     // Kerberos is preserved as-is; there is nothing here to check.
     if (unsupportedAuth) return null;
@@ -493,7 +682,11 @@ export default function ProfileEditor({
     const problem = validate();
     if (problem) {
       setFieldError(problem);
-      controls.current[problem.field]?.focus();
+      if (problem.row === undefined) controls.current[problem.field]?.focus();
+      else
+        connectControls.current[
+          `${problem.row}:${problem.field === "connectName" ? "name" : "url"}`
+        ]?.focus();
       return null;
     }
     setFieldError(null);
@@ -584,6 +777,39 @@ export default function ProfileEditor({
             password: keepsSrPassword ? { entry: entry.srPassword } : null,
           };
 
+    // The Connect clusters. A row with no name or no URL is dropped rather
+    // than saved half-written — validate() has already refused any row that
+    // has one and not the other, so what falls out here is only the empty row
+    // "Add a Connect cluster" leaves behind.
+    //
+    // THE ENTRY NAME IS REUSED WHEN THERE IS ONE. The core names a Connect
+    // password after the cluster (`{id}/connect_password/{cluster}`) and purges
+    // by reading the SecretRefs off the profile, never by rebuilding the name —
+    // so carrying the stored entry through a rename keeps the password with the
+    // cluster it belongs to. Only a cluster that has never had one gets a name
+    // minted for it.
+    const connectWrites: Array<[string, string]> = [];
+    const connectEntryByKey = new Map<number, string>();
+    const connectClusters: ConnectClusterConfig[] = form.connect
+      .filter(
+        (row) => row.name.trim().length > 0 && row.url.trim().length > 0,
+      )
+      .map((row) => {
+        const clusterName = row.name.trim();
+        const entryName = row.entry ?? `${id}/connect_password/${clusterName}`;
+        const typed = row.password.length > 0;
+        const keeps =
+          typed || (row.entry !== null && connectStored[row.entry] === true);
+        if (typed) connectWrites.push([entryName, row.password]);
+        if (keeps) connectEntryByKey.set(row.key, entryName);
+        return {
+          name: clusterName,
+          url: row.url.trim(),
+          username: orNull(row.username),
+          password: keeps ? { entry: entryName } : null,
+        };
+      });
+
     const next: ConnectionProfile = {
       id,
       name: form.name.trim(),
@@ -592,6 +818,7 @@ export default function ProfileEditor({
       auth,
       read_only: form.readOnly,
       schema_registry: schemaRegistry,
+      connect_clusters: connectClusters,
     };
 
     // What this save puts into the keychain. A blank secret input always
@@ -612,6 +839,8 @@ export default function ProfileEditor({
     // how the cluster checks who you are.
     if (srUrl !== null && srTypedPassword)
       writes.push([entry.srPassword, form.srPassword]);
+    // Same again for every Connect cluster that had a password typed into it.
+    writes.push(...connectWrites);
 
     // Entries this profile still has but the new sign-in method no longer
     // references. Cleaned up best-effort after the profile is safely saved.
@@ -632,6 +861,19 @@ export default function ProfileEditor({
     // the same rule the client key follows when its certificate path goes.
     if (hasStoredSrPassword && !keepsSrPassword)
       obsolete.push(entry.srPassword);
+    // A Connect cluster that was removed — or that lost its password — takes
+    // its keychain entry with it. Read off the SAVED profile, because that is
+    // the only record of what this connection used to reference.
+    const keptConnectEntries = new Set(
+      connectClusters
+        .map((cluster) => cluster.password?.entry)
+        .filter((name): name is string => typeof name === "string"),
+    );
+    for (const cluster of profile?.connect_clusters ?? []) {
+      const name = cluster.password?.entry;
+      if (typeof name === "string" && !keptConnectEntries.has(name))
+        obsolete.push(name);
+    }
 
     setBusy(true);
     try {
@@ -661,12 +903,27 @@ export default function ProfileEditor({
         clientSecret: settled(entry.clientSecret, prev.clientSecret),
         srPassword: settled(entry.srPassword, prev.srPassword),
       }));
+      // The Connect passwords, recorded the same way: an entry this save wrote
+      // is known present, and one it dropped counts as gone.
+      setConnectStored((prev) => {
+        const map = { ...prev };
+        for (const [name] of connectWrites) map[name] = true;
+        for (const name of removed) delete map[name];
+        return map;
+      });
       setForm((prev) => ({
         ...prev,
         password: "",
         clientKey: "",
         clientSecret: "",
         srPassword: "",
+        // Each row keeps the entry this save actually used, so the next one
+        // reuses it rather than minting a second name for the same password.
+        connect: prev.connect.map((row) => ({
+          ...row,
+          password: "",
+          entry: connectEntryByKey.get(row.key) ?? row.entry,
+        })),
       }));
       return next;
     } catch (err) {
@@ -686,6 +943,7 @@ export default function ProfileEditor({
     hasStoredClientKey,
     hasStoredClientSecret,
     hasStoredSrPassword,
+    connectStored,
   ]);
 
   const handleSave = useCallback(async () => {
@@ -758,9 +1016,26 @@ export default function ProfileEditor({
       a nested component — a component declared here would remount its span
       on every keystroke. */
   const fieldMessage = (field: FieldKey) =>
-    fieldError?.field === field ? (
+    fieldError?.field === field && fieldError.row === undefined ? (
       <span className="field-error" id={`pe-${field}-error`}>
         {fieldError.message}
+      </span>
+    ) : null;
+
+  /** The same four helpers, addressed by row — see FieldError.row. */
+  const connInvalid = (row: number, field: FieldKey) =>
+    fieldError?.field === field && fieldError.row === row ? true : undefined;
+  const connCls = (row: number, field: FieldKey, base = "") =>
+    `${base}${connInvalid(row, field) ? " input-invalid" : ""}`.trim() ||
+    undefined;
+  const connDescribe = (row: number, field: FieldKey, hintId?: string) =>
+    [hintId, connInvalid(row, field) ? `pe-connect-${row}-${field}-error` : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const connMessage = (row: number, field: FieldKey) =>
+    connInvalid(row, field) ? (
+      <span className="field-error" id={`pe-connect-${row}-${field}-error`}>
+        {fieldError?.message}
       </span>
     ) : null;
 
@@ -1347,6 +1622,162 @@ export default function ProfileEditor({
               : ""}
           </span>
         </div>
+      </fieldset>
+
+      {/* Kafka Connect — optional, plural, and independent of both the
+          sign-in method and the registry: the workers are a separate service
+          with their own address and their own credentials. Removing a cluster
+          here takes its keychain entry with it, exactly like clearing the
+          registry's address does. */}
+      <fieldset className="fieldset">
+        <legend className="eyebrow">Kafka Connect clusters (optional)</legend>
+
+        <span className="field-hint">
+          Kafka Connect runs source and sink connectors, and it answers on its
+          own REST port rather than through the brokers — so Kavka has to be
+          told where the workers are. Add one per worker group; the name is how
+          you'll pick between them in the Connect tab.
+        </span>
+
+        {form.connect.map((cluster, row) => (
+          <div className="connect-cluster" key={cluster.key}>
+            <div className="connect-cluster-head">
+              <span className="eyebrow">
+                {cluster.name.trim().length > 0
+                  ? cluster.name
+                  : `Cluster ${row + 1}`}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                title="Remove this Connect cluster from the connection"
+                onClick={() => removeConnect(row)}
+              >
+                Remove
+              </button>
+            </div>
+
+            <div className="field">
+              <label
+                className="field-label"
+                htmlFor={`pe-connect-${row}-name`}
+              >
+                Name
+              </label>
+              <input
+                id={`pe-connect-${row}-name`}
+                ref={connectBind(row, "name")}
+                type="text"
+                className={connCls(row, "connectName")}
+                value={cluster.name}
+                placeholder="orders connect"
+                autoComplete="off"
+                aria-invalid={connInvalid(row, "connectName")}
+                aria-describedby={connDescribe(
+                  row,
+                  "connectName",
+                  `pe-connect-${row}-name-hint`,
+                )}
+                onChange={(e) => editConnect(row, { name: e.target.value })}
+              />
+              {connMessage(row, "connectName")}
+              <span
+                className="field-hint"
+                id={`pe-connect-${row}-name-hint`}
+              >
+                Whatever you'll recognise. Renaming it later keeps its stored
+                password.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="field-label" htmlFor={`pe-connect-${row}-url`}>
+                Workers' address
+              </label>
+              <input
+                id={`pe-connect-${row}-url`}
+                ref={connectBind(row, "url")}
+                type="text"
+                className={connCls(row, "connectUrl", "input-mono")}
+                value={cluster.url}
+                placeholder="http://connect-1.internal:8083"
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={connInvalid(row, "connectUrl")}
+                aria-describedby={connDescribe(
+                  row,
+                  "connectUrl",
+                  `pe-connect-${row}-url-hint`,
+                )}
+                onChange={(e) => editConnect(row, { url: e.target.value })}
+              />
+              {connMessage(row, "connectUrl")}
+              <span className="field-hint" id={`pe-connect-${row}-url-hint`}>
+                The REST endpoint of any worker in the group — they all answer
+                for the whole cluster. Usually port 8083, and not the same host
+                or port as the brokers.
+              </span>
+            </div>
+
+            <div className="field">
+              <label
+                className="field-label"
+                htmlFor={`pe-connect-${row}-user`}
+              >
+                Username
+              </label>
+              <input
+                id={`pe-connect-${row}-user`}
+                type="text"
+                className="input-mono"
+                value={cluster.username}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby={`pe-connect-${row}-user-hint`}
+                onChange={(e) => editConnect(row, { username: e.target.value })}
+              />
+              <span className="field-hint" id={`pe-connect-${row}-user-hint`}>
+                Only if the workers sit behind basic auth. Most don't.
+              </span>
+            </div>
+
+            <div className="field">
+              <label
+                className="field-label"
+                htmlFor={`pe-connect-${row}-password`}
+              >
+                Password
+              </label>
+              <input
+                id={`pe-connect-${row}-password`}
+                type="password"
+                value={cluster.password}
+                autoComplete="new-password"
+                placeholder={
+                  cluster.entry !== null && connectStored[cluster.entry]
+                    ? "••••••••  (unchanged)"
+                    : "Password"
+                }
+                aria-describedby={`pe-connect-${row}-password-hint`}
+                onChange={(e) => editConnect(row, { password: e.target.value })}
+              />
+              <span
+                className="field-hint"
+                id={`pe-connect-${row}-password-hint`}
+              >
+                Goes to your operating system's keychain — never into the
+                connection file, and never off this machine.
+                {cluster.entry !== null && connectStored[cluster.entry]
+                  ? " Leave it empty to keep the stored one; removing this cluster removes it."
+                  : ""}
+              </span>
+            </div>
+          </div>
+        ))}
+
+        <button type="button" className="btn" onClick={addConnect}>
+          Add a Connect cluster
+        </button>
       </fieldset>
 
       <div className="check-field">

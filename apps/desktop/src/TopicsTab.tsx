@@ -17,6 +17,7 @@ import { Term } from "./Glossary";
 import MessagesView from "./MessagesView";
 import ProducePanel from "./ProducePanel";
 import { ErrorBanner } from "./ProfileEditor";
+import SchemasPanel from "./SchemasPanel";
 import SearchView from "./SearchView";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -28,14 +29,17 @@ const READ_ONLY_WHY =
   "This connection is read-only. Turn that off in the connection's settings to produce or edit.";
 
 /**
- * Which of the topic's three screens is open.
+ * Which of the topic's four screens is open.
  *
  * Phase 2 turned the browser's `browsing` boolean into three states, because
  * search is a peer of the browser rather than a mode inside it: they answer
  * different questions about the same topic and neither belongs inside the
- * other's toolbar.
+ * other's toolbar. Phase 3a adds `schemas` on the same argument — "what shape
+ * are these messages" is a fourth question, and it is asked about a topic
+ * rather than about a cluster, which is why it lives here and not in its own
+ * tab beside Brokers.
  */
-export type TopicPane = "detail" | "messages" | "search";
+export type TopicPane = "detail" | "messages" | "search" | "schemas";
 
 interface TopicsTabProps {
   profile: ConnectionProfile;
@@ -52,6 +56,9 @@ interface TopicsTabProps {
    * change so nothing has to reach back down.
    */
   onActions?: (actions: TopicActions | null) => void;
+  /** Opens this connection's settings — the schemas pane offers it when the
+      connection has no registry. It disconnects; both call sites say so. */
+  onEditConnection: () => void;
 }
 
 /** What the command palette can do to the topic currently on screen. */
@@ -72,6 +79,7 @@ export default function TopicsTab({
   onPane,
   onDanger,
   onActions,
+  onEditConnection,
 }: TopicsTabProps) {
   const [topics, setTopics] = useState<TopicInfo[] | null>(null);
   const [loadingTopics, setLoadingTopics] = useState(false);
@@ -263,6 +271,24 @@ export default function TopicsTab({
    * panel, four screens.
    */
   const body = ((): React.ReactNode => {
+    // ── Schemas: a page of panels, not a full-height view ──────────────────
+    // It is checked BEFORE the two full-height panes because it needs no
+    // partition list — a subject can be read (and registered) whether or not
+    // the topic's metadata came back.
+
+    if (topic !== null && pane === "schemas") {
+      return (
+        <SchemasPanel
+          key={`schemas:${topic}`}
+          profile={profile}
+          topic={topic}
+          onBack={() => goPane("detail")}
+          onDanger={onDanger}
+          onEditConnection={onEditConnection}
+        />
+      );
+    }
+
     // ── The message browser and search own the whole view when open ────────
 
     if (topic !== null && pane !== "detail") {
@@ -406,6 +432,14 @@ export default function TopicsTab({
                   }
                 >
                   Search
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => goPane("schemas")}
+                  title="See the schemas registered for this topic, and register a new version"
+                >
+                  Schemas
                 </button>
                 {/* A write action renders danger-outlined on prod even when it
                     is routine (§6 layer 7). */}

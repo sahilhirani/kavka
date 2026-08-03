@@ -628,6 +628,7 @@ mod tests {
             auth,
             read_only: false,
             schema_registry: None,
+            connect_clusters: Vec::new(),
         }
     }
 

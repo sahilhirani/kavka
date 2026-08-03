@@ -1662,6 +1662,7 @@ mod tests {
             auth: AuthConfig::Plaintext,
             read_only,
             schema_registry,
+            connect_clusters: Vec::new(),
         })
         .expect("connect")
     }

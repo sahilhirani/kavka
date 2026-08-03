@@ -4,6 +4,11 @@
 #
 # Brokers on localhost:9092. kafka-init creates the dev topics and seeds
 # a few JSON messages so the app has something to browse on first connect.
+#
+# The broker runs StandardAuthorizer with User:ANONYMOUS as a superuser, so the
+# ACL APIs are reachable while nothing is actually denied — see the environment
+# block for why that combination is the only one that leaves every other
+# integration test alone.
 services:
   kafka:
     image: apache/kafka:4.1.0
@@ -26,6 +31,24 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # An authorizer has to be loaded before CreateAcls/DescribeAcls/DeleteAcls
+      # exist at all — without one the broker answers SECURITY_DISABLED and the
+      # ACL screen has nothing to talk to. StandardAuthorizer is the KRaft-native
+      # one (there is no ZooKeeper here for AclAuthorizer to use).
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      # These two keep the authorizer from changing what the dev cluster *does*.
+      # Every listener is PLAINTEXT, so every client — Kavka, the seeding
+      # scripts, the healthcheck, and the broker talking to its own controller —
+      # authenticates as User:ANONYMOUS. Making that a superuser means the
+      # authorizer is loaded and answerable but never denies anything, so the
+      # integration suite is unaffected by its presence, and an ACL the tests
+      # write for a fake principal cannot lock the suite out of a topic.
+      #
+      # allow.everyone.if.no.acl.found is belt and braces for the same
+      # invariant: without it, the first ACL written against a resource turns
+      # that resource deny-by-default for everyone else.
+      KAFKA_SUPER_USERS: User:ANONYMOUS
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:

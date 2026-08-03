@@ -26,6 +26,76 @@ pub struct ConnectionProfile {
     /// sidebar and a "couldn't read its connection file" banner.
     #[serde(default)]
     pub schema_registry: Option<SchemaRegistryConfig>,
+    /// The Kafka Connect clusters this connection can drive (Phase 3a).
+    ///
+    /// A list rather than an `Option`, because a cluster routinely has several
+    /// Connect groups (a source cluster and a sink cluster is the common
+    /// shape) and the UI has to name the one an action goes to. Empty is the
+    /// normal state and means "this connection has no Connect".
+    ///
+    /// `#[serde(default)]` for the same reason as `schema_registry`, one phase
+    /// later: every profile on disk today has no such key.
+    #[serde(default)]
+    pub connect_clusters: Vec<ConnectClusterConfig>,
+}
+
+impl ConnectionProfile {
+    /// Every keychain entry this profile's Connect clusters own.
+    ///
+    /// [`crate::secrets::SECRET_SUFFIXES`] cannot express these and must not
+    /// try: a Connect password's entry name carries the *cluster's* name
+    /// ([`connect_password_suffix`]), so the set is a property of one profile
+    /// rather than a fixed vocabulary. Anything that purges a profile's
+    /// secrets iterates that constant **and** calls this — otherwise a Connect
+    /// password outlives the connection it belonged to, which is the
+    /// `sr_password` regression that constant was written for, one level down.
+    ///
+    /// Read off the stored [`SecretRef`]s rather than rebuilt from the naming
+    /// convention, so a profile written by another build — or renamed by hand —
+    /// still purges the entry it actually references.
+    pub fn connect_secret_entries(&self) -> Vec<String> {
+        self.connect_clusters
+            .iter()
+            .filter_map(|cluster| cluster.password.as_ref())
+            .map(|secret| secret.entry.clone())
+            .collect()
+    }
+
+    /// The Connect cluster with this name, if the profile has one.
+    pub fn connect_cluster(&self, name: &str) -> Option<&ConnectClusterConfig> {
+        self.connect_clusters.iter().find(|c| c.name == name)
+    }
+}
+
+/// One Kafka Connect cluster (a worker group's REST endpoint).
+///
+/// Credentials follow [`SchemaRegistryConfig`]'s rule exactly: the username is
+/// an identifier and lives in the profile, the password is a [`SecretRef`] into
+/// the OS keychain and never touches disk (docs/ARCHITECTURE.md D5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectClusterConfig {
+    /// How the user refers to this cluster. Also the key every `connect_*` IPC
+    /// call passes, and the tail of its keychain entry name.
+    pub name: String,
+    /// The worker REST endpoint, e.g. `http://connect-1.internal:8083`.
+    pub url: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<SecretRef>,
+}
+
+/// The keychain-entry suffix for one Connect cluster's password —
+/// `connect_password/{cluster}`, so the full entry name is
+/// `{profile_id}/connect_password/{cluster}` via
+/// [`crate::secrets::entry_name`].
+///
+/// The cluster name is user data and lands in a keychain entry name, so it is
+/// used verbatim and nothing is parsed back out of it: the purge path reads
+/// [`ConnectionProfile::connect_secret_entries`] instead of reconstructing
+/// names, which is what makes a cluster rename safe.
+pub fn connect_password_suffix(cluster: &str) -> String {
+    format!("connect_password/{cluster}")
 }
 
 /// A Confluent-compatible Schema Registry (Confluent, Apicurio, Redpanda).
@@ -397,7 +467,29 @@ mod tests {
                     entry: format!("{id}/schema_registry_password"),
                 }),
             }),
+            connect_clusters: vec![
+                ConnectClusterConfig {
+                    name: "sources".into(),
+                    url: "https://connect-1.example:8083".into(),
+                    username: Some("connect-user".into()),
+                    password: Some(SecretRef {
+                        entry: entry_for(id, "sources"),
+                    }),
+                },
+                // Anonymous workers are the common on-prem shape, and the one
+                // that would hide a `None`-handling bug in the purge path.
+                ConnectClusterConfig {
+                    name: "sinks".into(),
+                    url: "http://connect-2.example:8083".into(),
+                    username: None,
+                    password: None,
+                },
+            ],
         }
+    }
+
+    fn entry_for(profile_id: &str, cluster: &str) -> String {
+        crate::secrets::entry_name(profile_id, &connect_password_suffix(cluster))
     }
 
     /// One of every auth variant, so the no-secret-values check covers every
@@ -539,6 +631,121 @@ mod tests {
         let mut leaked = doc.clone();
         leaked["profiles"][0]["schema_registry"]["password"] = serde_json::json!("hunter2");
         assert_eq!(leaked_secret_field(&leaked).as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn connect_clusters_survive_an_export_import_roundtrip() {
+        let original = profile("a", "A");
+        let back = import_json(&export_json(&[original])).expect("roundtrip");
+        let clusters = &back[0].connect_clusters;
+
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].name, "sources");
+        assert_eq!(clusters[0].url, "https://connect-1.example:8083");
+        assert_eq!(clusters[0].username.as_deref(), Some("connect-user"));
+        assert_eq!(
+            clusters[0].password.as_ref().map(|s| s.entry.as_str()),
+            Some("a/connect_password/sources")
+        );
+        // The anonymous worker roundtrips as anonymous, not as an empty
+        // credential.
+        assert_eq!(clusters[1].name, "sinks");
+        assert!(clusters[1].username.is_none());
+        assert!(clusters[1].password.is_none());
+    }
+
+    /// The field arrived in Phase 3a; every profile written before it has no
+    /// such key, and those files are read on every launch. This is the same
+    /// regression `schema_registry` was `#[serde(default)]`-ed for, one phase
+    /// later.
+    #[test]
+    fn profiles_written_before_the_connect_field_still_load() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "dev",
+                "bootstrap_servers": ["localhost:9092"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false,
+                "schema_registry": {"url": "https://registry.example"}
+            }]
+        }"#;
+        let profiles = import_json(legacy).expect("a Phase 1 profile still parses");
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].connect_clusters.is_empty());
+        assert!(profiles[0].connect_secret_entries().is_empty());
+    }
+
+    #[test]
+    fn a_connect_password_travels_as_a_reference() {
+        let json = export_json(&[profile("a", "A")]);
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let clusters = &doc["profiles"][0]["connect_clusters"];
+
+        assert_eq!(
+            clusters[0]["password"],
+            serde_json::json!({"entry": "a/connect_password/sources"})
+        );
+        assert_eq!(clusters[1]["password"], serde_json::Value::Null);
+        assert_eq!(leaked_secret_field(&doc), None);
+
+        // The detector reaches into the new location too — it is an array of
+        // objects two levels down, which is exactly the shape a field-name
+        // scan is most likely to miss.
+        let mut leaked = doc.clone();
+        leaked["profiles"][0]["connect_clusters"][0]["password"] = serde_json::json!("hunter2");
+        assert_eq!(leaked_secret_field(&leaked).as_deref(), Some("password"));
+        // ...including one hidden inside a SecretRef-shaped object.
+        let mut nested = doc.clone();
+        nested["profiles"][0]["connect_clusters"][1]["password"] =
+            serde_json::json!({"entry": "e", "value": "s3"});
+        assert_eq!(leaked_secret_field(&nested).as_deref(), Some("password"));
+    }
+
+    /// `SECRET_SUFFIXES` cannot name these — the cluster's name is in the entry
+    /// — so a purge that only iterates the constant leaves a Connect password
+    /// behind. That is the `sr_password` regression one level down, and this is
+    /// the tripwire for it.
+    #[test]
+    fn a_profiles_connect_entries_are_enumerable_for_the_purge_path() {
+        let profile = profile("a", "A");
+        assert_eq!(
+            profile.connect_secret_entries(),
+            vec!["a/connect_password/sources".to_string()]
+        );
+        assert_eq!(
+            connect_password_suffix("sources"),
+            "connect_password/sources"
+        );
+        assert_eq!(
+            crate::secrets::entry_name("a", &connect_password_suffix("sources")),
+            "a/connect_password/sources"
+        );
+        // No fixed suffix could have covered it.
+        assert!(!crate::secrets::SECRET_SUFFIXES
+            .iter()
+            .any(|s| s.contains("connect")));
+    }
+
+    /// Read off the stored refs, not rebuilt from the naming convention — so a
+    /// renamed cluster still purges the entry it actually holds.
+    #[test]
+    fn the_purge_list_follows_the_stored_reference_not_the_current_name() {
+        let mut profile = profile("a", "A");
+        profile.connect_clusters[0].name = "renamed".into();
+        assert_eq!(
+            profile.connect_secret_entries(),
+            vec!["a/connect_password/sources".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_cluster_is_looked_up_by_name() {
+        let profile = profile("a", "A");
+        assert_eq!(profile.connect_cluster("sinks").unwrap().username, None);
+        assert!(profile.connect_cluster("nope").is_none());
     }
 
     #[test]

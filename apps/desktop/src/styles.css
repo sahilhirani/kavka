@@ -3429,3 +3429,299 @@ select.input-invalid { border-color: var(--danger); }
 
   .toast-progress { background: Highlight; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 3a — ACLS · BROKER CONFIG · CONNECT · SCHEMAS
+   Additions only. Every rule below is a NEW selector: the table, the
+   ledger rule, the +/− diff gutter, the banner, the modal, the health
+   chip and the seek bar already exist above and are reused verbatim,
+   because an ACL row must stay pixel-identical to a topic row and a
+   connector's state chip must stay the same chip a consumer group's is
+   (§5.2, §5.6, §5.8).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── A control that lives inside a table row ──────────────────────────
+   24px is the SC 2.5.8 floor exactly, which is what lets two of them sit
+   in a 30px row. NO transition: law 3 is about the scrolling table, and
+   these tables are the ones that will grow a virtualizer next. */
+.btn-row {
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+  transition: none;
+}
+
+/* ── ACLs ─────────────────────────────────────────────────────────────
+   A deny rule is the one row in the app that is a WARNING about itself:
+   removing it widens access. Three channels say so — a glyph, the word,
+   and the danger wash — because law 2 forbids the pinker-row-only
+   version. The hover rule is restated so a deny row still responds to
+   the pointer like every other row (equal specificity, later wins). */
+.data-table tbody tr.row-deny td { background: var(--danger-tint); }
+.data-table tbody tr.row-deny .ledger-gutter { background: var(--danger-tint); }
+.data-table tbody tr.row-deny:hover td { background: var(--bg-row-hover); }
+
+.acl-perm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.acl-perm-deny {
+  color: var(--danger);
+  font-weight: var(--w-medium);
+}
+
+/* ── Broker configuration ─────────────────────────────────────────────
+   A value can be a 400-character listener map, and a wrapped cell breaks
+   --row-h, which the virtualizer reads at runtime. Clip and keep the
+   whole string in a title, the same trade the member id makes. */
+.config-value {
+  max-width: 44ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Edit in place: the input replaces the value, in the value's own cell,
+   at the row's own height. */
+.config-edit {
+  width: 100%;
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-3);
+}
+
+/* While the cell holds an editor it may also hold that editor's refusal
+   message, so the one-line clip is lifted for exactly as long as the
+   editor is open — a message ellipsised out of existence is worse than no
+   message. The 44ch cap stays, so the message wraps inside the column the
+   value already had and no other row moves. */
+.config-value-editing {
+  overflow: visible;
+  white-space: normal;
+}
+
+.config-edit-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-block: var(--s-2);
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+/* ── Kafka Connect ────────────────────────────────────────────────────
+   A task count is a quantity Kavka computed, so it is sans + tabular
+   (§4). The failure beside it is a WORD in the danger colour, never a
+   differently-shaded number. */
+.task-count {
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+}
+
+.task-failed {
+  color: var(--danger);
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
+}
+
+/* The cluster picker sits in a panel-tools row, so it takes its content's
+   width instead of the form control's 100%. */
+.connect-picker {
+  width: auto;
+  min-width: 160px;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--s-4);
+  font-size: var(--t-sm);
+}
+
+/* The config editor is the one textarea that gets the room a JSON
+   document needs — .io-json caps at 40vh, which is a keyhole here. */
+.connect-json {
+  max-height: 60vh;
+  min-height: 240px;
+}
+
+/* Validation results: the field name is a literal from the config (mono),
+   the message is the worker's own words, and the name is a BUTTON because
+   its whole job is putting the caret on that key in the text above. */
+.validate-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.validate-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.validate-jump {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: var(--hit-min);
+  padding: 0;
+}
+
+.validate-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-mono);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.validate-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+  max-width: var(--measure);
+}
+
+.validate-msg {
+  color: var(--danger);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.validate-doc {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* A worker's stack trace, in §7's three layers: plain title, then the
+   next click, then the verbatim text behind Show details. Grouping is
+   whitespace plus a hairline — no card. */
+.trace-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-5) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.trace-title {
+  margin: 0;
+  max-width: var(--measure);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  user-select: text;
+  word-break: break-word;
+}
+
+.trace-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Schema version diff ──────────────────────────────────────────────
+   The shared diff component's parts (.code-line, .code-gutter, the +/−
+   in it, .diff-add / .diff-del) are reused verbatim; this only puts two
+   of them side by side and gives each its own scrollport. */
+.diff-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s-5);
+}
+
+.diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.diff-pane-head {
+  margin: 0;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.diff-view {
+  max-height: 46vh;
+  overflow: auto;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+/* `pre`, not `pre-wrap`: a wrapped line in one pane pushes every line
+   after it out of step with the other, and a side-by-side diff whose
+   sides don't line up is worse than no diff. Each pane scrolls instead. */
+.diff-pane .code-text { white-space: pre; }
+
+/* The registry's own words about an incompatible schema, verbatim. */
+.sr-messages {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  user-select: text;
+}
+
+/* ── The connection form's Connect list ───────────────────────────────
+   A repeated group of fields is grouped the way everything else is:
+   whitespace plus a top hairline. No card. */
+.connect-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.connect-cluster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+/* ── Forced colors — the Phase 3a additions ───────────────────────────
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning. Mark is severity everywhere else in this sheet, so it is
+   severity here too. */
+
+@media (forced-colors: active) {
+  /* The deny wash collapses to Canvas, so the word carries it — and it
+     carries it in the same colour as the prod wire and every other
+     danger in the app. */
+  .acl-perm-deny,
+  .task-failed,
+  .validate-msg { color: Mark; }
+
+  /* A diff line's wash goes too; the +/− in the gutter is the channel
+     that survives, and it must not read as ordinary text. */
+  .diff-add .code-gutter,
+  .diff-del .code-gutter { color: Mark; }
+}

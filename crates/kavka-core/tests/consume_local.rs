@@ -38,6 +38,7 @@ fn local_connection() -> ClusterConnection {
         // Reading must not need a writable connection.
         read_only: true,
         schema_registry: None,
+        connect_clusters: Vec::new(),
     })
     .expect("connect")
 }

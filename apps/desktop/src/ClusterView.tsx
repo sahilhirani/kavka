@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import AclsTab from "./AclsTab";
 import type { ClusterOverview, ConnectionProfile } from "./api";
+import BrokersTab from "./BrokersTab";
+import ConnectTab from "./ConnectTab";
 import type { DangerReport } from "./danger";
 import GroupsTab from "./GroupsTab";
 import { Term } from "./Glossary";
@@ -10,11 +13,11 @@ import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
 /**
  * THE CLUSTER WORKSPACE.
  *
- * One connected cluster, three views behind DESIGN's 30px tab strip (§5.1):
- * Overview · Topics · Groups. The strip sits under the cluster's identity
- * rather than above it, because the identity — name, environment chip and
- * bootstrap address — is prod guardrail layer 3 and must not scroll or switch
- * away with the content.
+ * One connected cluster, six views behind DESIGN's 30px tab strip (§5.1):
+ * Overview · Topics · Groups · ACLs · Brokers · Connect. The strip sits under
+ * the cluster's identity rather than above it, because the identity — name,
+ * environment chip and bootstrap address — is prod guardrail layer 3 and must
+ * not scroll or switch away with the content.
  *
  * Where the user was is remembered PER CLUSTER, not globally: switching to a
  * prod cluster must never drop you into the view you had open on dev. The
@@ -22,12 +25,21 @@ import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
  * is why it lives in localStorage rather than only in state.
  */
 
-type TabKey = "overview" | "topics" | "groups";
+type TabKey =
+  | "overview"
+  | "topics"
+  | "groups"
+  | "acls"
+  | "brokers"
+  | "connect";
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "overview", label: "Overview" },
   { key: "topics", label: "Topics" },
   { key: "groups", label: "Groups" },
+  { key: "acls", label: "ACLs" },
+  { key: "brokers", label: "Brokers" },
+  { key: "connect", label: "Connect" },
 ];
 
 interface Placement {
@@ -35,6 +47,11 @@ interface Placement {
   topic: string | null;
   pane: TopicPane;
   group: string | null;
+  /** Which broker's settings are open, if any. */
+  broker: number | null;
+  /** Which Connect cluster is selected, and which connector inside it. */
+  connect: string | null;
+  connector: string | null;
 }
 
 const EMPTY_PLACEMENT: Placement = {
@@ -42,9 +59,12 @@ const EMPTY_PLACEMENT: Placement = {
   topic: null,
   pane: "detail",
   group: null,
+  broker: null,
+  connect: null,
+  connector: null,
 };
 
-const PANES: readonly TopicPane[] = ["detail", "messages", "search"];
+const PANES: readonly TopicPane[] = ["detail", "messages", "search", "schemas"];
 
 function placementKey(profileId: string): string {
   return `kavka.cluster.${profileId}.view`;
@@ -76,6 +96,13 @@ function readPlacement(profileId: string): Placement {
       topic: typeof value.topic === "string" ? value.topic : null,
       pane,
       group: typeof value.group === "string" ? value.group : null,
+      // Phase 3a fields. A placement written by an older build simply has
+      // none of them, which is the same as "nothing selected" — the whole
+      // point of persisting where you were is that an upgrade does not move
+      // you, and a missing key must never cost you the tab you were on.
+      broker: typeof value.broker === "number" ? value.broker : null,
+      connect: typeof value.connect === "string" ? value.connect : null,
+      connector: typeof value.connector === "string" ? value.connector : null,
     };
   } catch {
     return EMPTY_PLACEMENT;
@@ -159,6 +186,30 @@ export default function ClusterView({
     setPlace((prev) => ({ ...prev, group }));
   }, []);
 
+  const selectBroker = useCallback((broker: number | null) => {
+    setPlace((prev) => ({ ...prev, broker }));
+  }, []);
+
+  const selectConnectCluster = useCallback((connect: string) => {
+    // Leaving a Connect cluster always leaves the connector inside it: a
+    // connector name means nothing on a different set of workers.
+    setPlace((prev) => ({ ...prev, connect, connector: null }));
+  }, []);
+
+  const selectConnector = useCallback((connector: string | null) => {
+    setPlace((prev) => ({ ...prev, connector }));
+  }, []);
+
+  /**
+   * "Open connection settings" from a view that needs a field the profile
+   * doesn't have yet (a Connect cluster, a registry address). The editor only
+   * exists for a DISCONNECTED profile, so this is a disconnect — said out loud
+   * at both call sites rather than performed as a surprise.
+   */
+  const editConnection = useCallback(() => {
+    onDisconnect(profile.id);
+  }, [onDisconnect, profile.id]);
+
   /** Arrow keys walk the strip — a tablist that only responds to clicks is a
       row of buttons wearing a costume. */
   const onTabKeyDown = useCallback(
@@ -180,9 +231,12 @@ export default function ClusterView({
   // The message browser and search are the two views that own the full height
   // of the workspace: each has its own scrollport, its own status line and a
   // docked inspector, none of which can live inside a page that scrolls as a
-  // whole.
+  // whole. The schemas pane is a normal page of panels, so it is NOT in this
+  // list — a diff that has to fit the viewport is a diff nobody can read.
   const full =
-    place.tab === "topics" && place.topic !== null && place.pane !== "detail";
+    place.tab === "topics" &&
+    place.topic !== null &&
+    (place.pane === "messages" || place.pane === "search");
 
   return (
     <div className={`cluster-view${full ? " cluster-view-full" : ""}`}>
@@ -257,6 +311,7 @@ export default function ClusterView({
             onPane={setPane}
             onDanger={reportDanger}
             onActions={onTopicActions}
+            onEditConnection={editConnection}
           />
         )}
 
@@ -266,6 +321,32 @@ export default function ClusterView({
             group={place.group}
             onSelectGroup={selectGroup}
             onDanger={reportDanger}
+          />
+        )}
+
+        {place.tab === "acls" && (
+          <AclsTab profile={profile} onDanger={reportDanger} />
+        )}
+
+        {place.tab === "brokers" && (
+          <BrokersTab
+            profile={profile}
+            brokers={overview.brokers}
+            brokerId={place.broker}
+            onSelectBroker={selectBroker}
+            onDanger={reportDanger}
+          />
+        )}
+
+        {place.tab === "connect" && (
+          <ConnectTab
+            profile={profile}
+            cluster={place.connect}
+            connector={place.connector}
+            onSelectCluster={selectConnectCluster}
+            onSelectConnector={selectConnector}
+            onDanger={reportDanger}
+            onEditConnection={editConnection}
           />
         )}
       </div>

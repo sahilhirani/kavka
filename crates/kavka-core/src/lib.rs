@@ -4,7 +4,9 @@
 //! Layout mirrors docs/ARCHITECTURE.md:
 //! - [`profiles`]: connection profiles; secrets live in the OS keychain only.
 //! - [`connection`]: authenticated cluster connections, read-only enforcement.
-//! - [`admin`]: topics, configs, ACLs, quotas, groups, reassignment.
+//! - [`admin`]: topics, configs, quotas, groups, reassignment.
+//! - [`acl`]: access-control bindings — list, create, delete.
+//! - [`connect`]: Kafka Connect REST clients (multi-cluster, per profile).
 //! - [`consume`]: bounded fetch and live tail.
 //! - [`produce`]: single records and bulk generation; every path is
 //!   read-only-checked before it touches the network.
@@ -13,8 +15,10 @@
 //! - [`sr`]: Schema Registry clients.
 //! - [`search`]: the streaming unbounded search engine.
 
+pub mod acl;
 pub mod admin;
 pub mod cancel;
+pub mod connect;
 pub mod connection;
 pub mod consume;
 pub mod produce;
@@ -43,6 +47,15 @@ pub mod secrets {
     /// delete — a Schema Registry password outliving the connection it
     /// belonged to. Anything that enumerates secrets iterates this constant
     /// rather than repeating the strings.
+    ///
+    /// **This list is not the whole story, and cannot be.** A Connect cluster's
+    /// password is named after the *cluster*
+    /// (`{profile_id}/connect_password/{cluster}`, see
+    /// [`crate::profiles::connect_password_suffix`]), so its suffix is per
+    /// profile rather than a fixed word and no constant can enumerate it. A
+    /// full purge is therefore this constant **plus**
+    /// [`crate::profiles::ConnectionProfile::connect_secret_entries`], which
+    /// means reading the profile *before* deleting it from the store.
     pub const SECRET_SUFFIXES: &[&str] =
         &["password", "client_key", "client_secret", "sr_password"];
 
