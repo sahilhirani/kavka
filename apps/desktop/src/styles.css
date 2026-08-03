@@ -3725,3 +3725,323 @@ select.input-invalid { border-color: var(--danger); }
   .diff-add .code-gutter,
   .diff-del .code-gutter { color: Mark; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 3b — THE QUORUM · LEADER ELECTION · REPLICA MOVES · QUOTAS
+   Additions only. Everything here composes primitives that already exist:
+   the table, the lag meter, the health chip, the banner, the modal, the
+   button and the field. Nothing gains a card, a radius or a shadow that
+   did not already have one, and nothing inside a scrollport is touched
+   (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The quorum ───────────────────────────────────────────────────────
+   The leader badge is NEUTRAL, not accent. §2's status-adjacency law
+   forbids --accent in a column beside a health or lag column, and this
+   row has both — so the badge borrows .readonly-chip's shape, which is
+   the app's existing "a fact about this row, not a status" treatment. */
+.role-word {
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+}
+
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: var(--s-3);
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-medium);
+}
+
+/* ── What a batch of per-partition results did ────────────────────────
+   Grouping is whitespace plus a top hairline. It is NOT a banner: a
+   banner is a condition the SYSTEM is in, and this is the answer to the
+   button that was just pressed — but it is not a toast either, because a
+   batch with one refusal in it is something the user still has to act on
+   (§5.8's three-surface rule, read carefully). */
+.ops-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.ops-result-line {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.ops-failures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ops-failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Three layers, as everywhere else: plain title, the next click, then the
+   broker's own words behind Show details. */
+.ops-failure-title {
+  margin: 0;
+  max-width: var(--measure);
+  font-weight: var(--w-medium);
+  color: var(--danger);
+  line-height: var(--lh-prose);
+}
+
+.ops-failure-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* Two controls in a 30px row. .btn-row is already the 24px SC 2.5.8 floor;
+   this only stops them stacking. Same shape as .config-actions. */
+.partition-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+/* ── The replica editor ───────────────────────────────────────────────
+   One block per partition, grouped by whitespace and a hairline. The
+   picker is a row of latched toggles: a replica list is an ordered set of
+   broker ids, and a latched toggle is the app's existing "this is ON"
+   (§5.5) — it reads as a switch across the room, which a checkbox in a
+   list of twelve brokers does not. */
+.reassign-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  /* The modal already scrolls (.modal-wide), so this does not: two nested
+     scrollports in one dialog is a wheel event nobody can predict. */
+}
+
+.reassign-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.reassign-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.reassign-part-id {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  font-size: var(--t-base);
+}
+
+/* The Reset button is pushed to the far edge so the two identifying
+   phrases stay together on the left. */
+.reassign-head .btn-row:last-child { margin-left: auto; }
+
+.reassign-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A broker id is a literal out of Kafka, so the toggle's label is mono —
+   and every toggle is the same width, so twelve of them read as a keypad
+   rather than as a ransom note. */
+.reassign-picker .btn-row {
+  min-width: 40px;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.reassign-target {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.reassign-target-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ── The move monitor ─────────────────────────────────────────────────
+   The one prose cell in a data table. It wraps, and it is allowed to:
+   this table lists partitions mid-move — a few dozen at the very most —
+   so it is not a scrollport and law 3's fixed --row-h contract does not
+   bind it. The cap keeps the sentence readable rather than letting it run
+   the width of the workspace. */
+.move-phrase {
+  max-width: 46ch;
+  white-space: normal;
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  padding-block: var(--s-3);
+}
+
+/* ── Quotas ───────────────────────────────────────────────────────────
+   A list, not a table: one entity carries between one and four values,
+   and a table of them is either four mostly-empty columns or a cell that
+   wraps and breaks --row-h. Grouping is whitespace plus a top hairline,
+   which is what this app does instead of cards. */
+.quota-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-6);
+}
+
+.quota-group-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.quota-entity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--hairline);
+}
+
+.quota-entity-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.quota-entity-name {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.quota-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.quota-entity-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+}
+
+.quota-default-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.quota-values {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* key · exact number · what it means. Three columns on a wide panel, one
+   stacked block when the workspace is narrow — the meaning is the point,
+   so it is the part that keeps the room. */
+.quota-value {
+  display: grid;
+  grid-template-columns: minmax(0, 22ch) minmax(0, 12ch) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+@media (max-width: 900px) {
+  .quota-value { grid-template-columns: minmax(0, 1fr); }
+}
+
+.quota-key {
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The number is grouped for reading (4 218 907), which makes it Kavka's
+   rendering rather than a literal — so it is sans with tabular figures,
+   per §4. The KEY beside it is the literal, and that is the <code>. */
+.quota-number {
+  font-variant-numeric: var(--nums-tabular);
+  text-align: right;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+}
+
+.quota-means {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Forced colors — the Phase 3b additions ───────────────────────────
+   Same doctrine again: restate indicators POSITIVELY, one system colour
+   per meaning, and never a blanket border rule. */
+
+@media (forced-colors: active) {
+  /* A refused partition's wash and colour both collapse, so the word
+     carries it — in Mark, which is severity everywhere else here. */
+  .ops-failure-title { color: Mark; }
+
+  /* A latched broker toggle is a switch: it has to read as ON when every
+     fill goes to Canvas. Same treatment .btn-latched already gets. */
+  .reassign-picker .btn-latched {
+    outline: 2px solid Highlight;
+    outline-offset: -3px;
+  }
+
+  /* The leader badge is a fact about the row, and its only channel in
+     high contrast is its border. */
+  .role-chip { border-color: CanvasText; }
+}

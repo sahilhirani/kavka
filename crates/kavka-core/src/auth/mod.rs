@@ -56,7 +56,11 @@ pub enum TokenSource {
 }
 
 impl TokenSource {
-    fn generate(&self) -> Result<OAuthToken> {
+    /// `pub(crate)` for [`crate::protocol`], which presents the same token on
+    /// its own SASL/OAUTHBEARER exchange (KIP-255) instead of through
+    /// librdkafka's refresh callback. One token source, two consumers — the
+    /// alternative was a second OIDC and MSK IAM implementation.
+    pub(crate) fn generate(&self) -> Result<OAuthToken> {
         match self {
             TokenSource::Oidc {
                 token_endpoint,

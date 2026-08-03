@@ -16,6 +16,13 @@ use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSp
 use kavka_core::profiles::{
     export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
 };
+// `TopicPartition` here is the protocol module's — `admin` has an
+// identically-shaped one for group assignments, which is why it is reached
+// through `admin::` everywhere rather than imported alongside this.
+use kavka_core::protocol::{
+    PartitionResult, ProtocolClient, QuorumInfo, QuotaEntity, QuotaEntityPart, QuotaOp,
+    ReassignmentSpec, ReassignmentState, TopicPartition,
+};
 use kavka_core::search::{SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
 use kavka_core::sr::{CompatibilityCheck, CompatibilityInForce, RegisteredId, SubjectVersion};
@@ -91,7 +98,29 @@ struct AppState {
     /// user changes the range, that slot is being spent on an answer the UI
     /// has already decided to throw away (`fetchSeq` in MessagesView).
     fetches: Mutex<HashMap<String, CancelToken>>,
+    /// One kept-alive wire-protocol connection per profile — see
+    /// [`ProtocolSlot`] and [`AppState::protocol_slot`].
+    protocol: Mutex<HashMap<String, ProtocolSlot>>,
 }
+
+/// One profile's cached [`ProtocolClient`], or `None` when there isn't a live
+/// one yet.
+///
+/// **Why a `Mutex` per slot rather than one over the map.** A `ProtocolClient`
+/// owns a single socket with a single correlation-id sequence and a single read
+/// cursor; it is explicitly NOT concurrency-safe (see the core module's docs),
+/// so two commands must never be inside one at the same time. Serializing them
+/// is therefore mandatory — but serializing them *per profile* is enough, and a
+/// lock over the whole map would instead make a two-second reassignment poll on
+/// one cluster block a quota read on another.
+///
+/// **Why an `Arc`.** The guard is taken on the blocking pool, never on the
+/// event loop (a `MutexGuard` is not `Send`, and a Kafka round trip is not
+/// something to hold the event loop for), so the slot has to outlive the map
+/// lookup that found it. The `Arc` is cloned out under the map's lock and the
+/// socket lock is taken afterwards, which is also what keeps the two locks from
+/// ever being held at once.
+type ProtocolSlot = Arc<Mutex<Option<ProtocolClient>>>;
 
 /// What the shell needs from a core session: ask it to finish, idempotently,
 /// from a thread that is not the one draining it.
@@ -345,6 +374,29 @@ impl AppState {
         }
     }
 
+    /// This profile's protocol slot, created empty on first use. The socket
+    /// itself is opened later, inside the slot's own lock and on the blocking
+    /// pool — see [`protocol_call`].
+    fn protocol_slot(&self, profile_id: &str) -> ProtocolSlot {
+        Arc::clone(
+            self.protocol
+                .lock()
+                .unwrap()
+                .entry(profile_id.to_string())
+                .or_default(),
+        )
+    }
+
+    /// Takes one profile's protocol slot off the books.
+    ///
+    /// Called on disconnect, on delete, and on RECONNECT: the cached socket is
+    /// authenticated with the credentials the profile had when it was opened,
+    /// so a profile that has just been edited and reconnected must not keep
+    /// answering over the old one.
+    fn take_protocol(&self, profile_id: &str) -> Option<ProtocolSlot> {
+        self.protocol.lock().unwrap().remove(profile_id)
+    }
+
     /// Asks every live session of every kind to finish, on the way out.
     fn stop_all_sessions(&self) {
         self.tails.stop_all();
@@ -364,6 +416,85 @@ where
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+/// Runs one wire-protocol call on this profile's kept-alive connection,
+/// opening it if there isn't one and dropping it if the transport breaks.
+///
+/// **What it saves.** Every protocol call used to be a TCP connect, a TLS
+/// handshake, an ApiVersions exchange and a full SASL handshake — for SCRAM,
+/// four round trips plus a PBKDF2 derivation on the calling thread. The
+/// reassignment monitor polls `reassign_list` every two seconds, so that was a
+/// login every two seconds for as long as a move was on screen.
+///
+/// **Lifetimes.** Everything the closure touches is owned by the blocking task:
+/// the `Arc` slot is cloned out of the map before this returns to the caller,
+/// the `MutexGuard` is taken and released entirely inside `spawn_blocking` (it
+/// is not `Send`, and holding a Kafka round trip on the event loop would be
+/// worse than if it were), and the `&mut ProtocolClient` handed to `f` borrows
+/// from that guard. Nothing borrowed escapes, which is why `f` must return an
+/// OWNED `T` — the value crosses back to the async side after the guard is
+/// gone.
+///
+/// **Invalidation.** A failure that leaves the socket's framing untrustworthy
+/// (a write that didn't go out, a reply that didn't come back, a correlation id
+/// that didn't match) clears [`ProtocolClient::is_healthy`], and this drops the
+/// client so the next call dials again. That is also the path a broker-closed
+/// connection takes — an idle timeout, or `connections.max.reauth.ms` expiring
+/// an OAUTHBEARER token — so the cache heals itself rather than needing the
+/// user to reconnect. A Kafka-level refusal (read-only, an invalid replica set)
+/// leaves a perfectly good connection in place.
+async fn protocol_call<T, F>(state: &AppState, profile_id: &str, f: F) -> CmdResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut ProtocolClient) -> kavka_core::Result<T> + Send + 'static,
+{
+    // The same gate as every other command: an unconnected profile is refused
+    // before anything is opened, and the `ClusterConnection` is what carries
+    // the profile, its credentials and its read-only flag into the core.
+    let conn = state.connection(profile_id)?;
+    let slot = state.protocol_slot(profile_id);
+    blocking(move || {
+        // Poison-tolerant: what this guards is a socket, which a panic on
+        // another command cannot corrupt — and a poisoned lock would turn one
+        // failed call into a permanently dead connection.
+        let mut client = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if client.is_none() {
+            *client = Some(ProtocolClient::for_connection(&conn)?);
+        }
+        let live = client.as_mut().expect("just opened");
+        let outcome = f(live);
+        if !live.is_healthy() {
+            *client = None;
+        }
+        outcome
+    })
+    .await
+}
+
+/// [`protocol_call`] for a MUTATION, with the read-only check in front of it.
+///
+/// The check is the core's own (`ClusterConnection::ensure_writable`) and it
+/// runs before the slot is even looked at, which keeps docs/ARCHITECTURE.md
+/// D5's stronger promise intact now that connections are cached: a read-only
+/// connection must not so much as authenticate on behalf of a write. The core
+/// makes the same judgement again inside `ProtocolClient`, so holding a client
+/// cannot route around it either.
+async fn protocol_write<T, F>(
+    state: &AppState,
+    profile_id: &str,
+    op: &'static str,
+    f: F,
+) -> CmdResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut ProtocolClient) -> kavka_core::Result<T> + Send + 'static,
+{
+    state
+        .connection(profile_id)?
+        .ensure_writable(op)
+        .map_err(|e| e.to_string())?;
+    protocol_call(state, profile_id, f).await
 }
 
 /// Destroys a stopped session off the event loop. Dropping the last reference
@@ -482,10 +613,12 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
     // cluster the user just deleted, feeding a view that can never be reopened.
     let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
+    let protocol = state.take_protocol(&profile_id);
     let store = state.store.clone();
     blocking(move || {
         drop(sessions); // joins each worker thread, off the event loop
         drop(conn); // librdkafka client destroy, off the event loop
+        drop(protocol); // and the kept-alive wire-protocol socket
 
         // Read the profile BEFORE it is deleted, for the secrets no constant
         // can name. A Connect cluster's password entry is
@@ -580,10 +713,17 @@ async fn cluster_connect(
     })
     .await?;
 
+    // The cached protocol socket belongs to the connection being replaced: it
+    // was authenticated with the profile as it was when it opened, so a
+    // reconnect after an edit must not keep answering over it.
+    let stale_protocol = state.take_protocol(&profile_id);
     let replaced = state.connections.lock().unwrap().insert(profile_id, conn);
-    if let Some(old) = replaced {
-        // Reconnect over an existing session: destroy the old client off-loop.
-        tauri::async_runtime::spawn_blocking(move || drop(old));
+    if replaced.is_some() || stale_protocol.is_some() {
+        // Reconnect over an existing session: destroy the old clients off-loop.
+        tauri::async_runtime::spawn_blocking(move || {
+            drop(replaced);
+            drop(stale_protocol);
+        });
     }
     Ok(overview)
 }
@@ -596,10 +736,14 @@ async fn cluster_disconnect(state: State<'_, AppState>, profile_id: String) -> C
     // fetch that is still polling.
     let sessions = state.take_sessions_of(&profile_id);
     let conn = state.connections.lock().unwrap().remove(&profile_id);
-    if !sessions.is_empty() || conn.is_some() {
+    // The kept-alive protocol socket goes with them, for the same reason: it is
+    // authenticated to a cluster the user has just walked away from.
+    let protocol = state.take_protocol(&profile_id);
+    if !sessions.is_empty() || conn.is_some() || protocol.is_some() {
         tauri::async_runtime::spawn_blocking(move || {
             drop(sessions);
             drop(conn);
+            drop(protocol);
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1116,6 +1260,149 @@ async fn broker_config_set(
     blocking(move || admin::broker_config_set(&conn, broker_id, &name, value.as_deref())).await
 }
 
+// ── Quorum, leader election, replica moves, quotas ─────────────────────────
+//
+// These seven answer over the core's hand-rolled Kafka wire client
+// (`kavka_core::protocol`, docs/ARCHITECTURE.md D2) instead of librdkafka,
+// which wraps none of ApiKeys 43, 45, 46, 48/49 and 55. That is invisible from
+// here and meant to stay so: the same `blocking()`, the same `CmdResult`, and
+// broker errors arrive already mapped into the classified vocabulary the rest
+// of the UI reads — no command in this file knows which transport answered it.
+//
+// **One kept-alive protocol connection per profile**, held in `AppState` and
+// reached through `protocol_call` / `protocol_write` — which is where the
+// caching, the per-profile serialization and the invalidation rules are all
+// documented. The short version: these calls are not all one-offs. The
+// reassignment monitor polls `reassign_list` every two seconds, and paying a
+// TCP connect, a TLS handshake, ApiVersions and a full SASL exchange per poll
+// (four round trips and a PBKDF2 derivation, for SCRAM) is a login every two
+// seconds for a call that reads one small list.
+//
+// An unconnected cluster is still refused by `state.connection` before anything
+// is opened, exactly as everywhere else, and the four mutating ones still check
+// `ensure_writable` in the core BEFORE a socket exists (D5): a read-only
+// connection must not so much as authenticate on behalf of a write.
+
+/// The KRaft metadata quorum as its leader sees it — voters, observers, and how
+/// far behind each one is.
+///
+/// DescribeQuorum is controller-bound; the core does the routing, so nothing
+/// here has to know which broker ends up answering. A cluster with no quorum to
+/// describe (ZooKeeper) is refused with a sentence saying so, not a protocol
+/// error.
+#[tauri::command]
+async fn quorum_describe(state: State<'_, AppState>, profile_id: String) -> CmdResult<QuorumInfo> {
+    protocol_call(&state, &profile_id, ProtocolClient::quorum_describe).await
+}
+
+/// Mutating: guarded in core (see `topic_create`). `topic: None` covers every
+/// eligible partition in the cluster; a topic with `partitions: None` covers
+/// all of that topic's.
+///
+/// Resolves with a row per partition rather than failing the call: Kafka can
+/// elect some and refuse others, and one rejected promise would lose exactly
+/// the half the user needs to see. A partition that already had its preferred
+/// leader is a success (`error: null`) — the core folds Kafka's
+/// ELECTION_NOT_NEEDED into the benign set, because on a healthy cluster it is
+/// the answer for nearly every partition.
+#[tauri::command]
+async fn elect_leaders(
+    state: State<'_, AppState>,
+    profile_id: String,
+    topic: Option<String>,
+    partitions: Option<Vec<i32>>,
+) -> CmdResult<Vec<PartitionResult>> {
+    protocol_write(&state, &profile_id, "elect_leaders", move |client| {
+        client.elect_leaders(topic.as_deref(), partitions.as_deref())
+    })
+    .await
+}
+
+/// Mutating: guarded in core (see `topic_create`). Resolves when the cluster
+/// has ACCEPTED the plan, not when the data has moved — the copying runs in the
+/// background and is watched with `reassign_list`.
+///
+/// Per-partition outcomes, for the same reason as `elect_leaders`: a plan can
+/// be half accepted, and that is a real state the cluster ends up in.
+#[tauri::command]
+async fn reassign_alter(
+    state: State<'_, AppState>,
+    profile_id: String,
+    specs: Vec<ReassignmentSpec>,
+) -> CmdResult<Vec<PartitionResult>> {
+    protocol_write(&state, &profile_id, "reassign_alter", move |client| {
+        client.reassign_alter(&specs)
+    })
+    .await
+}
+
+/// Mutating: guarded in core (see `topic_create`). Reverts each partition to
+/// the replicas it had before the move, discarding whatever the joining brokers
+/// had already copied.
+///
+/// A partition that was not moving is a success (`error: null`): Kafka's
+/// NO_REASSIGNMENT_IN_PROGRESS is in the core's benign set, because "the
+/// requested end state already holds" is not a failure.
+#[tauri::command]
+async fn reassign_cancel(
+    state: State<'_, AppState>,
+    profile_id: String,
+    parts: Vec<TopicPartition>,
+) -> CmdResult<Vec<PartitionResult>> {
+    protocol_write(&state, &profile_id, "reassign_cancel", move |client| {
+        client.reassign_cancel(&parts)
+    })
+    .await
+}
+
+/// The moves still in flight; `topic: None` asks about the whole cluster. An
+/// empty answer means the cluster is settled — a finished partition stops
+/// appearing rather than reporting completion.
+///
+/// A NAMED topic is resolved to its partition indexes first (Kafka's request
+/// has no "all partitions of this topic" shorthand — see the core), so a topic
+/// that does not exist is an error naming it rather than a cheerful empty list.
+#[tauri::command]
+async fn reassign_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+    topic: Option<String>,
+) -> CmdResult<Vec<ReassignmentState>> {
+    protocol_call(&state, &profile_id, move |client| {
+        client.reassign_list(topic.as_deref())
+    })
+    .await
+}
+
+/// Every client quota the cluster holds, `<default>` entities included.
+#[tauri::command]
+async fn quotas_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> CmdResult<Vec<QuotaEntity>> {
+    protocol_call(&state, &profile_id, ProtocolClient::quotas_list).await
+}
+
+/// Mutating: guarded in core (see `topic_create`), and *incremental* — keys not
+/// named in `ops` are left alone. An op with `value: None` REMOVES that quota;
+/// it is never "set to zero", which would be a throttle to a standstill.
+///
+/// Note for callers: the controller commits this, but a subsequent
+/// `quotas_list` reads the broker's metadata image, so a set is visible
+/// eventually rather than immediately.
+#[tauri::command]
+async fn quotas_alter(
+    state: State<'_, AppState>,
+    profile_id: String,
+    entity: Vec<QuotaEntityPart>,
+    ops: Vec<QuotaOp>,
+) -> CmdResult<()> {
+    protocol_write(&state, &profile_id, "quotas_alter", move |client| {
+        client.quotas_alter(&entity, &ops)
+    })
+    .await
+}
+
 // ── Kafka Connect ──────────────────────────────────────────────────────────
 //
 // Every call names the Connect cluster it goes to: a profile can hold several
@@ -1470,6 +1757,7 @@ pub fn run() {
                 bulks: SessionMap::new(),
                 ready: Mutex::new(HashMap::new()),
                 fetches: Mutex::new(HashMap::new()),
+                protocol: Mutex::new(HashMap::new()),
                 id_seq: AtomicU64::new(0),
                 id_epoch: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1510,6 +1798,13 @@ pub fn run() {
             acls_delete,
             broker_configs,
             broker_config_set,
+            quorum_describe,
+            elect_leaders,
+            reassign_alter,
+            reassign_cancel,
+            reassign_list,
+            quotas_list,
+            quotas_alter,
             connect_list,
             connect_config,
             connect_validate,

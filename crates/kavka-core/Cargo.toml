@@ -13,7 +13,15 @@ default = []
 # requires CMake + MSVC Build Tools, and nothing more. Deliberately free of the
 # AWS SDK: `aws-config` drags in `aws-lc-sys`, whose build needs NASM, and this
 # tier is the one tooling and CI use on a bare toolchain.
-kafka = ["dep:rdkafka"]
+#
+# `src/protocol` (the hand-rolled wire client) rides along here rather than
+# behind a feature of its own: its OAUTHBEARER path reuses
+# `connection::auth::TokenSource`, which is gated on `kafka` because it returns
+# an rdkafka type, and a build without `kafka` cannot open a cluster connection
+# at all — so there would be nothing for those RPCs to talk to. It adds NO
+# build-tool requirement: rustls and ring are already in this crate's graph via
+# ureq, so the tier's promise (CMake + MSVC, nothing more) is unchanged.
+kafka = ["dep:rdkafka", "dep:rustls", "dep:rustls-platform-verifier", "dep:ring"]
 # AWS MSK IAM tokens (SigV4-presigned `kafka-cluster:Connect` URLs). Split out
 # of `kafka` because of the NASM/`aws-lc-sys` build requirement above. Without
 # it, `AuthConfig::AwsMskIam` refuses to connect instead of failing to build.
@@ -104,6 +112,39 @@ ciborium = "0.2"
 # (feature-free) tier that tooling and clippy use. Pure Rust — antlr4rust, nom,
 # regex — so it adds no build-tool requirement.
 cel = { version = "0.14", default-features = false, features = ["regex"] }
+
+# --- Wire protocol client (src/protocol, docs/ARCHITECTURE.md D2) -----------
+# The six admin APIs Phase 3b needs (ElectLeaders, Alter/ListPartitionReassignments,
+# Describe/AlterClientQuotas, DescribeQuorum) are wrapped by neither rdkafka
+# 0.37 nor librdkafka's C admin API, so the frames are encoded here by hand.
+#
+# NOT the `kafka-protocol` crate, deliberately. It generates codecs for the
+# whole Kafka schema — ~200 message types plus indexmap/uuid/crc32c/bytes/string
+# and a record-batch layer with four optional compression crates — and this
+# module needs eleven message types and no record batches. Its one genuinely
+# attractive feature, flexible-version (KIP-482) support, turns out to be a
+# varint length and a tag buffer: ~60 lines in src/protocol/wire.rs, pinned by
+# hand-verified golden bytes. Set against a binary whose selling point is its
+# size (D1) and a dependency list where every entry is justified in prose, a
+# generated codec for 190 messages nothing calls is the wrong trade.
+#
+# rustls: this module opens its own sockets, so it needs its own TLS. Already
+# in the graph via ureq above, and pinned to the SAME provider ureq selects
+# (`ring`) so only one crypto implementation is linked. `default-features =
+# false` is load-bearing: rustls defaults to `aws-lc-rs`, whose build needs
+# NASM — exactly the requirement the `kafka` tier promises not to have. There is
+# no `rustls-pki-types` entry because rustls re-exports it (and has parsed PEM
+# itself since pki-types 1.11, so no `rustls-pemfile` either).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+# The OS trust store, for a TLS cluster with no CA file configured — same reason
+# ureq enables it (enterprise clusters behind an internal CA). Its own defaults
+# pull no crypto provider, so it inherits `ring` from the line above.
+rustls-platform-verifier = { version = "0.6", optional = true }
+# SCRAM (RFC 5802) needs HMAC-SHA-256/512, SHA-256/512 and PBKDF2 — all four of
+# which are already linked, because ring is the provider rustls is compiled
+# with. Depending on it directly costs nothing and keeps a SCRAM crate's second
+# copy of those primitives out of the binary; see src/protocol/scram.rs.
+ring = { version = "0.17", optional = true }
 
 # `msk-iam` only. MSK IAM is hand-signed rather than via
 # `aws-msk-iam-sasl-signer`; see the dependency note at the top of

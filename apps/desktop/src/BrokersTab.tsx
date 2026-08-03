@@ -11,6 +11,7 @@ import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { Term } from "./Glossary";
 import { ErrorBanner } from "./ProfileEditor";
+import QuotasPanel from "./QuotasPanel";
 import { ToastStack, useToasts } from "./Toast";
 
 /**
@@ -253,6 +254,12 @@ export default function BrokersTab({
             </table>
           </div>
         </section>
+
+        {/* Quotas are cluster-wide rather than per-broker, but every broker
+            enforces them and this is the screen someone is on when they go
+            looking for "why is this application slow". One toast stack per
+            screen, so the panel raises into this tab's rather than its own. */}
+        <QuotasPanel profile={profile} onDanger={onDanger} push={push} />
 
         <ToastStack {...toaster} />
       </>

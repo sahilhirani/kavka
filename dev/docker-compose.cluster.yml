@@ -1,0 +1,98 @@
+# Three-broker dev cluster (KRaft, combined broker+controller, PLAINTEXT).
+#
+#   docker compose -f dev/docker-compose.cluster.yml up -d --wait
+#   KAVKA_CLUSTER_IT=1 cargo test -p kavka-core --features kafka-ssl --test protocol_cluster
+#   docker compose -f dev/docker-compose.cluster.yml down -v
+#
+# WHY IT EXISTS. dev/docker-compose.yml is one node, which is enough for most of
+# the suite but structurally cannot exercise the two things partition
+# reassignment and preferred-leader election are FOR: moving a partition from
+# one broker to another, and electing a leader that is not the current one. With
+# one broker every reassignment is a no-op and every election answers
+# ELECTION_NOT_NEEDED. See crates/kavka-core/tests/protocol_cluster.rs.
+#
+# It is a SEPARATE file, on separate ports and separate volumes, so it can run
+# alongside the single-node cluster (or not at all). Nothing in CI's default
+# path needs it: the tests it serves are gated on KAVKA_CLUSTER_IT, exactly as
+# the single-node ones are gated on KAVKA_IT.
+#
+# Brokers on localhost:19092, :19093, :19094.
+#
+# Its own project name, so `down -v` here cannot reach the single-node cluster's
+# containers or volumes — both files otherwise inherit the project name `dev`
+# from the directory, and each would report the other's containers as orphans.
+name: kavka-cluster
+
+x-kafka: &kafka
+  image: apache/kafka:4.1.0
+  restart: unless-stopped
+  environment: &kafka-env
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:29093,2@kafka-2:29093,3@kafka-3:29093
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    KAFKA_LOG_DIRS: /var/lib/kafka/data
+    # Load-bearing for the election test. With the default (true), the
+    # controller re-elects preferred leaders on its own every 300s — which would
+    # make "did OUR ElectLeaders call move the leader?" a race against a
+    # background timer rather than an assertion.
+    KAFKA_AUTO_LEADER_REBALANCE_ENABLE: "false"
+    # Every node must format its log dir with the SAME cluster id, or they form
+    # three one-node clusters that refuse to talk to each other.
+    CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+  healthcheck:
+    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+    interval: 5s
+    timeout: 10s
+    retries: 24
+
+services:
+  kafka-1:
+    <<: *kafka
+    container_name: kavka-cluster-kafka-1
+    ports:
+      - "19092:19092"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:29092,EXTERNAL://localhost:19092
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    <<: *kafka
+    container_name: kavka-cluster-kafka-2
+    ports:
+      - "19093:19093"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:19093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29092,EXTERNAL://localhost:19093
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    <<: *kafka
+    container_name: kavka-cluster-kafka-3
+    ports:
+      - "19094:19094"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:19094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:29092,EXTERNAL://localhost:19094
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+volumes:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:

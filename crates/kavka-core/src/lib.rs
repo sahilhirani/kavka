@@ -14,6 +14,9 @@
 //! - [`serdes`]: bytes -> canonical JSON with schema metadata.
 //! - [`sr`]: Schema Registry clients.
 //! - [`search`]: the streaming unbounded search engine.
+//! - [`protocol`]: hand-rolled Kafka wire frames for the admin RPCs librdkafka
+//!   does not expose — quorum, leader election, reassignment, client quotas
+//!   (docs/ARCHITECTURE.md D2).
 
 pub mod acl;
 pub mod admin;
@@ -26,6 +29,14 @@ pub mod profiles;
 pub mod search;
 pub mod serdes;
 pub mod sr;
+
+/// Behind `kafka` for one reason, spelled out at the top of the module: its
+/// OAUTHBEARER path reuses [`connection::auth::TokenSource`], which is gated on
+/// `kafka` because it returns an `rdkafka` type. A build without the feature
+/// cannot open a cluster connection at all, so it has nothing to route these
+/// RPCs to.
+#[cfg(feature = "kafka")]
+pub mod protocol;
 
 /// OS-keychain access (macOS Keychain / Windows Credential Manager). The only
 /// place secret VALUES ever pass through; everything else holds

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  electLeaders,
   errorMessage,
   topicDelete,
   topicDetail,
   topicsList,
+  type BrokerInfo,
   type ConnectionProfile,
   type PartitionDetail,
   type TopicDetail,
@@ -15,6 +17,13 @@ import { useDangerSignal, type DangerReport } from "./danger";
 import { approxCount, groupDigits } from "./format";
 import { Term } from "./Glossary";
 import MessagesView from "./MessagesView";
+import {
+  PartitionResultsNote,
+  ReassignModal,
+  ReassignMonitor,
+  splitResults,
+  type ResultSplit,
+} from "./PartitionOps";
 import ProducePanel from "./ProducePanel";
 import { ErrorBanner } from "./ProfileEditor";
 import SchemasPanel from "./SchemasPanel";
@@ -43,7 +52,15 @@ export type TopicPane = "detail" | "messages" | "search" | "schemas";
 
 interface TopicsTabProps {
   profile: ConnectionProfile;
-  brokerCount: number;
+  /**
+   * The cluster's brokers, from the overview.
+   *
+   * It was a count until Phase 3b, which is all "create topic" ever needed.
+   * Reassignment needs the ids: a replica list is a list of broker ids, and a
+   * picker built from `1..count` would be wrong on every cluster whose broker
+   * ids aren't contiguous from one — which is most of them after a rebuild.
+   */
+  brokers: BrokerInfo[];
   /** null = the topic list; a name = that topic's detail. */
   topic: string | null;
   pane: TopicPane;
@@ -72,7 +89,7 @@ export interface TopicActions {
 
 export default function TopicsTab({
   profile,
-  brokerCount,
+  brokers,
   topic,
   pane,
   onSelectTopic,
@@ -94,6 +111,24 @@ export default function TopicsTab({
   const [creating, setCreating] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // ── Partition ops (Phase 3b) ─────────────────────────────────────────
+  // `electing.partitions === null` is the whole topic; an array is the one
+  // row that asked. `opResult` is what the last batch did, rendered under the
+  // partition table rather than as a toast: a batch where four partitions
+  // worked and one didn't is a condition you are in, not a thing you finished.
+  const [electing, setElecting] = useState<{ partitions: number[] | null } | null>(
+    null,
+  );
+  const [electBusy, setElectBusy] = useState(false);
+  const [opResult, setOpResult] = useState<{
+    split: ResultSplit;
+    okWord: string;
+    benignWord?: string;
+  } | null>(null);
+  const [reassigning, setReassigning] = useState<PartitionDetail[] | null>(null);
+  /** Bumped when the cluster accepts a plan, so the monitor looks immediately. */
+  const [moveNonce, setMoveNonce] = useState(0);
 
   // Produce and its aftermath. `jump` carries the record a produce just wrote
   // so "View it" on the toast lands the browser on that exact offset.
@@ -162,8 +197,18 @@ export default function TopicsTab({
   useEffect(() => {
     // A produce jump belongs to ONE topic. Deleting this topic, or picking
     // another, must not leave the browser aimed at an offset that means
-    // something else now — or nothing at all.
+    // something else now — or nothing at all. The same is true of the last
+    // batch's results: "partition 3 was refused" says nothing once partition 3
+    // belongs to a different topic.
     setJump(null);
+    setOpResult(null);
+    setElecting(null);
+    setReassigning(null);
+    // The move nonce belongs to a topic too. It means "a plan was accepted for
+    // THIS topic, so poll now and say something if nothing ever shows up" —
+    // carried across a topic change it would have the monitor reporting on a
+    // submission that was never made for the topic on screen.
+    setMoveNonce(0);
     if (topic === null) {
       setDetail(null);
       return;
@@ -193,6 +238,88 @@ export default function TopicsTab({
       setDeleting(false);
     }
   }, [topic, profile.id, onPane, onSelectTopic, fetchTopics]);
+
+  // ── Preferred-leader election ──────────────────────────────────────────
+
+  const runElection = useCallback(
+    async (partitions: number[] | null) => {
+      if (topic === null) return;
+      // THE SNAPSHOT, taken before the call, because the answer cannot carry
+      // this: an election that moved a leader and one that found the leader
+      // already in place both come back as `error: null` (the core folds
+      // ELECTION_NOT_NEEDED into the benign set — see api.ts). Classifying on
+      // the result alone therefore reports every partition of a settled topic
+      // as "moved", which is a lie told confidently. Which partitions were off
+      // their preferred leader a moment ago is knowable here, and only here.
+      const wasUnpreferred = new Set(
+        (detail?.partitions ?? [])
+          .filter((p) => p.replicas.length > 0 && p.replicas[0] !== p.leader)
+          .map((p) => p.partition),
+      );
+      setElectBusy(true);
+      try {
+        const results = await electLeaders(profile.id, topic, partitions);
+        const split = splitResults(
+          results,
+          (r) => !wasUnpreferred.has(r.partition),
+        );
+        setElecting(null);
+        setOpResult({
+          split,
+          okWord: "moved to their preferred leader",
+          benignWord: "were already on it",
+        });
+        if (split.ok.length > 0) {
+          push({
+            kind: "ok",
+            title: `Moved ${split.ok.length} partition${
+              split.ok.length === 1 ? "" : "s"
+            } to the preferred leader`,
+            detail:
+              "Clients following this topic reconnect to the new leader on their own, usually within a second.",
+          });
+        } else if (split.failed.length === 0) {
+          push({
+            kind: "info",
+            title: "Nothing to move",
+            detail:
+              "Every partition asked about was already led by the first broker in its replica list.",
+          });
+        }
+        // Read again so the table shows the leaders as they are NOW — the
+        // summary line above it is about partitions whose rows have just
+        // changed, and the two disagreeing is worse than either alone.
+        await fetchDetail(topic);
+      } catch (err) {
+        setElecting(null);
+        setError(errorMessage(err));
+      } finally {
+        setElectBusy(false);
+      }
+    },
+    [topic, detail, profile.id, push, fetchDetail],
+  );
+
+  /**
+   * Prod asks before every write (§6 layer 4); dev asks only for the
+   * whole-topic election, because that is the one whose blast radius isn't
+   * written on the button. Same shape as ConnectTab's task restart.
+   */
+  const askElection = useCallback(
+    (partitions: number[] | null) => {
+      if (!isProd && partitions !== null) {
+        void runElection(partitions);
+        return;
+      }
+      setElecting({ partitions });
+    },
+    [isProd, runElection],
+  );
+
+  /** The monitor says a move finished; the partition table has to catch up. */
+  const movesSettled = useCallback(() => {
+    if (topic !== null) void fetchDetail(topic);
+  }, [topic, fetchDetail]);
 
   // ── Produce ────────────────────────────────────────────────────────────
 
@@ -381,6 +508,13 @@ export default function TopicsTab({
       const shownConfigs =
         detail === null ? [] : showDefaults ? detail.configs : overrides;
       const hiddenDefaults = (detail?.configs.length ?? 0) - overrides.length;
+      // How many partitions are led by someone other than the first broker in
+      // their replica list. It is the whole case for the election button, so
+      // it is also what the button's count and its disabled reason say.
+      const unpreferred =
+        detail?.partitions.filter(
+          (p) => p.replicas.length > 0 && p.replicas[0] !== p.leader,
+        ).length ?? 0;
 
       return (
         <>
@@ -508,16 +642,73 @@ export default function TopicsTab({
               <div className="panel-head">
                 <h2 className="panel-title">
                   <Term name="partition">Partitions</Term>
-                  <span className="panel-count">{detail.partitions.length}</span>
+                  <span className="panel-count">
+                    {detail.partitions.length}
+                    {unpreferred > 0
+                      ? ` · ${unpreferred} not on the preferred leader`
+                      : ""}
+                  </span>
                 </h2>
+                <div className="panel-tools">
+                  {/* A write action renders danger-outlined on prod even when
+                      it is routine (§6 layer 7). */}
+                  <button
+                    type="button"
+                    className={`btn ${isProd ? "btn-danger" : ""}`}
+                    disabled={readOnly || electBusy || unpreferred === 0}
+                    aria-busy={electBusy || undefined}
+                    title={
+                      readOnly
+                        ? READ_ONLY_WHY
+                        : unpreferred === 0
+                          ? "Every partition is already led by the first broker in its replica list, so there is nothing to move."
+                          : `Hand leadership of ${unpreferred} partition${
+                              unpreferred === 1 ? "" : "s"
+                            } back to the first broker in its replica list`
+                    }
+                    onClick={() => askElection(null)}
+                  >
+                    <span className="btn-busy-slot" aria-hidden="true">
+                      {electBusy ? <span className="spinner" /> : null}
+                    </span>
+                    Elect preferred leaders
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${isProd ? "btn-danger" : ""}`}
+                    disabled={readOnly || brokers.length === 0}
+                    title={
+                      readOnly
+                        ? READ_ONLY_WHY
+                        : brokers.length === 0
+                          ? "Kavka has no broker list for this cluster, so it can't offer anywhere to move replicas to."
+                          : "Choose which brokers hold each partition's copies"
+                    }
+                    onClick={() => setReassigning(detail.partitions)}
+                  >
+                    Move replicas
+                  </button>
+                </div>
               </div>
+
+              <p className="table-note">
+                The <strong>preferred leader</strong> is simply the first broker
+                in a partition's replica list. Kafka spreads leadership evenly
+                by giving every partition a different one, so after a broker
+                restarts, the partitions it used to lead stay where they moved
+                to until someone asks for them back — which is what electing
+                does. It moves leadership only; no data is copied.
+              </p>
 
               {/* The gutter carries the partition index — the row's address in
                   Kafka's own vocabulary. Static table, so no role="grid". */}
               <div className="table-wrap">
+                {loadingDetail && (
+                  <div className="table-loading" role="presentation" />
+                )}
                 <table className="data-table">
                   <caption className="sr-only">
-                    Partitions of {detail.name}
+                    Partitions of {detail.name}, with where each one's leader is
                   </caption>
                   <thead>
                     <tr>
@@ -541,16 +732,50 @@ export default function TopicsTab({
                         Messages
                       </th>
                       <th scope="col">Health</th>
+                      <th scope="col" className="col-affordance">
+                        <span className="sr-only">Partition actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {detail.partitions.map((p) => (
-                      <PartitionRow key={p.partition} partition={p} />
+                      <PartitionRow
+                        key={p.partition}
+                        partition={p}
+                        readOnly={readOnly}
+                        isProd={isProd}
+                        busy={electBusy}
+                        canReassign={brokers.length > 0}
+                        onElect={() => askElection([p.partition])}
+                        onReassign={() => setReassigning([p])}
+                      />
                     ))}
                   </tbody>
                 </table>
               </div>
+
+              {opResult !== null && (
+                <PartitionResultsNote
+                  {...opResult}
+                  onDismiss={() => setOpResult(null)}
+                />
+              )}
             </section>
+          )}
+
+          {/* Mounted whether or not this window started the move: a
+              reassignment kicked off from a terminal shows up here within two
+              seconds, and the panel renders nothing at all while the cluster
+              is idle. */}
+          {detail !== null && (
+            <ReassignMonitor
+              profile={profile}
+              topic={detail.name}
+              nonce={moveNonce}
+              onDanger={onDanger}
+              onSettled={movesSettled}
+              push={push}
+            />
           )}
 
           {detail !== null && (
@@ -657,6 +882,88 @@ export default function TopicsTab({
                 </table>
               </div>
             </section>
+          )}
+
+          {/* Moving leadership is a write, not a delete: the red wire is
+              reserved for prod, where §6 layer 7 says every write reads as
+              one — so this is the plain tone with the prod gate on top. */}
+          {electing !== null && detail !== null && (
+            <ConfirmModal
+              tone="plain"
+              title={
+                electing.partitions === null
+                  ? isProd
+                    ? `Move leadership of ${detail.name} on ${profile.name}?`
+                    : `Move leadership for all ${detail.partitions.length} partitions?`
+                  : `Move leadership of partition ${electing.partitions[0]}?`
+              }
+              body={
+                <>
+                  Kafka hands each partition back to the first broker in its
+                  replica list, as long as that broker is in sync. No data is
+                  copied and nothing is deleted — only which broker answers for
+                  the partition changes.
+                  {electing.partitions === null && (
+                    <>
+                      {" "}
+                      {unpreferred} of {detail.partitions.length} partition
+                      {detail.partitions.length === 1 ? "" : "s"}{" "}
+                      {unpreferred === 1 ? "is" : "are"} somewhere else right
+                      now; the rest are already where they should be and Kafka
+                      will say so rather than move them.
+                    </>
+                  )}{" "}
+                  Producers and consumers reconnect on their own, usually within
+                  a second, and a producer may see a retry or two while that
+                  happens.
+                  {isProd && (
+                    <>
+                      {" "}
+                      {profile.name} is a production cluster, so those retries
+                      are live traffic.
+                    </>
+                  )}
+                </>
+              }
+              confirmLabel="Move leadership"
+              typeToConfirm={isProd ? detail.name : null}
+              busy={electBusy}
+              busyLabel="Kavka is asking the cluster to move leadership"
+              onCancel={() => setElecting(null)}
+              onConfirm={() => void runElection(electing.partitions)}
+            />
+          )}
+
+          {reassigning !== null && detail !== null && (
+            <ReassignModal
+              profile={profile}
+              topic={detail.name}
+              partitions={reassigning}
+              brokers={brokers}
+              onClose={() => setReassigning(null)}
+              onSubmitted={(results, specs) => {
+                const split = splitResults(results);
+                setReassigning(null);
+                setOpResult({ split, okWord: "accepted for moving" });
+                if (split.ok.length > 0) {
+                  // The monitor is the only honest "done" — this call resolves
+                  // when the PLAN is accepted, which is minutes to hours before
+                  // the data has moved. Bumped only when something was actually
+                  // accepted: a batch the cluster refused outright has nothing
+                  // to watch, and a monitor announcing that it finished would
+                  // be reporting a move that never started.
+                  setMoveNonce((n) => n + 1);
+                  push({
+                    kind: "ok",
+                    title: `The cluster accepted ${split.ok.length} of ${specs.length} replica move${
+                      specs.length === 1 ? "" : "s"
+                    }`,
+                    detail:
+                      "Copying starts now and runs in the background. Watch it under Replica moves — nothing has actually moved yet.",
+                  });
+                }
+              }}
+            />
           )}
 
           {confirmingDelete && detail !== null && (
@@ -849,7 +1156,7 @@ export default function TopicsTab({
             profileId={profile.id}
             isProd={isProd}
             clusterName={profile.name}
-            brokerCount={brokerCount}
+            brokerCount={brokers.length}
             existing={topics?.map((t) => t.name) ?? []}
             onCreated={(name) => {
               setCreating(false);
@@ -895,18 +1202,68 @@ export default function TopicsTab({
 /**
  * One partition. Law 2 in its most load-bearing form: under-replication gets a
  * dot AND a word AND the numbers it was derived from, never a colour alone.
+ *
+ * Phase 3b gave it two operations, and one derived fact worth as much as
+ * either of them: whether the partition is led by the FIRST broker in its
+ * replica list. That is what "preferred leader" means, it is computable from
+ * data already on screen, and saying it in the row is what stops the election
+ * button being a mystery.
  */
-function PartitionRow({ partition }: { partition: PartitionDetail }) {
+function PartitionRow({
+  partition,
+  readOnly,
+  isProd,
+  busy,
+  canReassign,
+  onElect,
+  onReassign,
+}: {
+  partition: PartitionDetail;
+  readOnly: boolean;
+  isProd: boolean;
+  busy: boolean;
+  canReassign: boolean;
+  onElect: () => void;
+  onReassign: () => void;
+}) {
   const messages = Math.max(
     0,
     partition.latest_offset - partition.earliest_offset,
   );
   const missing = partition.replicas.length - partition.isr.length;
   const healthy = missing <= 0;
+  const preferred = partition.replicas[0];
+  const onPreferred = preferred === undefined || preferred === partition.leader;
+  // Kafka refuses the election unless the preferred replica is in sync, and
+  // saying so before the click is better than relaying the refusal after it.
+  const preferredInSync =
+    preferred !== undefined && partition.isr.includes(preferred);
+
+  const electWhy = readOnly
+    ? READ_ONLY_WHY
+    : preferred === undefined
+      ? "The cluster reported no replicas for this partition at all, so there is no preferred leader to move it to."
+      : onPreferred
+        ? `Broker ${partition.leader} is already the first broker in this partition's replica list, so there is nothing to move.`
+        : !preferredInSync
+          ? `Broker ${preferred} is the preferred leader but isn't in sync right now, and Kafka won't hand a partition to a replica that is behind. It becomes available once that broker catches up.`
+          : `Hand this partition back to broker ${preferred}`;
+
   return (
     <tr>
       <td className="ledger-gutter">{partition.partition}</td>
-      <td className="col-num cell-num">{partition.leader}</td>
+      <td className="col-num cell-num">
+        {partition.leader}
+        {!onPreferred && (
+          <span
+            className="cell-tag"
+            title={`This partition's replica list starts with broker ${preferred}, so that is where Kafka would rather it was led from. Leadership moved at some point — usually a broker restart — and stays moved until someone elects it back.`}
+          >
+            {" "}
+            prefers {preferred}
+          </span>
+        )}
+      </td>
       <td className="cell-mono">{partition.replicas.join(", ")}</td>
       <td className="cell-mono">{partition.isr.join(", ")}</td>
       {/* An offset is a literal you could paste into a seek command, so it is
@@ -930,6 +1287,32 @@ function PartitionRow({ partition }: { partition: PartitionDetail }) {
             </>
           )}
         </span>
+      </td>
+      <td className="col-affordance partition-actions">
+        <button
+          type="button"
+          className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+          disabled={readOnly || busy || onPreferred || !preferredInSync}
+          title={electWhy}
+          onClick={onElect}
+        >
+          Elect
+        </button>
+        <button
+          type="button"
+          className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+          disabled={readOnly || !canReassign}
+          title={
+            readOnly
+              ? READ_ONLY_WHY
+              : !canReassign
+                ? "Kavka has no broker list for this cluster, so it can't offer anywhere to move this partition to."
+                : "Choose which brokers hold this partition's copies"
+          }
+          onClick={onReassign}
+        >
+          Reassign
+        </button>
       </td>
     </tr>
   );

@@ -506,8 +506,10 @@ fn msk_token_source(_region: &str, _aws_profile: Option<&str>) -> Result<TokenSo
     ))
 }
 
+/// `pub(crate)` for [`crate::protocol`] — see
+/// [`require_aws_msk_endpoints`], which it pairs with.
 #[cfg(feature = "kafka")]
-fn non_aws_msk_endpoints_allowed() -> bool {
+pub(crate) fn non_aws_msk_endpoints_allowed() -> bool {
     matches!(std::env::var(ALLOW_NON_AWS_MSK_ENV).as_deref(), Ok("1"))
 }
 
@@ -520,8 +522,16 @@ fn non_aws_msk_endpoints_allowed() -> bool {
 /// replayable-for-15-minutes credential for the importer's AWS account — no
 /// prompt, no broker of ours involved. The bootstrap host is the only thing
 /// that decides who receives it, so it is checked before the client is built.
+///
+/// `pub(crate)` for [`crate::protocol`], which opens its own sockets from the
+/// same profile and so would hand the same token to the same host. Shared
+/// rather than re-implemented: two copies of a security check is one copy that
+/// will be forgotten when the rule changes.
 #[cfg(feature = "kafka")]
-fn require_aws_msk_endpoints(bootstrap_servers: &[String], allow_non_aws: bool) -> Result<()> {
+pub(crate) fn require_aws_msk_endpoints(
+    bootstrap_servers: &[String],
+    allow_non_aws: bool,
+) -> Result<()> {
     if allow_non_aws {
         return Ok(());
     }

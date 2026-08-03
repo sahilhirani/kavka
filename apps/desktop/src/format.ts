@@ -85,6 +85,30 @@ export function fromDatetimeLocal(value: string): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/**
+ * A duration the BROKER measured, in prose: `3s ago`, `4m ago`, `2h 10m ago`.
+ *
+ * Kafka reports quorum fetch ages as "how long ago", not as a timestamp, so
+ * nothing here touches `Date.now()` — this machine's clock is not involved and
+ * must not be, or a laptop with a skewed clock invents a replica outage.
+ *
+ * Under a second reads "just now" rather than "0s ago": a healthy replica
+ * fetches every few hundred milliseconds, and a column of `0s ago` says
+ * nothing while looking like a measurement.
+ */
+export function formatAge(ms: number): string {
+  if (!Number.isFinite(ms)) return "—";
+  // A negative age is a clock disagreement inside the cluster, not a fact
+  // about the future. Clamp rather than print `-2s ago`.
+  const v = Math.max(0, ms);
+  if (v < 1000) return "just now";
+  if (v < 60_000) return `${Math.round(v / 1000)}s ago`;
+  if (v < 3_600_000) return `${Math.floor(v / 60_000)}m ago`;
+  const hours = Math.floor(v / 3_600_000);
+  const minutes = Math.floor((v % 3_600_000) / 60_000);
+  return minutes === 0 ? `${hours}h ago` : `${hours}h ${minutes}m ago`;
+}
+
 /** Bytes, for the payload-size guards: `1.4 MB`. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return "—";

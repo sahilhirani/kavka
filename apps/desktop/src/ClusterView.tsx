@@ -6,6 +6,7 @@ import ConnectTab from "./ConnectTab";
 import type { DangerReport } from "./danger";
 import GroupsTab from "./GroupsTab";
 import { Term } from "./Glossary";
+import QuorumPanel from "./QuorumPanel";
 import { EnvChip } from "./Sidebar";
 import { lsGet, lsSet } from "./storage";
 import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
@@ -298,13 +299,17 @@ export default function ClusterView({
         aria-labelledby={`clustertab-${place.tab}`}
       >
         {place.tab === "overview" && (
-          <OverviewTab profile={profile} overview={overview} />
+          <OverviewTab
+            profile={profile}
+            overview={overview}
+            onDanger={reportDanger}
+          />
         )}
 
         {place.tab === "topics" && (
           <TopicsTab
             profile={profile}
-            brokerCount={overview.brokers.length}
+            brokers={overview.brokers}
             topic={place.topic}
             pane={place.pane}
             onSelectTopic={selectTopic}
@@ -357,9 +362,13 @@ export default function ClusterView({
 function OverviewTab({
   profile,
   overview,
+  onDanger,
 }: {
   profile: ConnectionProfile;
   overview: ClusterOverview;
+  /** The quorum panel can raise a banner, and any danger has to reach the
+      app root or a prod cluster paints a coral rule behind it (§5.8). */
+  onDanger: DangerReport;
 }) {
   return (
     <>
@@ -447,6 +456,13 @@ function OverviewTab({
           </table>
         </div>
       </section>
+
+      {/* The quorum sits UNDER the broker list on purpose: a broker is the
+          thing a user came looking for, and the quorum is the thing they need
+          once the brokers all look fine and nothing works. It renders its own
+          explanation of what a quorum is, and says so plainly on a cluster
+          that has none. */}
+      <QuorumPanel profile={profile} onDanger={onDanger} />
     </>
   );
 }

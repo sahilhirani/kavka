@@ -1247,3 +1247,227 @@ export function srSetCompat(
 ): Promise<void> {
   return invoke<void>("sr_set_compat", { profileId, subject, level });
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3b — the KRaft quorum, leader election, replica moves, quotas
+//
+// Same contract shape as every phase before it: snake_case struct fields, and
+// camelCase ONLY in invoke()'s argument keys.
+//
+// These five answer over hand-rolled Kafka protocol frames rather than through
+// librdkafka's admin surface (docs/ARCHITECTURE.md D2 — ApiKeys 43, 45, 46,
+// 48/49 and 55). That is deliberately invisible from here: a command is a
+// command, the UI never learns which transport answered it, and a broker error
+// arrives already mapped into the same classified vocabulary as everything
+// else — so `classifyError` is still the only thing that reads a raw string.
+//
+// EVERY MUTATING COMMAND HERE — elect_leaders, reassign_alter, reassign_cancel,
+// quotas_alter — GOES THROUGH ensure_writable IN THE CORE, BEFORE ANY NETWORK.
+// The disabled-with-a-reason controls in the UI are a courtesy so nobody clicks
+// into a refusal; they are never the enforcement.
+// ---------------------------------------------------------------------------
+
+// ── The quorum (ApiKey 55, DescribeQuorum — controller-bound) ───────────────
+
+/**
+ * One replica of the metadata log, as the quorum leader sees it.
+ *
+ * Both ages are how long ago, in milliseconds, measured by the leader — not
+ * timestamps, so no clock on this machine is involved. `null` means the leader
+ * did not say, which is a different fact from "a long time ago" and is
+ * rendered as `∅` rather than as a large number.
+ */
+export interface ReplicaState {
+  replica_id: number;
+  log_end_offset: number;
+  /** How long since the leader last heard from this replica at all. */
+  last_fetch_age_ms: number | null;
+  /** How long since this replica was last level with the leader. */
+  last_caught_up_age_ms: number | null;
+}
+
+/**
+ * The KRaft quorum. `voters` elect the leader among themselves; `observers`
+ * copy the metadata log without ever voting — brokers that aren't controllers.
+ *
+ * A cluster that still runs on ZooKeeper has no quorum to describe and the
+ * core says so; see QuorumPanel, which turns that refusal into a sentence
+ * rather than an error.
+ */
+export interface QuorumInfo {
+  leader_id: number;
+  leader_epoch: number;
+  high_watermark: number;
+  voters: ReplicaState[];
+  observers: ReplicaState[];
+}
+
+export function quorumDescribe(profileId: string): Promise<QuorumInfo> {
+  return invoke<QuorumInfo>("quorum_describe", { profileId });
+}
+
+// ── Leader election + replica moves (ApiKeys 43, 45, 46) ───────────────────
+
+/**
+ * What happened to ONE partition inside a batch request.
+ *
+ * `error: null` means it worked. A non-null error is per-partition and never
+ * fails the whole call: half a reassignment being accepted is a real state the
+ * cluster can be in, and hiding it behind a single rejected promise would lose
+ * exactly the half the user needs to see.
+ *
+ * WHAT `error: null` DOES NOT SAY. The core folds Kafka's "the end state you
+ * asked for already holds" codes — ELECTION_NOT_NEEDED for a partition already
+ * led by its preferred replica, NO_REASSIGNMENT_IN_PROGRESS for a cancel with
+ * nothing to cancel — into `error: null`, because they are successes and
+ * rendering them as failures would light a healthy cluster up entirely red.
+ * The cost is that `error: null` cannot distinguish "this changed" from "this
+ * was already so", and nothing in the string recovers it: there is no string.
+ *
+ * So a caller that needs the difference takes a SNAPSHOT before it asks and
+ * classifies against that — which partitions were off their preferred leader,
+ * which were listed as moving — rather than reading the result text. See
+ * `splitResults` in PartitionOps, whose `wasNoOp` argument is exactly that
+ * snapshot, and its two callers.
+ */
+export interface PartitionResult {
+  topic: string;
+  partition: number;
+  error: string | null;
+}
+
+/**
+ * Mutating. Moves each partition's leadership to the first broker in its
+ * replica list — the "preferred" replica — if that broker is in sync.
+ *
+ * `topic: null` means every eligible partition on the cluster; a topic with
+ * `partitions: null` means every partition of that topic.
+ */
+export function electLeaders(
+  profileId: string,
+  topic: string | null,
+  partitions: number[] | null,
+): Promise<PartitionResult[]> {
+  return invoke<PartitionResult[]>("elect_leaders", {
+    profileId,
+    topic,
+    partitions,
+  });
+}
+
+/** Where one partition's replicas should end up. Order matters: `replicas[0]`
+    is the preferred leader, which is what a later election will move to. */
+export interface ReassignmentSpec {
+  topic: string;
+  partition: number;
+  replicas: number[];
+}
+
+/**
+ * Mutating. Asks the cluster to move these partitions onto these brokers.
+ *
+ * It RESOLVES when the cluster has accepted the plan, not when the data has
+ * moved — copying happens in the background and is watched through
+ * `reassignList`. Nothing about the acceptance says how long that will take.
+ */
+export function reassignAlter(
+  profileId: string,
+  specs: ReassignmentSpec[],
+): Promise<PartitionResult[]> {
+  return invoke<PartitionResult[]>("reassign_alter", { profileId, specs });
+}
+
+/**
+ * Mutating. Stops moves that are still in flight and puts each partition back
+ * on the replicas it had. Whatever the new brokers had already copied is
+ * discarded, which is why this asks first.
+ */
+export function reassignCancel(
+  profileId: string,
+  parts: TopicPartition[],
+): Promise<PartitionResult[]> {
+  return invoke<PartitionResult[]>("reassign_cancel", { profileId, parts });
+}
+
+/**
+ * One partition mid-move. `replicas` is the union Kafka is holding right now:
+ * `adding` are copying data in, `removing` will drop it once the copy is in
+ * sync. A partition finishes by leaving this list entirely.
+ */
+export interface ReassignmentState {
+  topic: string;
+  partition: number;
+  replicas: number[];
+  adding: number[];
+  removing: number[];
+}
+
+/**
+ * `topic: null` lists every move in flight on the cluster.
+ *
+ * A NAMED topic is resolved to its partitions first — Kafka's request has no
+ * "all partitions of this topic" shorthand, and an empty partition list asks
+ * about none of them — so naming a topic that has been deleted REJECTS with
+ * that name in the message rather than resolving to an empty list. Callers that
+ * poll (ReassignMonitor) treat that like any other failure: they stop asking
+ * and say so, which is the right answer for a topic that is no longer there.
+ */
+export function reassignList(
+  profileId: string,
+  topic: string | null,
+): Promise<ReassignmentState[]> {
+  return invoke<ReassignmentState[]>("reassign_list", { profileId, topic });
+}
+
+// ── Quotas (ApiKeys 48/49, Describe/AlterClientQuotas) ─────────────────────
+
+/** The three entity types Kafka quotas can be attached to. */
+export type QuotaEntityType = "user" | "client-id" | "ip";
+
+/**
+ * One half of a quota's address. `name: null` is Kafka's `<default>` entity —
+ * the fallback that applies to everything of that type without a quota of its
+ * own. It is a real, settable entity, not a missing value, so it is rendered
+ * as a labelled default rather than as `∅`.
+ */
+export interface QuotaEntityPart {
+  /** One of QuotaEntityType, but a broker may report others — keep it open. */
+  entity_type: string;
+  name: string | null;
+}
+
+/** One quota key and the number in force for it. Kafka's own units. */
+export interface QuotaValue {
+  key: string;
+  value: number;
+}
+
+/**
+ * Everything set on one entity. `entity` is a LIST because Kafka addresses a
+ * quota by a combination — `(user alice, client-id svc-orders)` is a different
+ * entity from `user alice`, with its own values.
+ */
+export interface QuotaEntity {
+  entity: QuotaEntityPart[];
+  values: QuotaValue[];
+}
+
+/** One change. `value: null` removes the key rather than setting it to zero —
+    and zero is a real quota meaning "throttled to a standstill". */
+export interface QuotaOp {
+  key: string;
+  value: number | null;
+}
+
+export function quotasList(profileId: string): Promise<QuotaEntity[]> {
+  return invoke<QuotaEntity[]>("quotas_list", { profileId });
+}
+
+/** Mutating, and INCREMENTAL: keys not named in `ops` are left alone. */
+export function quotasAlter(
+  profileId: string,
+  entity: QuotaEntityPart[],
+  ops: QuotaOp[],
+): Promise<void> {
+  return invoke<void>("quotas_alter", { profileId, entity, ops });
+}
