@@ -5,14 +5,20 @@
 //! - [`profiles`]: connection profiles; secrets live in the OS keychain only.
 //! - [`connection`]: authenticated cluster connections, read-only enforcement.
 //! - [`admin`]: topics, configs, ACLs, quotas, groups, reassignment.
+//! - [`consume`]: bounded fetch and live tail.
+//! - [`cancel`]: the cooperative stop flag long reads check.
 //! - [`serdes`]: bytes -> canonical JSON with schema metadata.
+//! - [`sr`]: Schema Registry clients.
 //! - [`search`]: the streaming unbounded search engine.
 
 pub mod admin;
+pub mod cancel;
 pub mod connection;
+pub mod consume;
 pub mod profiles;
 pub mod search;
 pub mod serdes;
+pub mod sr;
 
 /// OS-keychain access (macOS Keychain / Windows Credential Manager). The only
 /// place secret VALUES ever pass through; everything else holds
@@ -22,6 +28,25 @@ pub mod secrets {
     use crate::{Error, Result};
 
     const SERVICE: &str = "kavka";
+
+    /// Every keychain entry a profile can own, as the suffix after its id:
+    /// the entry name is always `{profile_id}/{suffix}`.
+    ///
+    /// **This list and the ProfileEditor's `entry` vocabulary
+    /// (`apps/desktop/src/ProfileEditor.tsx`, the `entry` object in `save`)
+    /// must match exactly.** They are the two halves of one contract: the
+    /// editor writes these entries, and deleting a profile purges them. When
+    /// the two drifted, `sr_password` was written on save and left behind on
+    /// delete — a Schema Registry password outliving the connection it
+    /// belonged to. Anything that enumerates secrets iterates this constant
+    /// rather than repeating the strings.
+    pub const SECRET_SUFFIXES: &[&str] =
+        &["password", "client_key", "client_secret", "sr_password"];
+
+    /// The keychain entry name for one of a profile's secrets.
+    pub fn entry_name(profile_id: &str, suffix: &str) -> String {
+        format!("{profile_id}/{suffix}")
+    }
 
     pub fn set(entry: &str, value: &str) -> Result<()> {
         keyring::Entry::new(SERVICE, entry)?.set_password(value)?;
@@ -66,6 +91,31 @@ pub mod secrets {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+}
+
+/// The keychain vocabulary is a contract with the ProfileEditor, so it gets a
+/// tripwire rather than a comment alone.
+#[cfg(test)]
+mod secret_vocabulary {
+    use super::secrets::{entry_name, SECRET_SUFFIXES};
+
+    /// The regression this constant exists for: `sr_password` was written by
+    /// the editor on save and missed by `profiles_delete`, so a Schema
+    /// Registry password outlived the connection it belonged to.
+    #[test]
+    fn every_entry_the_editor_writes_is_purged_on_delete() {
+        for suffix in ["password", "client_key", "client_secret", "sr_password"] {
+            assert!(
+                SECRET_SUFFIXES.contains(&suffix),
+                "{suffix} is written by ProfileEditor but not in SECRET_SUFFIXES"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_name_is_the_profile_id_then_the_suffix() {
+        assert_eq!(entry_name("abc-123", "sr_password"), "abc-123/sr_password");
     }
 }
 

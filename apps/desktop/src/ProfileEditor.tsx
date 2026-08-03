@@ -78,7 +78,10 @@ type FieldKey =
   | "awsProfile"
   | "tokenEndpoint"
   | "clientId"
-  | "clientSecret";
+  | "clientSecret"
+  | "srUrl"
+  | "srUsername"
+  | "srPassword";
 
 interface FieldError {
   field: FieldKey;
@@ -119,6 +122,12 @@ interface FormState {
   clientId: string;
   /** OAuth: raw client secret. NEVER stored in the profile. */
   clientSecret: string;
+  /** Schema Registry base URL. Empty = this cluster has no registry. */
+  srUrl: string;
+  /** Schema Registry basic-auth user, if the registry wants one. */
+  srUsername: string;
+  /** Schema Registry password. NEVER stored in the profile; keychain only. */
+  srPassword: string;
   readOnly: boolean;
 }
 
@@ -140,6 +149,9 @@ function initialForm(profile: ConnectionProfile | null): FormState {
     tokenEndpoint: "",
     clientId: "",
     clientSecret: "",
+    srUrl: "",
+    srUsername: "",
+    srPassword: "",
     readOnly: false,
   };
   if (!profile) return base;
@@ -147,6 +159,12 @@ function initialForm(profile: ConnectionProfile | null): FormState {
   base.environment = profile.environment;
   base.bootstrap = profile.bootstrap_servers.join("\n");
   base.readOnly = profile.read_only;
+  // Absent on every profile written before Phase 1 — serde defaults it to
+  // None, so `?.` here is the same statement the Rust side makes.
+  base.srUrl = profile.schema_registry?.url ?? "";
+  base.srUsername = profile.schema_registry?.username ?? "";
+  // The registry password lives in the keychain and is never read back into
+  // the form: blank means "leave the stored one alone", like every other.
   const auth = profile.auth;
   if (auth.kind === "sasl_plain") {
     base.authKind = "sasl_plain";
@@ -212,6 +230,7 @@ interface StoredSecrets {
   password: boolean;
   clientKey: boolean;
   clientSecret: boolean;
+  srPassword: boolean;
 }
 
 /** Until the keychain answers, nothing is stored — so the form asks for it. */
@@ -219,6 +238,7 @@ const NOTHING_STORED: StoredSecrets = {
   password: false,
   clientKey: false,
   clientSecret: false,
+  srPassword: false,
 };
 
 interface ProfileEditorProps {
@@ -308,6 +328,9 @@ export default function ProfileEditor({
     savedAuth && savedAuth.kind === "oauth_bearer"
       ? savedAuth.client_secret.entry
       : null;
+  // Independent of the sign-in method: a cluster can want mTLS and a registry
+  // behind basic auth, and neither knows about the other.
+  const srPasswordEntry = profile?.schema_registry?.password?.entry ?? null;
 
   // Secrets this profile already has in the keychain, which a blank input
   // therefore means "leave alone" rather than "clear". Asked, never assumed.
@@ -328,17 +351,20 @@ export default function ProfileEditor({
       check(passwordEntry),
       check(clientKeyEntry),
       check(clientSecretEntry),
-    ]).then(([password, clientKey, clientSecret]) => {
-      if (!cancelled) setStored({ password, clientKey, clientSecret });
+      check(srPasswordEntry),
+    ]).then(([password, clientKey, clientSecret, srPassword]) => {
+      if (!cancelled)
+        setStored({ password, clientKey, clientSecret, srPassword });
     });
     return () => {
       cancelled = true;
     };
-  }, [passwordEntry, clientKeyEntry, clientSecretEntry]);
+  }, [passwordEntry, clientKeyEntry, clientSecretEntry, srPasswordEntry]);
 
   const hasStoredPassword = stored.password;
   const hasStoredClientKey = stored.clientKey;
   const hasStoredClientSecret = stored.clientSecret;
+  const hasStoredSrPassword = stored.srPassword;
 
   const needsPassword =
     (form.authKind === "sasl_plain" || form.authKind === "sasl_scram") &&
@@ -363,6 +389,23 @@ export default function ProfileEditor({
         field: "bootstrap",
         message: "Add at least one broker, as host:port — e.g. broker-1:9092",
       };
+
+    // The registry is independent of the sign-in method, so it is checked
+    // before the Kerberos early return below.
+    const srUrl = form.srUrl.trim();
+    if (srUrl.length > 0 && !isHttpUrl(srUrl))
+      return {
+        field: "srUrl",
+        message:
+          "Use the whole URL, starting with http:// or https:// — e.g. http://localhost:8081",
+      };
+    if (srUrl.length === 0 && form.srUsername.trim().length > 0)
+      return {
+        field: "srUrl",
+        message:
+          "Add the registry's address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
+      };
+
     // Kerberos is preserved as-is; there is nothing here to check.
     if (unsupportedAuth) return null;
 
@@ -455,10 +498,16 @@ export default function ProfileEditor({
     }
     setFieldError(null);
     const id = profile?.id ?? (draftIdRef.current ??= crypto.randomUUID());
+    // THE KEYCHAIN VOCABULARY. Every suffix here must also be in
+    // `kavka_core::secrets::SECRET_SUFFIXES`, which is what `profiles_delete`
+    // purges: an entry this editor writes and that list doesn't know about is
+    // a secret that outlives the connection it belongs to. That is exactly
+    // what happened to `sr_password`. Adding one here is a two-file change.
     const entry = {
       password: `${id}/password`,
       clientKey: `${id}/client_key`,
       clientSecret: `${id}/client_secret`,
+      srPassword: `${id}/sr_password`,
     };
 
     // Cleared certificate path = the client certificate is being removed, so
@@ -519,6 +568,22 @@ export default function ProfileEditor({
       }
     }
 
+    // The registry, if there is one. `null` — not an empty object — when the
+    // URL is blank, so clearing the field genuinely removes it rather than
+    // leaving a registry pointing at "".
+    const srUrl = orNull(form.srUrl);
+    const srTypedPassword = form.srPassword.length > 0;
+    const keepsSrPassword =
+      srUrl !== null && (srTypedPassword || hasStoredSrPassword);
+    const schemaRegistry =
+      srUrl === null
+        ? null
+        : {
+            url: srUrl,
+            username: orNull(form.srUsername),
+            password: keepsSrPassword ? { entry: entry.srPassword } : null,
+          };
+
     const next: ConnectionProfile = {
       id,
       name: form.name.trim(),
@@ -526,6 +591,7 @@ export default function ProfileEditor({
       bootstrap_servers: parseBootstrap(form.bootstrap),
       auth,
       read_only: form.readOnly,
+      schema_registry: schemaRegistry,
     };
 
     // What this save puts into the keychain. A blank secret input always
@@ -542,6 +608,10 @@ export default function ProfileEditor({
       if (form.authKind === "oauth_bearer" && form.clientSecret.length > 0)
         writes.push([entry.clientSecret, form.clientSecret]);
     }
+    // Outside the auth switch: the registry's password has nothing to do with
+    // how the cluster checks who you are.
+    if (srUrl !== null && srTypedPassword)
+      writes.push([entry.srPassword, form.srPassword]);
 
     // Entries this profile still has but the new sign-in method no longer
     // references. Cleaned up best-effort after the profile is safely saved.
@@ -558,6 +628,10 @@ export default function ProfileEditor({
       if (hasStoredClientSecret && form.authKind !== "oauth_bearer")
         obsolete.push(entry.clientSecret);
     }
+    // Removing the registry (or clearing its URL) takes its password with it —
+    // the same rule the client key follows when its certificate path goes.
+    if (hasStoredSrPassword && !keepsSrPassword)
+      obsolete.push(entry.srPassword);
 
     setBusy(true);
     try {
@@ -585,12 +659,14 @@ export default function ProfileEditor({
         password: settled(entry.password, prev.password),
         clientKey: settled(entry.clientKey, prev.clientKey),
         clientSecret: settled(entry.clientSecret, prev.clientSecret),
+        srPassword: settled(entry.srPassword, prev.srPassword),
       }));
       setForm((prev) => ({
         ...prev,
         password: "",
         clientKey: "",
         clientSecret: "",
+        srPassword: "",
       }));
       return next;
     } catch (err) {
@@ -609,6 +685,7 @@ export default function ProfileEditor({
     hasStoredPassword,
     hasStoredClientKey,
     hasStoredClientSecret,
+    hasStoredSrPassword,
   ]);
 
   const handleSave = useCallback(async () => {
@@ -1179,6 +1256,97 @@ export default function ProfileEditor({
             </div>
           </>
         )}
+      </fieldset>
+
+      {/* Schema Registry — optional, and independent of how the cluster checks
+          who you are: a broker on mTLS can sit in front of a registry behind
+          basic auth. Leaving the address empty is the same as having no
+          registry, and clearing it removes the stored password with it. */}
+      <fieldset className="fieldset">
+        <legend className="eyebrow">Schema Registry (optional)</legend>
+
+        <span className="field-hint">
+          If this cluster's messages are Avro, Protobuf or JSON Schema, Kavka
+          reads the schema from here to decode them — and shows the subject,
+          version and id beside each message. Without it those payloads are
+          shown as raw bytes.
+        </span>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-sr-url">
+            Registry address
+          </label>
+          <input
+            id="pe-sr-url"
+            ref={bind("srUrl")}
+            type="text"
+            className={cls("srUrl", "input-mono")}
+            value={form.srUrl}
+            placeholder="http://localhost:8081"
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={invalid("srUrl")}
+            aria-describedby={describe("srUrl", "pe-sr-url-hint")}
+            onChange={(e) => edit("srUrl", { srUrl: e.target.value })}
+          />
+          {fieldMessage("srUrl")}
+          <span className="field-hint" id="pe-sr-url-hint">
+            The whole URL, including the scheme. Confluent, Apicurio and Glue
+            all speak the same read API here. Leave it empty if this cluster
+            has no registry.
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-sr-username">
+            Registry username
+          </label>
+          <input
+            id="pe-sr-username"
+            ref={bind("srUsername")}
+            type="text"
+            className={cls("srUsername", "input-mono")}
+            value={form.srUsername}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={invalid("srUsername")}
+            aria-describedby={describe("srUsername", "pe-sr-username-hint")}
+            onChange={(e) => edit("srUsername", { srUsername: e.target.value })}
+          />
+          {fieldMessage("srUsername")}
+          <span className="field-hint" id="pe-sr-username-hint">
+            Only if the registry asks for one. Managed registries usually do;
+            a registry inside your own network usually doesn't.
+          </span>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="pe-sr-password">
+            Registry password
+          </label>
+          <input
+            id="pe-sr-password"
+            ref={bind("srPassword")}
+            type="password"
+            className={cls("srPassword")}
+            value={form.srPassword}
+            autoComplete="new-password"
+            placeholder={
+              hasStoredSrPassword ? "••••••••  (unchanged)" : "Password"
+            }
+            aria-invalid={invalid("srPassword")}
+            aria-describedby={describe("srPassword", "pe-sr-password-hint")}
+            onChange={(e) => edit("srPassword", { srPassword: e.target.value })}
+          />
+          {fieldMessage("srPassword")}
+          <span className="field-hint" id="pe-sr-password-hint">
+            Goes to your operating system's keychain — never into the
+            connection file, and never off this machine.
+            {hasStoredSrPassword
+              ? " Leave it empty to keep the stored one; clearing the address above removes it."
+              : ""}
+          </span>
+        </div>
       </fieldset>
 
       <div className="check-field">

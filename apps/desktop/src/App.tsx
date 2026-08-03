@@ -69,6 +69,10 @@ export default function App() {
   // §5.8's prod damper reads one attribute on the app root — so the dialog
   // reports its banner up here rather than the guardrail missing it.
   const [transferDanger, setTransferDanger] = useState(false);
+  // Same reason for the cluster workspace: a fetch failure inside the topic,
+  // group or message views raises its own inline banner, and §5.8 says the
+  // damper reads ANY danger on screen, not only the global one.
+  const [viewDanger, setViewDanger] = useState(false);
   // Bumping this remounts ClusterView, which refetches topics on mount. The
   // honest version of "Refresh topics" from the palette is a handle into that
   // component; until it exposes one, a remount is the whole of the behaviour
@@ -280,7 +284,7 @@ export default function App() {
         profile={selected}
         overview={conn.overview}
         onDisconnect={disconnect}
-        onError={showError}
+        onDangerChange={setViewDanger}
       />
     );
   } else if (selected) {
@@ -384,7 +388,9 @@ export default function App() {
       // coral rule behind a coral banner, which is the one composition the
       // guardrail must not produce.
       data-alert={
-        error !== null || conn.error || transferDanger ? "danger" : undefined
+        error !== null || conn.error || transferDanger || viewDanger
+          ? "danger"
+          : undefined
       }
     >
       {/* Prod guardrail layer 2: a 2px wire under the native title bar.

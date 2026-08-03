@@ -357,7 +357,18 @@ Four regions plus a wire:
   var(--accent)`.
 - **Alignment** — identifiers left + mono; quantities right + sans +
   `tabular-nums`; timestamps left + mono. **Mono column widths are `ch`-based**
-  so nothing reflows as data streams in. **Alignment selectors must be
+  so nothing reflows as data streams in — and so a px width tuned to today's
+  data does not overflow tomorrow's. The messages offset column is the worked
+  example: at `--gutter-w`'s 72px, minus 12px of cell padding each side, it
+  fits about six mono characters — and a space-grouped offset
+  (`1 234 567 890`) is 13, so every busy topic spilled the address across the
+  ledger rule. It is now `calc(13ch + var(--s-5) * 2)` (12ch compact) with an
+  `overflow: hidden` + ellipsis backstop on the **data** cells only — the
+  header cell holds a focusable `<Term>` and §5.3's clipping rule applies.
+  Two things a `ch` column width must not get wrong: `ch` resolves against
+  the element's **own** font, so the `<col>` carries the mono family and size
+  its cells do; and `box-sizing: border-box` makes the width a border-box
+  width, so the cell's padding is part of the number. **Alignment selectors must be
   qualified** — `.data-table th` sets `text-align: left` at specificity
   (0,1,1), so a bare `.col-num` at (0,1,0) loses and every numeric column
   *head* sits left above a right-aligned column. Write
@@ -857,13 +868,30 @@ app knows exactly what went wrong and shows the user nothing.
 the message.**
 
 > **The table below is code, not prose: `apps/desktop/src/errors.ts`.**
-> `classifyError(raw) → { title, detail, known }` is a pure, total function —
-> no React, no imports, no I/O — so the whole library can be checked by calling
-> it with a captured broker string. Every renderer of an error uses it; the raw
-> librdkafka text is **never** the banner title. `known: false` means we did
-> not recognise the cause, and only then does the raw string become the title,
-> with the full text still under `Show details`. Keep it pure: the moment it
-> reaches for component state it stops being testable and becomes a component.
+> `classifyError(raw, ctx?) → { title, detail, known, cause }` is a pure, total
+> function — no React, no imports, no I/O — so the whole library can be checked
+> by calling it with a captured broker string. Every renderer of an error uses
+> it; the raw librdkafka text is **never** the banner title. `known: false`
+> means we did not recognise the cause, and only then does the raw string
+> become the title, with the full text still under `Show details`. Keep it
+> pure: the moment it reaches for component state it stops being testable and
+> becomes a component.
+>
+> **Two rows are not derivable from a string, so they take context.** "Active
+> group" needs the group's state and member count; "Timeout, prod" needs the
+> profile's environment. Both arrive in the optional second argument —
+> `{ groupState?, memberCount?, environment? }` — which the *caller* passes,
+> which is what keeps the function pure while still letting it answer them.
+> Every field is optional and every branch degrades to the string-only answer
+> without it. The context-only inference (a terse failure on a group we happen
+> to know is live) is tested **last**, after every branch that names its own
+> cause in the text.
+>
+> **`cause` is the row that matched**, and it is how a renderer decides what
+> else to offer without re-sniffing the raw string with its own regex — the
+> reset modal reveals its "send it anyway" checkbox only on `active-group`.
+> Two copies of that rule in two files is how the banner and the checkbox come
+> to disagree about the same error.
 
 | Cause | Line 1 | Line 2 |
 |---|---|---|
@@ -1083,8 +1111,30 @@ These are deliberate. Do not "fix" them without reading the reason.
   as the first task of the light-theme phase, and run the §9 gate 1 sweep
   over the light surface set before flipping it on.
 
-- **The §7 error table overstates `errors.ts` by two rows.** "Timeout, prod"
-  and "Active group" are not derivable from a raw broker string alone — the
-  first needs the profile's environment, the second needs group state. Both
-  need caller context threaded into `classifyError` (a second argument, not
-  component state) when their features land in Phases 1–2.
+- **The §7 error table's two context rows: half resolved.** "Timeout, prod"
+  and "Active group" are not derivable from a raw broker string alone, and
+  both now take the promised second argument —
+  `classifyError(raw, { groupState?, memberCount?, environment? })`, caller
+  context, never component state, so the function stays pure.
+  **The resolved half is "Active group":** it has a caller. The reset modal is
+  the only place that error can arise and it holds the group's state and
+  member count, so it passes them and reads `cause === "active-group"` to
+  decide whether to offer `force`. Its local `looksLikeActiveGroup` copy of
+  the rule is gone.
+  **The unresolved half is "Timeout, prod":** the branch exists and switches
+  on `environment`, but **no renderer threads it yet.** `ErrorBanner` takes a
+  raw string and nothing else, and the profile is not in scope at most of its
+  call sites. Until it is, a prod timeout still reads with the dev wording.
+  Thread the profile through the banner in the phase that gives the banner an
+  owner; do not do it by reaching into a store from `errors.ts`.
+
+- **The payload inspector ships four tabs, not §5.10's five.** `Value · Key ·
+  Headers · Raw` — **Hex is staged for Phase 2**, and is deliberately absent
+  rather than present-and-disabled. The IPC contract hands the UI a decoded
+  `text` and never the bytes, so a Hex tab today would render a hex dump of a
+  lossy UTF-8 decode rather than of the record — worse than not offering it,
+  because it would look authoritative. It lands when `DecodedPayload` carries
+  the raw bytes (or a bounded prefix of them), which is the same change
+  Phase 2's search needs to match on bytes. A disabled tab is not an
+  acceptable placeholder here: §5.5's "every disabled control says why" would
+  need a sentence explaining a data-model gap to a user who cannot act on it.

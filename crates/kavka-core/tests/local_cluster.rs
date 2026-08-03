@@ -17,6 +17,7 @@ fn local_profile(read_only: bool) -> ConnectionProfile {
         ],
         auth: AuthConfig::Plaintext,
         read_only,
+        schema_registry: None,
     }
 }
 

@@ -16,6 +16,30 @@ pub struct ConnectionProfile {
     pub auth: AuthConfig,
     /// Mutating operations are rejected in core when set (docs/ARCHITECTURE.md D5).
     pub read_only: bool,
+    /// Where to resolve the schema ids found in message framing, if this
+    /// cluster has a registry.
+    ///
+    /// `#[serde(default)]` is load-bearing, not decoration: profiles written
+    /// before Phase 1 have no such key, and they are read off disk on every
+    /// launch. Without it, adding this field would make every existing
+    /// `profiles.json` fail to parse — the user would open Kavka to an empty
+    /// sidebar and a "couldn't read its connection file" banner.
+    #[serde(default)]
+    pub schema_registry: Option<SchemaRegistryConfig>,
+}
+
+/// A Confluent-compatible Schema Registry (Confluent, Apicurio, Redpanda).
+///
+/// Credentials follow the same rule as everything else here: the username is
+/// an identifier and lives in the profile, the password is a [`SecretRef`] into
+/// the OS keychain and never touches disk (docs/ARCHITECTURE.md D5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaRegistryConfig {
+    pub url: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<SecretRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -366,6 +390,13 @@ mod tests {
                 tls: true,
             },
             read_only: true,
+            schema_registry: Some(SchemaRegistryConfig {
+                url: "https://registry.example".into(),
+                username: Some("sr-key".into()),
+                password: Some(SecretRef {
+                    entry: format!("{id}/schema_registry_password"),
+                }),
+            }),
         }
     }
 
@@ -468,6 +499,46 @@ mod tests {
         );
         // A non-secret field that merely mentions "token" is not a false positive.
         assert!(json.contains("token_endpoint"));
+    }
+
+    /// The field arrived in Phase 1; every profile written before it has no
+    /// such key, and those files are read on every launch.
+    #[test]
+    fn profiles_written_before_the_schema_registry_field_still_load() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "dev",
+                "bootstrap_servers": ["localhost:9092"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false
+            }]
+        }"#;
+        let profiles = import_json(legacy).expect("a Phase 0 profile still parses");
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].schema_registry.is_none());
+    }
+
+    #[test]
+    fn a_schema_registry_password_travels_as_a_reference() {
+        let json = export_json(&[profile("a", "A")]);
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let registry = &doc["profiles"][0]["schema_registry"];
+
+        assert_eq!(registry["url"], "https://registry.example");
+        assert_eq!(registry["username"], "sr-key");
+        assert_eq!(
+            registry["password"],
+            serde_json::json!({"entry": "a/schema_registry_password"})
+        );
+        assert_eq!(leaked_secret_field(&doc), None);
+
+        // The detector reaches into the nested config too.
+        let mut leaked = doc.clone();
+        leaked["profiles"][0]["schema_registry"]["password"] = serde_json::json!("hunter2");
+        assert_eq!(leaked_secret_field(&leaked).as_deref(), Some("password"));
     }
 
     #[test]

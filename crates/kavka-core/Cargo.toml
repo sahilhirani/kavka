@@ -13,18 +13,17 @@ default = []
 # requires CMake + MSVC Build Tools, and nothing more. Deliberately free of the
 # AWS SDK: `aws-config` drags in `aws-lc-sys`, whose build needs NASM, and this
 # tier is the one tooling and CI use on a bare toolchain.
-kafka = ["dep:rdkafka", "dep:ureq"]
+kafka = ["dep:rdkafka"]
 # AWS MSK IAM tokens (SigV4-presigned `kafka-cluster:Connect` URLs). Split out
 # of `kafka` because of the NASM/`aws-lc-sys` build requirement above. Without
 # it, `AuthConfig::AwsMskIam` refuses to connect instead of failing to build.
-# `base64`/`url` ride along: src/auth/msk.rs is their only user.
+# `url` rides along: src/auth/msk.rs is its only user.
 msk-iam = [
     "kafka",
     "dep:aws-config",
     "dep:aws-credential-types",
     "dep:aws-sigv4",
     "dep:aws-types",
-    "dep:base64",
     "dep:url",
 ]
 # TLS/SASL_SSL: vendored OpenSSL build. On Windows this additionally requires
@@ -48,15 +47,40 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "sync-s
 
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"], optional = true }
 
-# --- OAUTHBEARER token providers (src/auth) ---------------------------------
-# ureq + rustls, deliberately NOT reqwest/native-tls: the OIDC token fetch is
-# one blocking POST on librdkafka's poll thread, so an async client would buy
-# nothing, and rustls keeps this off the vendored-OpenSSL link that
+# --- HTTP (src/auth OAUTHBEARER providers, src/sr Schema Registry) ----------
+# ureq + rustls, deliberately NOT reqwest/native-tls: both callers are blocking
+# by design — the OIDC token fetch runs on librdkafka's poll thread and the
+# Schema Registry lookup runs inline in the decode path — so an async client
+# would buy nothing, and rustls keeps this off the vendored-OpenSSL link that
 # `kafka-ssl` sets up for librdkafka. `platform-verifier` adds
 # rustls-platform-verifier so the OS trust store can be used instead of the
-# bundled webpki roots — enterprise IdPs are routinely behind an internal CA
-# (see src/auth/oidc.rs, which must also select it at request time).
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
+# bundled webpki roots — enterprise IdPs and self-hosted registries are
+# routinely behind an internal CA (see src/auth/oidc.rs and src/sr.rs, which
+# must also select it at request time).
+#
+# NOT optional: the Schema Registry client decodes payloads and has no
+# librdkafka involvement, so `serdes`/`sr` have to compile on the bare
+# (feature-free) tier that tooling and clippy use. It is pure Rust — `ring`
+# ships pregenerated Windows objects — so it adds no build-tool requirement.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# Basic auth for Schema Registry (src/sr.rs) and SigV4 for MSK (src/auth/msk.rs).
+base64 = "0.22"
+
+# --- Serde pipeline (src/serdes.rs, docs/ARCHITECTURE.md D4) ----------------
+# Avro is the only wire format whose decoder needs a schema, so it is the only
+# one tied to the registry. `default-features = false` drops the object-container
+# codecs (bzip/snappy/xz/zstd): Kafka payloads are single Avro datums framed by
+# the registry's magic byte, never container files, and every one of those
+# codecs is a C dependency this crate does not otherwise have.
+apache-avro = { version = "0.21", default-features = false }
+# MessagePack and CBOR as dynamic values, not typed deserialization: the decoder
+# has no target type, it has bytes off a topic. `rmpv`/`ciborium::value` are the
+# minimal "parse to a self-describing tree" halves of their ecosystems —
+# rmp-serde/ciborium's serde half would only add a layer we would immediately
+# have to undo to reach serde_json::Value.
+rmpv = "1"
+ciborium = "0.2"
+
 # `msk-iam` only. MSK IAM is hand-signed rather than via
 # `aws-msk-iam-sasl-signer`; see the dependency note at the top of
 # src/auth/msk.rs.
@@ -64,5 +88,4 @@ aws-config = { version = "1", features = ["behavior-version-latest"], optional =
 aws-credential-types = { version = "1", optional = true }
 aws-sigv4 = { version = "1", optional = true }
 aws-types = { version = "1", optional = true }
-base64 = { version = "0.22", optional = true }
 url = { version = "2", optional = true }

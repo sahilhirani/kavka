@@ -11,11 +11,57 @@
  * names the setting to change — never both a shrug and a stack trace.
  *
  * PURE AND TOTAL. No React, no imports, no I/O, no `Date.now()`. Every branch
- * is decided by the input string alone, so the whole table is checkable by
+ * is decided by its two arguments alone, so the whole table is checkable by
  * calling it with a captured broker string and comparing the result. Keep it
  * that way: the moment this reaches for component state it stops being
  * testable and starts being a component.
+ *
+ * TWO ROWS OF THE §7 TABLE ARE NOT DERIVABLE FROM A STRING. "Active group"
+ * needs the group's state and member count; "Timeout, prod" needs the
+ * profile's environment. Both arrive as `ctx` — an explicit second argument
+ * the caller passes, never state this module reaches for — which is what
+ * keeps it pure while still letting it answer them.
  */
+
+/**
+ * What the caller knows that the broker's reply doesn't say.
+ *
+ * Every field is optional and every branch degrades to the string-only answer
+ * without it: a renderer that has no context still gets a correct, if less
+ * specific, classification.
+ */
+export interface ErrorContext {
+  /** The consumer group's state as Kafka reports it — `Empty`, `Stable`, … */
+  groupState?: string;
+  /** How many members that group has right now. */
+  memberCount?: number;
+  /** The profile's environment — `dev` | `staging` | `prod`. */
+  environment?: string;
+}
+
+/**
+ * Which row of the §7 table answered. Renderers use it to decide what else to
+ * offer — the reset modal reveals its "send it anyway" checkbox only after an
+ * `active-group` refusal — so the classification stays in one place instead of
+ * every caller re-sniffing the raw string with its own regex.
+ */
+export type ErrorCause =
+  | "unknown-profile"
+  | "read-only"
+  | "active-group"
+  | "sasl-mechanism"
+  | "sasl-rejected"
+  | "authorization"
+  | "untrusted-cert"
+  | "tls-not-expected"
+  | "not-a-broker"
+  | "tls-expected"
+  | "dns"
+  | "refused"
+  | "no-answer"
+  | "transport"
+  | "timeout"
+  | "unrecognised";
 
 export interface ClassifiedError {
   /** Line 1 — what happened, in the user's vocabulary. */
@@ -28,6 +74,8 @@ export interface ClassifiedError {
    * knowing for telemetry, and worth not pretending otherwise in the UI.
    */
   known: boolean;
+  /** The §7 row that matched. `unrecognised` exactly when `known` is false. */
+  cause: ErrorCause;
 }
 
 /**
@@ -58,15 +106,35 @@ const has = (raw: string, ...needles: string[]) => {
 };
 
 /**
+ * The group id out of the core's own refusal, which quotes it:
+ * `"checkout-service" is Stable with 3 member(s) — Kafka rejects …`.
+ */
+function quotedName(raw: string): string | null {
+  const m = raw.match(/"([^"\n]{1,120})"/);
+  return m ? m[1] : null;
+}
+
+/** `with 3 member(s)` → 3. The broker and the core both write it this way. */
+function statedMembers(raw: string): number | null {
+  const m = raw.match(/\b(\d{1,6})\s+members?\b/i);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+
+/**
  * Map a raw error string to the plain-language pair from the §7 table.
  * Order matters: the specific causes are tested before the generic ones,
  * because librdkafka nests them ("Failed to get metadata: Local: Broker
  * transport failure" is a transport failure, not a metadata timeout).
+ *
+ * `ctx` is optional everywhere; see [`ErrorContext`].
  */
-export function classifyError(raw: string): ClassifiedError {
+export function classifyError(raw: string, ctx?: ErrorContext): ClassifiedError {
   const text = (raw ?? "").trim();
   const at = extractAddress(text);
   const where = at ?? "that broker";
+  const groupIsLive =
+    ctx?.groupState !== undefined && ctx.groupState.toLowerCase() !== "empty";
+  const onProd = ctx?.environment === "prod";
 
   // ── Kavka's own IPC, before anything librdkafka says ──────────────────
   if (has(text, "unknown profile", "no such profile", "profile not found")) {
@@ -75,6 +143,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "It may have been deleted in another window. Pick another connection from the sidebar, or add it again.",
       known: true,
+      cause: "unknown-profile",
     };
   }
   if (has(text, "read-only", "read only connection")) {
@@ -83,7 +152,44 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "This connection is marked read-only, so Kavka didn't write anything. Turn read-only off in the connection's settings if you meant to.",
       known: true,
+      cause: "read-only",
     };
+  }
+
+  // ── Active group (§7's "Active group" row) ────────────────────────────
+  // Matched on the core's own `ensure_group_resettable` wording, and on what
+  // the broker itself says when the reset goes out anyway (`force`). The
+  // context-only case is far below: a terse failure on a group we happen to
+  // know is live must not outrank a message that names its own cause.
+  const activeGroup = (): ClassifiedError => {
+    const name = quotedName(text) ?? "This consumer group";
+    const members = ctx?.memberCount ?? statedMembers(text);
+    return {
+      title: `${name} is running`,
+      detail:
+        members === null
+          ? "Offsets can't be reset while its members are consuming. Stop the application, wait for the group to report Empty, then try again — Kafka will reject the reset otherwise."
+          : `Offsets can't be reset while ${members} ${
+              members === 1 ? "member is" : "members are"
+            } consuming. Stop the application, wait for the group to report Empty, then try again — Kafka will reject the reset otherwise.`,
+      known: true,
+      cause: "active-group",
+    };
+  };
+  if (
+    has(
+      text,
+      "rejects an offset reset",
+      "while members are consuming",
+      "unknown_member_id",
+      "unknown member id",
+      "rebalance in progress",
+      "group is rebalancing",
+      "non-empty group",
+      "group is not empty",
+    )
+  ) {
+    return activeGroup();
   }
 
   // ── Sign-in ───────────────────────────────────────────────────────────
@@ -107,6 +213,7 @@ export function classifyError(raw: string): ClassifiedError {
         ? `It offered ${offered}. Switch the mechanism and connect again.`
         : "Switch the SCRAM mechanism (or the sign-in method) and connect again.",
       known: true,
+      cause: "sasl-mechanism",
     };
   }
   if (
@@ -125,6 +232,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "Check the username, then re-enter the password — Kavka can't tell whether the stored one is still valid.",
       known: true,
+      cause: "sasl-rejected",
     };
   }
   if (
@@ -135,6 +243,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "It needs Describe on the cluster. Ask whoever issued the credentials for that permission.",
       known: true,
+      cause: "authorization",
     };
   }
 
@@ -154,6 +263,7 @@ export function classifyError(raw: string): ClassifiedError {
       title: "The broker's certificate isn't trusted",
       detail: `${where} presented a certificate this machine's trust store doesn't recognise. Add the CA certificate as a PEM file — Kavka doesn't need a keystore.`,
       known: true,
+      cause: "untrusted-cert",
     };
   }
   // Broker speaks plaintext, we spoke TLS. OpenSSL says so very distinctly.
@@ -170,6 +280,7 @@ export function classifyError(raw: string): ClassifiedError {
       title: "This broker isn't using TLS",
       detail: "Turn off “Encrypt the connection (TLS)” and connect again.",
       known: true,
+      cause: "tls-not-expected",
     };
   }
   // librdkafka conflates two causes in this one string: the port answered
@@ -181,6 +292,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "Either that port isn't Kafka — it usually runs on 9092, or 9093/9094 with TLS — or the broker wants an encrypted connection. Check the port first, then try turning on “Encrypt the connection (TLS)”.",
       known: true,
+      cause: "not-a-broker",
     };
   }
   // Broker speaks TLS, we spoke plaintext. This is librdkafka's own hint.
@@ -196,6 +308,7 @@ export function classifyError(raw: string): ClassifiedError {
       title: "This broker expects an encrypted connection",
       detail: "Turn on “Encrypt the connection (TLS)” and connect again.",
       known: true,
+      cause: "tls-expected",
     };
   }
 
@@ -217,6 +330,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "The hostname didn't resolve. Check the spelling, or whether you need to be on the VPN.",
       known: true,
+      cause: "dns",
     };
   }
   if (has(text, "connection refused", "econnrefused")) {
@@ -225,6 +339,7 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "Nothing is listening there. If you're running Kafka in Docker, check the port is published to the host.",
       known: true,
+      cause: "refused",
     };
   }
   if (
@@ -239,17 +354,24 @@ export function classifyError(raw: string): ClassifiedError {
   ) {
     return {
       title: `${where} didn't answer`,
-      detail:
-        "The address is routable but nothing answered on that port. Check the port number, or whether the broker is running.",
+      // §7's "Timeout, prod" row. On a production cluster the first suspect is
+      // not the user's own machine, and saying so stops a support engineer
+      // taking their laptop apart at 3am over a broker restart.
+      detail: onProd
+        ? "Nothing changed on your machine — this is usually the VPN or a broker restart."
+        : "The address is routable but nothing answered on that port. Check the port number, or whether the broker is running.",
       known: true,
+      cause: "no-answer",
     };
   }
   if (has(text, "broker transport failure", "all broker connections are down")) {
     return {
       title: `Can't reach ${where}`,
-      detail:
-        "The connection didn't get far enough to speak Kafka. Check the address and port, then whether a VPN or firewall is in the way.",
+      detail: onProd
+        ? "Nothing changed on your machine — this is usually the VPN or a broker restart."
+        : "The connection didn't get far enough to speak Kafka. Check the address and port, then whether a VPN or firewall is in the way.",
       known: true,
+      cause: "transport",
     };
   }
 
@@ -261,7 +383,16 @@ export function classifyError(raw: string): ClassifiedError {
       detail:
         "The broker accepted the connection but didn't return metadata. It may be overloaded, or a firewall may be blocking the address the broker advertises — which can differ from the one you typed.",
       known: true,
+      cause: "timeout",
     };
+  }
+
+  // ── Context-only: a terse failure on a group we know has live members ──
+  // Last, deliberately. Every branch above names its own cause in the text;
+  // this one is an inference from what the CALLER knows, so it only gets to
+  // answer once nothing else has.
+  if (groupIsLive && has(text, "reset", "commit")) {
+    return activeGroup();
   }
 
   // ── Fallback: keep the broker's own words as the title ─────────────────
@@ -273,6 +404,7 @@ export function classifyError(raw: string): ClassifiedError {
     detail:
       "Kavka doesn't recognise this one. The broker's full reply is under Show details — it usually names the host or the setting at fault.",
     known: false,
+    cause: "unrecognised",
   };
 }
 

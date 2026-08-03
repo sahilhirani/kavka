@@ -25,9 +25,13 @@ pub mod auth;
 #[cfg(feature = "kafka")]
 use auth::{KavkaClientContext, TokenSource};
 #[cfg(feature = "kafka")]
+use rdkafka::admin::AdminClient;
+#[cfg(feature = "kafka")]
 use rdkafka::config::ClientConfig;
 #[cfg(feature = "kafka")]
 use rdkafka::consumer::{BaseConsumer, Consumer};
+#[cfg(feature = "kafka")]
+use std::sync::OnceLock;
 #[cfg(feature = "kafka")]
 use std::time::Duration;
 
@@ -47,7 +51,7 @@ pub struct ClusterOverview {
 }
 
 #[cfg(feature = "kafka")]
-const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long to let librdkafka's event queue drain before a metadata call.
 /// Only spent on OAUTHBEARER connections — see [`ClusterConnection::service_events`].
@@ -76,6 +80,9 @@ pub struct ClusterConnection {
     profile: ConnectionProfile,
     #[cfg(feature = "kafka")]
     consumer: BaseConsumer<KavkaClientContext>,
+    /// Built on first admin call, then reused — see [`ClusterConnection::admin`].
+    #[cfg(feature = "kafka")]
+    admin: OnceLock<AdminClient<KavkaClientContext>>,
 }
 
 impl ClusterConnection {
@@ -86,9 +93,124 @@ impl ClusterConnection {
         let (config, context) = client_config(&profile)?;
         let consumer: BaseConsumer<KavkaClientContext> =
             config.create_with_context(context).map_err(client_error)?;
-        let conn = Self { profile, consumer };
+        let conn = Self {
+            profile,
+            consumer,
+            admin: OnceLock::new(),
+        };
         conn.metadata()?;
         Ok(conn)
+    }
+
+    /// The AdminClient for this connection, created on first use and then
+    /// reused for the connection's lifetime.
+    ///
+    /// Lazy rather than built in [`connect`](Self::connect) because an
+    /// AdminClient is not free: rdkafka spawns a dedicated OS polling thread
+    /// per client and joins it on drop, and the client opens its own
+    /// connections to every broker. Connecting and browsing topics — what most
+    /// sessions only ever do — issues no admin call at all, so building one
+    /// eagerly would cost a thread and a second set of broker sessions per
+    /// cluster for nothing. `OnceLock` then keeps it to exactly one client, so
+    /// a burst of admin calls doesn't re-resolve secrets or re-handshake.
+    ///
+    /// Caveat, OAUTHBEARER only: librdkafka delivers token-refresh events on a
+    /// client's main queue, and rdkafka's AdminClient polls only its own admin
+    /// queue (`Client::poll_event` is `pub(crate)`, so nothing outside rdkafka
+    /// can drain the main one). An OAUTHBEARER admin call can therefore stall
+    /// until its timeout; [`crate::admin`] says so in the error rather than
+    /// letting it read as a network fault.
+    #[cfg(feature = "kafka")]
+    pub(crate) fn admin(&self) -> Result<&AdminClient<KavkaClientContext>> {
+        if let Some(admin) = self.admin.get() {
+            return Ok(admin);
+        }
+        let (config, context) = client_config(&self.profile)?;
+        let admin: AdminClient<KavkaClientContext> =
+            config.create_with_context(context).map_err(client_error)?;
+        // A concurrent caller may have won the race; its client is as good as
+        // ours, so drop the loser rather than serialize every admin call behind
+        // a lock.
+        let _ = self.admin.set(admin);
+        Ok(self
+            .admin
+            .get()
+            .expect("OnceLock was just set and never clears"))
+    }
+
+    /// Runs one blocking librdkafka call on the shared metadata consumer,
+    /// servicing the OAUTHBEARER event queue first and routing a failure
+    /// through [`describe_failure`](Self::describe_failure) so a rejected
+    /// credential never surfaces as a bare timeout.
+    ///
+    /// `what` is the operation as the user would name it — it becomes the head
+    /// of the error message.
+    #[cfg(feature = "kafka")]
+    pub(crate) fn with_consumer<T>(
+        &self,
+        what: &str,
+        call: impl FnOnce(&BaseConsumer<KavkaClientContext>) -> rdkafka::error::KafkaResult<T>,
+    ) -> Result<T> {
+        self.service_events();
+        call(&self.consumer).map_err(|e| self.describe_failure(format!("{what} failed: {e}")))
+    }
+
+    /// A consumer bound to `group_id`, for reading and writing that group's
+    /// committed offsets.
+    ///
+    /// It never joins the group: callers `assign` partitions statically, which
+    /// sends no JoinGroup and no heartbeat, so an Empty group stays Empty and
+    /// an active group's membership is untouched. Auto-commit and offset
+    /// storing are off so that merely holding this consumer can't move the
+    /// offsets it exists to inspect.
+    #[cfg(feature = "kafka")]
+    pub(crate) fn new_group_consumer(
+        &self,
+        group_id: &str,
+    ) -> Result<BaseConsumer<KavkaClientContext>> {
+        let (mut config, context) = client_config(&self.profile)?;
+        config
+            .set("group.id", group_id)
+            .set("enable.auto.commit", "false")
+            .set("enable.auto.offset.store", "false")
+            .set("allow.auto.create.topics", "false");
+        let consumer: BaseConsumer<KavkaClientContext> =
+            config.create_with_context(context).map_err(client_error)?;
+        // Same reason as `service_events`: nothing else polls this client, so
+        // drain once to let the token callback run before the first call.
+        if consumer.client().context().needs_oauth_token() {
+            let _ = consumer.poll(EVENT_DRAIN_TIMEOUT);
+        }
+        Ok(consumer)
+    }
+
+    /// Whether this connection mints OAUTHBEARER tokens — see the caveat on
+    /// [`admin`](Self::admin).
+    #[cfg(feature = "kafka")]
+    pub(crate) fn needs_oauth_token(&self) -> bool {
+        self.consumer.client().context().needs_oauth_token()
+    }
+
+    /// A fresh consumer for a consume/tail session — sessions own their
+    /// consumer (own seek positions, own lifecycle, dropped on their own
+    /// thread) rather than sharing the metadata consumer. Reuses the
+    /// profile's full auth mapping; secrets are re-resolved at creation.
+    #[cfg(feature = "kafka")]
+    pub fn new_session_consumer(&self) -> Result<BaseConsumer<KavkaClientContext>> {
+        let (mut config, context) = client_config(&self.profile)?;
+        // librdkafka refuses `rd_kafka_assign`/`rd_kafka_consumer_poll` on a
+        // client with no group.id ("Requires a consumer with group.id
+        // configured") — and browse sessions assign partitions by hand rather
+        // than subscribing, so without this every fetch and tail fails at
+        // assignment. Nothing here joins a group: no subscribe, and auto-commit
+        // is off, so the id never reaches __consumer_offsets and no application's
+        // committed offsets can move because someone opened a topic in Kavka.
+        config
+            .set("group.id", format!("kavka-browse-{}", std::process::id()))
+            .set("enable.auto.commit", "false")
+            // Browsing a topic that isn't there must report that, not create it.
+            .set("allow.auto.create.topics", "false");
+        config.create_with_context(context).map_err(client_error)
     }
 
     #[cfg(not(feature = "kafka"))]
@@ -144,7 +266,7 @@ impl ClusterConnection {
     /// Operation timed out", which sends the user hunting network faults. When
     /// the token source is the thing that actually failed, say so instead.
     #[cfg(feature = "kafka")]
-    fn describe_failure(&self, generic: String) -> Error {
+    pub(crate) fn describe_failure(&self, generic: String) -> Error {
         match self.consumer.client().context().last_auth_error() {
             Some(cause) => Error::Other(format!("authentication failed: {cause}")),
             None => Error::Other(generic),
@@ -219,7 +341,7 @@ impl ClusterConnection {
 /// _schemas is NOT matched (single underscore) — refined via DescribeTopics
 /// in Phase 1.
 #[cfg(feature = "kafka")]
-fn is_internal(name: &str) -> bool {
+pub(crate) fn is_internal(name: &str) -> bool {
     name.starts_with("__")
 }
 
@@ -473,6 +595,7 @@ mod tests {
             bootstrap_servers,
             auth,
             read_only: false,
+            schema_registry: None,
         }
     }
 
