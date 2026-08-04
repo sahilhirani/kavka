@@ -4,11 +4,13 @@
 
   ONE FILE, NO BUILD SYSTEM. Open it in a browser and it is the site; drop the
   directory on any static host and it is the site there too. Every path is
-  relative, so it works from `https://kavka.io/`, from
+  relative, so it works from `https://sahilhirani.github.io/kavka/`, from
   `https://sahilhirani.github.io/kavka/` and from `file://` without changing a
   character. That is deliberate: GitHub Pages serves a project site under a
   path prefix, and a page built with absolute `/styles.css` silently loses its
-  stylesheet the moment it moves.
+  stylesheet the moment it moves. (`og:image` is the one exception — Open
+  Graph rejects a relative URL, so that one tag is absolute and has to be
+  edited if the site ever moves.)
 
   IT IS BUILT ON THE APP'S OWN DESIGN SYSTEM (docs/DESIGN.md), because the
   gap between a product's marketing page and the product is a thing people
@@ -17,11 +19,23 @@
   hairline; the ledger rule runs down the left of every section exactly as it
   runs down every table in the app.
 
-  SCREENSHOT PLACEHOLDERS are marked `TODO — screenshot` and render as mono
-  skeletons of the view that belongs there. They are NOT `<img>` tags with
-  missing files: a broken image icon is a worse placeholder than an honest
-  one, and the skeleton is the same device docs/DESIGN.md §7 asks for in an
-  empty state. Search this file for "TODO" to find all of them.
+  SCREENSHOTS live in `docs/screenshots/` and are referenced here as
+  `screenshots/<name>`, NOT `../docs/screenshots/<name>`. That is the layout
+  the Pages workflow builds (.github/workflows/pages.yml copies
+  `docs/screenshots/*` into `_site/screenshots/`), and it is the only layout
+  that survives being uploaded as an artifact — a path that climbs out of the
+  site root has nowhere to climb to. The cost is that opening this file from
+  `file://` shows broken images until you do the copy yourself:
+
+      cp -r ../docs/screenshots .        # or: ln -s ../docs/screenshots .
+
+  `docs-site/screenshots/` is gitignored, so neither is ever committed — the
+  screenshots live in exactly one place in git.
+
+  Every <img> carries width/height (the real pixel dimensions — 1296×839 for
+  the PNGs, 972×629 for the GIF) so the browser reserves the box before the
+  bytes arrive and nothing below it jumps, and real alt text, because the
+  a11y discipline the app is built to does not stop at the app.
 -->
 <html lang="en">
   <head>
@@ -35,17 +49,49 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0F1317" />
 
-    <!-- Social cards. TODO(human): add docs-site/og-card.png (1200×630) and
-         set an absolute og:image URL once the domain is registered — Open
-         Graph does not accept a relative one, so it is deliberately absent
-         rather than present and broken. -->
+    <!-- Social cards. The URL is absolute because Open Graph does not accept a
+         relative one — it is the single absolute path in this file, and it has
+         to be edited by hand if the site ever moves off this domain.
+
+         TODO(human): docs-site/og-card.png at 1200×630 is still worth making.
+         The screenshot below is 1296×839 (≈1.54:1); the card slot is 1.91:1,
+         so Facebook, Slack and X each crop it differently and the inspector
+         panel is the part that goes. A purpose-built card would say the name,
+         the one line and the licence at a size that survives a timeline. Until
+         then a correctly-cropped real screenshot beats no image at all, which
+         is what a summary_large_image card with no og:image degrades to. -->
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Kavka" />
+    <meta property="og:url" content="https://sahilhirani.github.io/kavka/" />
     <meta property="og:title" content="Kavka — a fast, fully open-source Kafka client" />
     <meta
       property="og:description"
       content="A free, open-source desktop client for Apache Kafka. Every feature included. No tiers, no licence keys, no server component."
     />
+    <meta
+      property="og:image"
+      content="https://sahilhirani.github.io/kavka/screenshots/06-message-browser.png"
+    />
+    <meta property="og:image:width" content="1296" />
+    <meta property="og:image:height" content="839" />
+    <meta
+      property="og:image:alt"
+      content="Kavka's message browser: a table of offsets, partitions, timestamps and keys, with the record inspector open on a JSON payload."
+    />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Kavka — a fast, fully open-source Kafka client" />
+    <meta
+      name="twitter:description"
+      content="A free, open-source desktop client for Apache Kafka. Every feature included. No tiers, no licence keys, no server component."
+    />
+    <meta
+      name="twitter:image"
+      content="https://sahilhirani.github.io/kavka/screenshots/06-message-browser.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="Kavka's message browser: a table of offsets, partitions, timestamps and keys, with the record inspector open on a JSON payload."
+    />
 
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -252,31 +298,62 @@
               </div>
             </div>
 
-            <!-- TODO — screenshot: the message browser on a busy topic, live
-                 tail running, inspector open on a JSON payload, dev cluster.
-                 Replace this whole <figure> with:
-                   <figure class="shot">
-                     <img src="screenshots/messages.png" width="1440" height="900"
-                          alt="Kavka's message browser: a virtualized table of
-                               offsets and JSON payloads with the inspector open." />
-                     <figcaption>…</figcaption>
-                   </figure>
-                 Capture at 1440×900, 2× DPI, dark theme, density "default". -->
+            <!-- The product, still and moving. Both are captured on the dev
+                 cluster (dev/docker-compose.yml) rather than a real one: a
+                 production screenshot puts a real bootstrap address on the
+                 internet, and the coral guardrail would make the page look
+                 like something is wrong. -->
             <figure class="shot">
-              <div class="shot-frame">
-                <span class="shot-todo">TODO — screenshot</span>
-                <pre class="shot-skeleton">
-OFFSET   TIMESTAMP     KEY        VALUE
-8 410  │ 12:04:19.204  order-8410  {"orderId": 8410, "status": "created"}
-8 411  │ 12:04:19.887  order-8411  {"orderId": 8411, "status": "paid"}
-8 412  │ 12:04:20.113  order-8412  {"orderId": 8412, "status": "failed"}
-8 413  │ 12:04:20.902  order-8413  {"orderId": 8413, "status": "shipped"}
-8 414  │ 12:04:21.455  order-8414  ∅ tombstone
-8 415  │ 12:04:21.980  order-8415  {"orderId": 8415, "status": "created"}</pre>
-              </div>
+              <img
+                src="screenshots/06-message-browser.png"
+                width="1296"
+                height="839"
+                loading="lazy"
+                decoding="async"
+                alt="The Kavka window browsing the orders topic. A table lists
+                     offset, partition, time, key and value for each record;
+                     one row is selected and the inspector on the right shows
+                     that record's JSON value — amount, orderId and status —
+                     with line numbers, above buttons to copy the value, the
+                     key or the whole record."
+              />
               <figcaption>
-                The message browser — virtualized, live-tailing, with the
-                payload inspector docked on the right.
+                The message browser — every partition in one chronological
+                table, the payload inspector docked on the right, and the app
+                naming how it read those bytes rather than leaving you to
+                guess.
+              </figcaption>
+            </figure>
+
+            <!-- The one moving thing on the page, and it needs a caveat the
+                 rest of the page does not. The loop runs ~16 s, which is past
+                 WCAG 2.2.2's five-second line for auto-playing motion, and a
+                 GIF cannot be paused. So <picture> hands anyone who has asked
+                 their OS for reduced motion the last frame instead — a still
+                 of the same table, full, reading "50 messages · Live". No
+                 script involved: the media query does it. -->
+            <figure class="shot shot-motion">
+              <picture>
+                <source
+                  srcset="screenshots/live-tail-still.png"
+                  media="(prefers-reduced-motion: reduce)"
+                />
+                <img
+                  src="screenshots/live-tail.gif"
+                  width="972"
+                  height="629"
+                  loading="lazy"
+                  decoding="async"
+                  alt="An animation of the same table with live tail switched
+                       on: new order records append to the bottom as they are
+                       produced, the message count climbs, and the status line
+                       reads Live."
+                />
+              </picture>
+              <figcaption>
+                Live tail. Records land as they are produced and the count
+                keeps up; the status line says <code>Live</code> in words, not
+                only in colour.
               </figcaption>
             </figure>
           </div>
@@ -430,26 +507,31 @@ OFFSET   TIMESTAMP     KEY        VALUE
               matters.
             </p>
 
-            <!-- TODO — screenshot: the About dialog's MCP section with the
-                 Cursor snippet visible, or a Claude Code transcript browsing a
-                 topic through the server. The second is the better story.
-                 Replace with an <img> as in the features section. -->
+            <!-- The About panel's MCP section, which is where a user meets
+                 this feature: the path to the binary on this machine and the
+                 exact command, ready to copy. The alternative was a Claude
+                 Code transcript — a better story, but a screenshot of somebody
+                 else's assistant is a screenshot of a claim, and this one is a
+                 screenshot of the thing you press. -->
             <figure class="shot">
-              <div class="shot-frame">
-                <span class="shot-todo">TODO — screenshot</span>
-                <pre class="shot-skeleton">
-&gt; which orders failed in the last hour?
-
-  kavka_search(topic: "orders", cel: 'value.status == "failed"')
-  → scanned 412 000 · matched 37 · 0 unevaluated
-
-  37 records, all on partitions 2 and 5, between 12:04 and 12:41.
-  Every one has "reason": "payment_declined".</pre>
-              </div>
+              <img
+                src="screenshots/08-about.png"
+                width="1296"
+                height="839"
+                loading="lazy"
+                decoding="async"
+                alt="Kavka's About panel. It states the core version, the
+                     AGPL-3.0 licence and the interface language, then an MCP
+                     SERVER section giving the path to the kavka-mcp binary on
+                     this machine and a ready-to-copy claude mcp add command,
+                     with commented notes saying the server is read-only unless
+                     KAVKA_MCP_ALLOW_WRITES is set and that production
+                     connections still refuse."
+              />
               <figcaption>
-                Claude Code reading a topic through Kavka's MCP server — the
-                same connection, the same keychain, no second set of
-                credentials.
+                The About panel prints the command with the installed path
+                already in it, and the copy button beside it. The same panel
+                carries the licence and the opt-in diagnostics switch.
               </figcaption>
             </figure>
           </div>

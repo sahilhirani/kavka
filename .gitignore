@@ -13,6 +13,13 @@ apps/desktop/src-tauri/gen/
 # committing it would guarantee a stale copy in the tree within a day.
 packaging/out/
 
+# Local preview of the site. The Pages workflow copies docs/screenshots into
+# the site root at build time (.github/workflows/pages.yml); doing the same
+# copy (or a symlink) by hand is how you preview docs-site/index.html from
+# file://. The screenshots live in exactly one place in git, and this is not
+# it.
+docs-site/screenshots/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -170,8 +170,10 @@ elevated.
   Open workaround instead.
 - **Notability.** homebrew-cask requires a project to be somewhat established
   before it accepts a cask (the current rule of thumb is 30 forks, 30 watchers
-  or 75 stars, and the repo is currently private). Submit after launch, not
-  with it.
+  or 75 stars). The repo is public now, so the clock has started — but a
+  repository that went public this week meets none of those thresholds, and
+  homebrew-cask closes submissions that do not. Submit when the numbers are
+  actually there, not on launch day.
 - **A stable download URL.** The `url` stanza interpolates `#{version}` and
   `#{arch}` so a version bump is a two-line change; keep the release asset
   naming stable or every future bump becomes a rewrite.

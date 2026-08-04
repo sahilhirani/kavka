@@ -503,43 +503,37 @@ a:hover {
   color: var(--accent-quiet);
 }
 
-/* ── Screenshot placeholders ──────────────────────────────────────────── */
+/* ── Screenshots ──────────────────────────────────────────────────────── */
 
-/* A 6-line mono skeleton of the thing that will be here, in --text-absent —
-   docs/DESIGN.md §7's rule for empty states, applied to a page that has no
-   screenshots yet. It renders correctly with no image files present, which is
-   the point: a broken <img> would be a worse placeholder than none. */
+/* Real captures of the app, from docs/screenshots/ — see the comment at the
+   top of index.html for why the path is `screenshots/…` and what that costs a
+   local preview.
+
+   NO CARDS HERE EITHER (Law 1). A screenshot already has a window frame drawn
+   inside it; wrapping that in a second frame with a radius and a shadow is the
+   thing this design system exists to refuse. Grouping is the top hairline and
+   the whitespace above it, the same as every other block on the page.
+
+   The reset above already gives every image `max-width: 100%; height: auto`,
+   so `width: 100%` here only stops a narrow capture (the 972px GIF) sitting
+   smaller than the 1296px stills beside it. Nothing overflows: the column is
+   `minmax(0, 1fr)` and the image can never exceed it. */
 .shot {
   margin-top: var(--s-8);
 }
 
-.shot-frame {
+.shot img {
+  width: 100%;
   background: var(--bg-sunken);
   border-top: 1px solid var(--hairline-strong);
-  padding: var(--s-8);
-  font-family: var(--font-mono);
-  font-size: var(--t-sm);
-  line-height: 22px;
-  color: var(--text-absent);
-  overflow-x: auto;
 }
 
-.shot-todo {
-  display: inline-block;
-  margin-bottom: var(--s-5);
-  padding: 1px var(--s-3);
-  border: 1px solid var(--warn);
-  border-radius: var(--r-control);
-  color: var(--warn);
-  font-size: var(--t-micro);
-  line-height: var(--lh-micro);
-  letter-spacing: var(--track-eyebrow);
-  text-transform: uppercase;
-}
-
-.shot-skeleton {
-  white-space: pre;
-  margin: 0;
+/* The GIF is 972px wide against the stills' 1296. At the current --page-w the
+   content column tops out at 872px, so both are scaled down and this cap
+   changes nothing today — it is here so that widening the page later cannot
+   quietly start upscaling the smaller capture into mush. */
+.shot-motion img {
+  max-width: 972px;
 }
 
 .shot figcaption {
@@ -796,10 +790,12 @@ a:hover {
     color: #000;
   }
 
+  /* Screenshots of a dark UI print as solid black rectangles and tell a reader
+     on paper nothing the caption does not. The captions stay. */
   .wire,
   .topnav,
   .hero-actions,
-  .shot-frame {
+  .shot img {
     display: none;
   }
 }

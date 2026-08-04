@@ -1,6 +1,6 @@
 # Kavka Build Roadmap — Full App
 
-Phases build the complete product from docs/FEATURES.md (this is the full-app plan, not an MVP cut). The app is fully open source (AGPL-3.0 — no closed forks) with every feature free — there is no premium tier and no server component. The repo stays private until the Phase 6 launch. Each phase ends with all listed acceptance criteria green in CI on both macOS and Windows.
+Phases build the complete product from docs/FEATURES.md (this is the full-app plan, not an MVP cut). The app is fully open source (AGPL-3.0 — no closed forks) with every feature free — there is no premium tier and no server component. The repo is public as of the Phase 6 launch. Each phase ends with all listed acceptance criteria green in CI on both macOS and Windows.
 
 ## Phase 0 — Foundation
 - Rust toolchain + CMake in CI; enable the `kafka` cargo feature (rust-rdkafka with cmake-build, vendored OpenSSL); GitHub Actions matrix builds signed dev artifacts for macOS Universal + Windows x64/ARM64
@@ -46,9 +46,9 @@ Phases build the complete product from docs/FEATURES.md (this is the full-app pl
 - **Accept:** SQL query over a live topic returns correct results vs a golden corpus; MCP server drives a topic browse from Claude Code
 
 ## Phase 6 — Polish & Launch
-- WCAG 2.2 AA pass; localization framework + first 5 languages; docs site at kavka.io (with a "Support Kavka" donate page); embedded single-node sandbox ("try without a cluster")
+- WCAG 2.2 AA pass; localization framework + first 5 languages; docs site (with a "Support Kavka" donate page) — live at [sahilhirani.github.io/kavka](https://sahilhirani.github.io/kavka/), with `kavka.io` still unregistered; embedded single-node sandbox ("try without a cluster")
 - Distribution: notarized dmg, signed NSIS/MSIX, Homebrew cask, winget, Chocolatey; crash reporting (opt-in)
-- Launch as open source: flip the GitHub repo private → public, README Buy Me a Coffee badge, Show HN / r/apachekafka posts leaning on the "open source Conduktor Desktop replacement" demand thread
+- Launch as open source: ~~flip the GitHub repo private → public~~ **done** — public at [github.com/sahilhirani/kavka](https://github.com/sahilhirani/kavka), with the site on GitHub Pages; README Buy Me a Coffee link; Show HN / r/apachekafka posts leaning on the "open source Conduktor Desktop replacement" demand thread still to write
 - Companion CLI sharing profiles (Phase 6 or fast-follow)
 - **Accept:** clean install → connected → browsing in under 2 minutes on both OSes, measured with first-time users
 
