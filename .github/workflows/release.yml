@@ -11,7 +11,8 @@
 # Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
 # Intel. Users download from the Releases page and install — no toolchain
 # needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
-# macOS users need right-click → Open the first time.
+# macOS calls un-notarized downloads "damaged" — the release body carries
+# the honest xattr instruction.
 name: Release
 
 on:
@@ -114,8 +115,10 @@ jobs:
             - **Windows:** `.exe` (NSIS installer) or `.msi`
             - **macOS:** `.dmg` — Apple Silicon (`aarch64`) or Intel (`x64`)
 
-            Binaries are not yet code-signed; on macOS use right-click → Open
-            on first launch. `SHA256SUMS.txt` is attached alongside them, with
+            Binaries are not yet code-signed. macOS will say the app "is
+            damaged" — it isn't (check `SHA256SUMS.txt`); that is Gatekeeper's
+            wording for un-notarized downloads. After installing, run
+            `xattr -cr /Applications/Kavka.app` once. Alongside the installers,
             ${{ steps.meta.outputs.note }}
 
             Kavka is free and open source (AGPL-3.0). If it saves you time:
@@ -227,7 +230,7 @@ jobs:
 
           # Download by asset id — a draft's tag does not exist in git yet.
           mkdir -p release-assets
-          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_.*\.(exe|msi|dmg)$")) | "\(.id) \(.name)"' |
+          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_") and (.name | endswith(".exe") or endswith(".msi") or endswith(".dmg"))) | "\(.id) \(.name)"' |
           while read -r ID NAME; do
             gh api "repos/${{ github.repository }}/releases/assets/$ID"               -H "Accept: application/octet-stream" > "release-assets/$NAME"
           done
@@ -240,7 +243,7 @@ jobs:
           # Housekeeping: drafts from superseded (cancelled) runs are invisible
           # but accumulate; sweep every OTHER v*-build.* draft before we go
           # public.
-          gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and (.tag_name | test(\"^v.*-build\.\")) and .tag_name != \"$TAG\") | .id" |
+          gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and (.tag_name | startswith(\"v\") and contains(\"-build.\")) and .tag_name != \"$TAG\") | .id" |
           while read -r STALE; do
             gh api -X DELETE "repos/${{ github.repository }}/releases/$STALE"
             echo "deleted stale draft $STALE"

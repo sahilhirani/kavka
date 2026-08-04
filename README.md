@@ -57,7 +57,13 @@ Prebuilt installers are attached to every [GitHub Release](https://github.com/sa
 
 Every release also carries `SHA256SUMS.txt`, so you can check what you downloaded against what CI built.
 
-**The binaries are not code-signed yet.** On macOS, right-click the app and choose *Open* the first time; on Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
+**The binaries are not code-signed yet.** On macOS, Gatekeeper says the app *"is damaged and can't be opened"* — that sentence is false, and the file's `SHA256SUMS.txt` entry proves it; it is macOS's wording for "downloaded and not notarized". After dragging Kavka to Applications, clear the quarantine flag once:
+
+```sh
+xattr -cr /Applications/Kavka.app
+```
+
+(Right-click → *Open* used to be enough; recent macOS no longer offers it for un-notarized apps.) On Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
 
 ### Package managers
 

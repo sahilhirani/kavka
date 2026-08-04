@@ -410,9 +410,12 @@
             </div>
 
             <p class="download-note">
-              <strong>The binaries are not code-signed yet.</strong> On macOS,
-              right-click the app and choose <em>Open</em> the first time; on
-              Windows, SmartScreen will warn you and you will need
+              <strong>The binaries are not code-signed yet.</strong> macOS will
+              tell you the app <em>"is damaged and can't be opened"</em> — it
+              is not damaged; that is Gatekeeper's wording for an un-notarized
+              download. After dragging Kavka to Applications, run
+              <code>xattr -cr /Applications/Kavka.app</code> once and it opens
+              normally. On Windows, SmartScreen will warn you and you will need
               <em>More info → Run anyway</em>. That is what an unsigned build
               from an independent developer looks like, and saying so here is
               better than letting the operating system say it first. Every
