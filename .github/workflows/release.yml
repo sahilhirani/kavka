@@ -1,7 +1,12 @@
-# Builds installers and publishes a GitHub Release whenever a version tag is
-# pushed to main:
+# Builds installers and publishes a GitHub Release two ways:
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+# 1. EVERY push/merge to main → an automated build release, tagged
+#    v<version>-build.<run> and marked PRERELEASE, so the Releases page
+#    always carries installers for the latest main without pretending each
+#    merge is a stable version.
+# 2. A version tag pushed by a human → the stable release path:
+#      git tag v0.1.0 && git push origin v0.1.0
+#    Only these get the package-manager manifests rendered and attached.
 #
 # Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
 # Intel. Users download from the Releases page and install — no toolchain
@@ -12,9 +17,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
+
+# Rapid merges to main supersede each other's build; a tag build is never
+# cancelled.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,14 +70,40 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # One rule for both triggers. A tag push releases as itself; a main
+      # push mints v<version>-build.<run> (run number is identical across the
+      # three matrix legs, so they all attach to one release).
+      - name: Release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+            NAME="Kavka $GITHUB_REF_NAME"
+            PRERELEASE=false
+            NOTE="the package-manager manifests rendered for this version."
+          else
+            VERSION=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
+            TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+            NAME="Kavka ${VERSION} build ${GITHUB_RUN_NUMBER}"
+            PRERELEASE=true
+            NOTE="This is an automated build of main at ${GITHUB_SHA:0:7} — the newest Kavka there is, marked pre-release because no human blessed it. Stable versions carry a plain v* tag."
+          fi
+          {
+            echo "tag=$TAG"
+            echo "name=$NAME"
+            echo "prerelease=$PRERELEASE"
+            echo "note=$NOTE"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "Kavka ${{ github.ref_name }}"
+          tagName: ${{ steps.meta.outputs.tag }}
+          releaseName: ${{ steps.meta.outputs.name }}
           releaseBody: |
             Downloads:
             - **Windows:** `.exe` (NSIS installer) or `.msi`
@@ -73,12 +111,12 @@ jobs:
 
             Binaries are not yet code-signed; on macOS use right-click → Open
             on first launch. `SHA256SUMS.txt` is attached alongside them, with
-            the package-manager manifests rendered for this version.
+            ${{ steps.meta.outputs.note }}
 
             Kavka is free and open source (AGPL-3.0). If it saves you time:
             https://buymeacoffee.com/sahilhirani ☕
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           args: ${{ matrix.args }}
 
   # Renders the package-manager manifests against the release that was just
@@ -99,6 +137,9 @@ jobs:
   manifests:
     name: Package manifests
     needs: build
+    # Stable tags only: winget/choco/homebrew manifests for every merge to
+    # main would be noise nobody can submit anyway.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,4 +191,28 @@ jobs:
           # prove it mirrored the right bytes.
           (cd release-assets && sha256sum Kavka_* > ../manifests/SHA256SUMS.txt)
           gh release upload "${{ github.ref_name }}" manifests/* \
+            --repo "${{ github.repository }}" --clobber
+
+  # Automated main builds still get their checksums — the release body
+  # promises SHA256SUMS.txt on every release, not only the blessed ones.
+  checksums:
+    name: Checksums (automated build)
+    needs: build
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checksum the release's installers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(gh api "repos/${{ github.repository }}/contents/apps/desktop/src-tauri/tauri.conf.json?ref=${{ github.sha }}" \
+            --jq '.content' | base64 -d | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          TAG="v${VERSION}-build.${{ github.run_number }}"
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --dir release-assets \
+            --pattern 'Kavka_*.exe' --pattern 'Kavka_*.msi' --pattern 'Kavka_*.dmg'
+          (cd release-assets && sha256sum Kavka_* > ../SHA256SUMS.txt)
+          gh release upload "$TAG" SHA256SUMS.txt \
             --repo "${{ github.repository }}" --clobber

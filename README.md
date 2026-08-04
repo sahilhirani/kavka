@@ -31,7 +31,7 @@ packaging/              winget / Chocolatey / Homebrew manifest templates
 
 ## Installing
 
-Prebuilt installers are attached to every [GitHub Release](https://github.com/sahilhirani/kavka/releases), built by CI when a version tag (`v*`) is pushed. Download, install, done. Until the first release, build from source below.
+Prebuilt installers are attached to every [GitHub Release](https://github.com/sahilhirani/kavka/releases). Every merge to `main` publishes an automated build (tagged `v<version>-build.<n>`, marked pre-release) so the newest Kavka is always downloadable; stable versions carry a plain `v*` tag pushed by a human. Download, install, done.
 
 | Platform | Asset | Requires |
 |---|---|---|
