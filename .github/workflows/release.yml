@@ -11,7 +11,8 @@
 # Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
 # Intel. Users download from the Releases page and install — no toolchain
 # needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
-# macOS users need right-click → Open the first time.
+# macOS calls un-notarized downloads "damaged" — the release body carries
+# the honest xattr instruction.
 name: Release
 
 on:
@@ -114,8 +115,10 @@ jobs:
             - **Windows:** `.exe` (NSIS installer) or `.msi`
             - **macOS:** `.dmg` — Apple Silicon (`aarch64`) or Intel (`x64`)
 
-            Binaries are not yet code-signed; on macOS use right-click → Open
-            on first launch. `SHA256SUMS.txt` is attached alongside them, with
+            Binaries are not yet code-signed. macOS will say the app "is
+            damaged" — it isn't (check `SHA256SUMS.txt`); that is Gatekeeper's
+            wording for un-notarized downloads. After installing, run
+            `xattr -cr /Applications/Kavka.app` once. Alongside the installers,
             ${{ steps.meta.outputs.note }}
 
             Kavka is free and open source (AGPL-3.0). If it saves you time:
