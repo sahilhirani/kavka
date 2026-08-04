@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "kafka")]
 use crate::connection::auth::KavkaClientContext;
 #[cfg(feature = "kafka")]
+use crate::quiet::SourceSilence;
+#[cfg(feature = "kafka")]
 use crate::serdes::{self, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
@@ -88,8 +90,16 @@ const FETCH_DEADLINE: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How long a fetch waits for its *first* record before concluding there is
-/// nothing to read. Generous, because this covers the broker's own connect,
-/// metadata and first-fetch latency on a cold cluster.
+/// nothing to read.
+///
+/// **Deliberately shorter than [`crate::quiet::QUIET_BEFORE_DATA`]**, which the
+/// scan engines share. A browse is interactive and its partiality is visible —
+/// the user gets a list, and a short list is obviously a short list, with a
+/// re-fetch one click away. A scan's is not: `sql` runs an aggregate over
+/// whatever arrived, and `count(*)` answering `0` because the client was still
+/// connecting looks exactly like a correct answer. So the scans buy their
+/// certainty with a longer cold start and this one buys responsiveness with a
+/// shorter one, bounded either way by [`FETCH_DEADLINE`].
 #[cfg(feature = "kafka")]
 const QUIET_BEFORE_DATA: Duration = Duration::from_secs(5);
 
@@ -215,14 +225,18 @@ pub fn fetch_messages(
         plan.iter().map(|slot| (slot.partition, slot.end)).collect();
     let mut records: Vec<MessageRecord> = Vec::new();
     let deadline = Instant::now() + FETCH_DEADLINE;
-    let mut quiet_deadline = Instant::now() + QUIET_BEFORE_DATA;
+    // Same clock as the scan engines ([`crate::quiet`]) on this fetch's own,
+    // shorter budgets: the tiering is what matters — a cold client must not read
+    // as a quiet topic — and so is charging the decode to the decode.
+    let mut silence =
+        SourceSilence::waiting_for_first_with(Instant::now(), QUIET_BEFORE_DATA, QUIET_AFTER_DATA);
 
     // `keep_newest` reads the whole union of the per-partition windows — it
     // cannot know which records are the newest until it has seen all of them —
     // and prunes the buffer instead of stopping early.
     while !pending.is_empty() && (keep_newest || records.len() < max_messages) {
         let now = Instant::now();
-        if now >= deadline || now >= quiet_deadline {
+        if now >= deadline || silence.expired(now) {
             break;
         }
         // Checked once per poll, which is also the worst-case latency of a
@@ -237,7 +251,7 @@ pub fn fetch_messages(
                 return Err(Error::Other(format!("reading {}: {e}", spec.topic)));
             }
             Some(Ok(message)) => {
-                quiet_deadline = Instant::now() + QUIET_AFTER_DATA;
+                silence.heard_from_source(Instant::now());
                 let partition = message.partition();
                 let offset = message.offset();
                 let Some(&end) = pending.get(&partition) else {
@@ -256,6 +270,10 @@ pub fn fetch_messages(
                     max_display,
                     decoder.as_ref(),
                 ));
+                // `record` decodes through the schema registry, whose lookup
+                // timeout is longer than this fetch's whole after-data budget.
+                // A slow registry is not a quiet topic.
+                silence.waited_on_decode(Instant::now());
                 if offset + 1 >= end {
                     pending.remove(&partition);
                 }

@@ -59,6 +59,10 @@ pub mod metrics;
 pub mod nlq;
 pub mod produce;
 pub mod profiles;
+/// Ungated on purpose: the quiet deadline every scan engine stops on is pure
+/// arithmetic over a clock it is handed, so its correctness is a unit test
+/// rather than a five-second sleep against a broker.
+pub(crate) mod quiet;
 pub mod search;
 pub mod serdes;
 /// Ungated, like [`search`], and for the same reason: the wire types, the

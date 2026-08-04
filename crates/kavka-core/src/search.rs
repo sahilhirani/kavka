@@ -77,6 +77,8 @@ use crate::connection::ClusterConnection;
 #[cfg(feature = "kafka")]
 use crate::profiles::SchemaRegistryConfig;
 #[cfg(feature = "kafka")]
+use crate::quiet::{SourceSilence, METADATA_TIMEOUT};
+#[cfg(feature = "kafka")]
 use crate::serdes::{self, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
 use crate::sr::SchemaRegistry;
@@ -515,27 +517,11 @@ fn bind<V: cel::objects::TryIntoValue>(
 #[cfg(feature = "kafka")]
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// How long a worker waits for its *first* record before concluding there is
-/// nothing to read. Generous: this covers the broker's connect, metadata and
-/// first-fetch latency on a cold cluster.
-#[cfg(feature = "kafka")]
-const QUIET_BEFORE_DATA: Duration = Duration::from_secs(10);
-
-/// How long a worker waits between records once data is flowing.
-///
-/// The end watermarks captured at the start are the primary completion signal,
-/// but they are not sufficient on their own: transaction markers and aborted
-/// messages occupy offsets the consumer never receives, so on a transactional
-/// topic the next offset can never reach the watermark and a watermark-only
-/// loop would run until the user gave up. Longer than
-/// [`crate::consume`]'s equivalent because a search is not an interactive
-/// fetch — it is expected to run for minutes, and a slow broker mid-scan must
-/// not read as "finished".
-#[cfg(feature = "kafka")]
-const QUIET_AFTER_DATA: Duration = Duration::from_secs(5);
-
-#[cfg(feature = "kafka")]
-const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+// How long a worker waits for its first record, and between records once they
+// are flowing, both live in [`crate::quiet`] — shared with the other scan
+// engines so that "the source has gone quiet" means the same thing in all of
+// them, and so that the waits which are NOT the source (a decode through the
+// schema registry, here) are charged the same way everywhere.
 
 /// Most a single [`SearchSession::next_results`] hands back. Bounds one IPC
 /// event so a burst cannot produce a 10,000-record payload the webview has to
@@ -1051,14 +1037,17 @@ fn scan(worker: Worker) {
     let mut filter_error: Option<String> = None;
     // partition -> the end watermark it must reach to be finished.
     let mut pending: HashMap<i32, i64> = slots.iter().map(|s| (s.partition, s.end)).collect();
-    let mut quiet_deadline = Instant::now() + QUIET_BEFORE_DATA;
+    // The cold-start tier is spent on the first record only, and `consider`'s
+    // decode below is explicitly not the source going quiet — see
+    // [`crate::quiet`] for both.
+    let mut silence = SourceSilence::waiting_for_first(Instant::now());
 
     while !pending.is_empty() {
         if shared.cancel.is_cancelled() {
             tracing::debug!(%topic, "search cancelled; the worker is leaving");
             break;
         }
-        if Instant::now() >= quiet_deadline {
+        if silence.expired(Instant::now()) {
             // Not an error: a transactional topic's offsets can be occupied by
             // markers the consumer never receives, so the watermark alone
             // cannot always be reached. See QUIET_AFTER_DATA.
@@ -1088,7 +1077,7 @@ fn scan(worker: Worker) {
                 break;
             }
             Some(Ok(message)) => {
-                quiet_deadline = Instant::now() + QUIET_AFTER_DATA;
+                silence.heard_from_source(Instant::now());
                 let partition = message.partition();
                 let offset = message.offset();
                 let (Some(&end), Some(&cursor)) =
@@ -1124,6 +1113,11 @@ fn scan(worker: Worker) {
                     // filter that could not look.
                     shared.note_unevaluated(e);
                 }
+                // `consider` decodes when a CEL filter needs it to, and that
+                // decode can sit on a schema registry lookup for longer than the
+                // whole after-data budget. None of it is the broker going quiet,
+                // so none of it is charged to the broker.
+                silence.waited_on_decode(Instant::now());
                 if offset + 1 >= end {
                     pending.remove(&partition);
                     shared.complete(cursor);

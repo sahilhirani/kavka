@@ -102,6 +102,11 @@ use crate::connection::auth::KavkaClientContext;
 use crate::connection::ClusterConnection;
 #[cfg(feature = "kafka")]
 use crate::profiles::SchemaRegistryConfig;
+// The clock this scan stops on, shared with the other engines: what counts as
+// the source going quiet has one definition, and the decode below deliberately
+// does not count. See [`crate::quiet`].
+#[cfg(feature = "kafka")]
+use crate::quiet::{SourceSilence, METADATA_TIMEOUT};
 #[cfg(feature = "kafka")]
 use crate::serdes::{self, Encoding, MessageRecord, SharedDecoder, DEFAULT_MAX_VALUE_BYTES};
 #[cfg(feature = "kafka")]
@@ -773,23 +778,9 @@ const ROW_BATCH: usize = 500;
 #[cfg(feature = "kafka")]
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// How long the scan waits for its *first* record before concluding there is
-/// nothing to read. Generous: this covers the broker's connect, metadata and
-/// first-fetch latency on a cold cluster.
-#[cfg(feature = "kafka")]
-const QUIET_BEFORE_DATA: Duration = Duration::from_secs(10);
-
-/// How long the scan waits between records once data is flowing.
-///
-/// The captured end watermarks are the primary completion signal and are not
-/// sufficient alone: transaction markers and aborted records occupy offsets a
-/// consumer never receives, so on a transactional topic the cursor cannot reach
-/// the watermark and a watermark-only loop would never start the query.
-#[cfg(feature = "kafka")]
-const QUIET_AFTER_DATA: Duration = Duration::from_secs(5);
-
-#[cfg(feature = "kafka")]
-const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+// The quiet deadline (and the metadata budget its cold-start tier is derived
+// from) live in [`crate::quiet`], shared with the other scan engines so that
+// "the source has gone quiet" means the same thing in all of them.
 
 /// The options every query is planned under: **no DDL, no DML, no statements**.
 ///
@@ -1268,7 +1259,10 @@ fn scan(
     let mut pack: Vec<Row> = Vec::with_capacity(BATCH_ROWS.min(scan_cap.max(1) as usize));
     let mut scanned: u64 = 0;
     let mut bytes: usize = 0;
-    let mut quiet_deadline = Instant::now() + QUIET_BEFORE_DATA;
+    // The cold-start tier is spent on the first record only, and the decode
+    // below is explicitly not the source going quiet — see [`crate::quiet`] for
+    // both, and for the flake that put the type there.
+    let mut silence = SourceSilence::waiting_for_first(Instant::now());
 
     while !pending.is_empty() {
         if shared.cancel.is_cancelled() {
@@ -1288,7 +1282,7 @@ fn scan(
             tracing::debug!(%topic, scanned, bytes, "sql scan stopped at its memory cap");
             break;
         }
-        if Instant::now() >= quiet_deadline {
+        if silence.expired(Instant::now()) {
             // Not an error: a transactional topic's offsets can be occupied by
             // markers a consumer never receives, so the watermark alone cannot
             // always be reached, and everything readable HAS been read.
@@ -1338,7 +1332,7 @@ fn scan(
             None => continue,
             Some(Err(e)) => return Err(Error::Other(format!("reading {topic}: {e}"))),
             Some(Ok(message)) => {
-                quiet_deadline = Instant::now() + QUIET_AFTER_DATA;
+                silence.heard_from_source(Instant::now());
                 let partition = message.partition();
                 let offset = message.offset();
                 let Some(&end) = pending.get(&partition) else {
@@ -1352,7 +1346,13 @@ fn scan(
                     pending.remove(&partition);
                     continue;
                 }
+                // `value_text` decodes through the schema registry, and one
+                // lookup there is bounded by an HTTP timeout twice the whole
+                // after-data budget — for a single record. Charging it to the
+                // source would let a slow registry, not a quiet broker, decide
+                // that this scan is short and cap the answer.
                 let row = Row::from_record(record(&message, registry, decoder));
+                silence.waited_on_decode(Instant::now());
                 bytes += row.footprint();
                 pack.push(row);
                 scanned += 1;
@@ -2555,6 +2555,49 @@ mod cluster {
             .expect("commit the transaction");
     }
 
+    /// Reads `topic` once through the browse path, so the *next* client this
+    /// process opens starts warm.
+    ///
+    /// Nothing about the scan under test needs this; a cold runner does. The
+    /// first consumer a process opens against a freshly started cluster pays for
+    /// librdkafka's init, a TCP connect, a metadata round trip and the group
+    /// coordinator lookup that a `group.id` client makes even when it assigns by
+    /// hand — and on a brand-new broker that lookup is what creates
+    /// `__consumer_offsets`. On a loaded CI runner that bill has landed on the
+    /// far side of the scan's cold-start budget, and a scan that read nothing
+    /// answers `count(*) = 0`, which looks exactly like a correct answer.
+    ///
+    /// So the bill is paid here, before the clock the test is actually about.
+    /// It is an assertion too, and deliberately: if the fixture is not readable
+    /// this fails here, naming the fixture, instead of downstream as a wrong
+    /// count.
+    fn warm_the_consumer_path(conn: &ClusterConnection, topic: &str, at_least: usize) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let read = crate::consume::fetch_messages(
+                conn,
+                None,
+                &crate::consume::FetchSpec {
+                    topic: topic.into(),
+                    seek: SeekSpec::Earliest,
+                    partitions: None,
+                    max_messages: at_least as u32,
+                    max_value_bytes: None,
+                },
+                None,
+            )
+            .expect("browse the fixture");
+            if read.len() >= at_least {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{topic} never served its {at_least} seeded records to a plain browse, \
+                 so there is nothing for the scan to be right or wrong about"
+            );
+        }
+    }
+
     fn spec(topic: &str, query: &str) -> SqlSpec {
         SqlSpec {
             topic: topic.into(),
@@ -2900,14 +2943,30 @@ mod cluster {
         crate::admin::create_topic(&conn, &topic, 1, 1, &[]).expect("create topic");
         await_topic(&conn, &topic, 1);
         seed_transactional(&topic, COUNT);
+        // A cold client is not what this test is about; see the helper.
+        warm_the_consumer_path(&conn, &topic, COUNT);
 
-        let (rows, progress, _) = run_query(&conn, &spec(&topic, "SELECT count(*) FROM messages"));
+        // Bounded, and it retries ONE thing: a scan that read nothing at all,
+        // which on a loaded runner means the client was still connecting and not
+        // that the flag under test is wrong. Every other outcome — including a
+        // scan that read some records — falls straight through to the assertions
+        // below, so a `capped` that stopped being set fails on the first attempt
+        // and a scan that reads the wrong number fails on it too.
+        let mut attempts = 0;
+        let (rows, progress) = loop {
+            attempts += 1;
+            let (rows, progress, _) =
+                run_query(&conn, &spec(&topic, "SELECT count(*) FROM messages"));
+            if progress.scanned > 0 || attempts == 3 {
+                break (rows, progress);
+            }
+        };
         let _ = crate::admin::delete_topic(&conn, &topic);
 
         assert_eq!(
             number(&rows[0][0]),
             COUNT as i64,
-            "every readable record was scanned"
+            "every readable record was scanned (attempt {attempts})"
         );
         assert_eq!(progress.scanned, COUNT as u64);
         assert!(
