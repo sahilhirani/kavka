@@ -1793,10 +1793,13 @@ struct SandboxStatus {
     /// recognise. The `Show details ▾` half of docs/DESIGN.md §7's error
     /// doctrine — verbatim, never the title.
     ///
-    /// The one state where it is not a broker-style reply is
-    /// [`DockerState::Remote`], where it is **the endpoint itself** — the UI
-    /// puts that in the sentence rather than behind a disclosure, because it
-    /// is the only part of that refusal anybody can act on.
+    /// Two states where it is not a broker-style reply. For
+    /// [`DockerState::Remote`] it is **the endpoint itself** — the UI puts
+    /// that in the sentence rather than behind a disclosure, because it is the
+    /// only part of that refusal anybody can act on. For
+    /// [`DockerState::Absent`] nothing said anything, so it is **Kavka's own
+    /// search** ([`docker_search_detail`]) — or the OS's spawn error, and the
+    /// string says which.
     detail: Option<String>,
 }
 
@@ -1897,9 +1900,12 @@ impl Ran {
 /// drains it into a bounded buffer, and the loop only ever looks at what they
 /// have collected.
 ///
+/// Takes the program as a **path** rather than a name, because on macOS the
+/// name is not enough — see [`docker_binary`].
+///
 /// Called only from the blocking pool.
 fn run_bounded(
-    program: &str,
+    program: &Path,
     args: &[&str],
     timeout: Duration,
     mut on_tick: impl FnMut(Option<&str>, Duration),
@@ -2026,6 +2032,168 @@ fn no_console(command: &mut Command) {
 #[cfg(not(windows))]
 fn no_console(_command: &mut Command) {}
 
+// ── Finding the Docker CLI ─────────────────────────────────────────────────
+//
+// THE BUG THIS EXISTS FOR. `Command::new("docker")` searches the process's own
+// `PATH`, and on macOS a GUI application does not have the user's. Apps
+// launched from Finder, the Dock or Spotlight are started by `launchd`, which
+// hands them its own minimal environment — `PATH=/usr/bin:/bin:/usr/sbin:/sbin`
+// — and never sources `.zprofile`, `.zshrc` or anything else that a terminal
+// would. Docker Desktop puts its CLI in `/usr/local/bin` (with the real binary
+// inside the app bundle), and `/usr/local/bin` is not on that list. So on a Mac
+// with Docker Desktop installed AND RUNNING, the probe got `NotFound` and Kavka
+// said "Docker is not installed" — a refusal that was both wrong and
+// unfalsifiable, because it never said where it had looked.
+//
+// Windows was never affected: there is no launchd-style stripped environment
+// there, and a process started from Explorer inherits the same `PATH` a shell
+// would. Linux GUI sessions are usually fine too, but they are not guaranteed
+// to be (a `.desktop` launch inherits the session manager's environment), so
+// they get the same treatment for the same price.
+//
+// The fix is to look where the binary actually is when `PATH` does not say.
+// Kavka does NOT synthesise a PATH or run a login shell to ask one for it:
+// spawning `zsh -lc 'which docker'` would execute the user's dotfiles — an
+// arbitrary-code-execution surface for a question that a list of three paths
+// answers.
+
+/// The places a `docker` binary lives when the environment does not say, in
+/// the order they are tried.
+///
+/// macOS: Docker Desktop's own symlink first (`/usr/local/bin/docker` — what
+/// its installer creates, on Intel and Apple Silicon alike), then Homebrew's
+/// Apple-Silicon prefix for `brew install docker` / Colima / Rancher Desktop
+/// users, then the binary inside the app bundle, which is where Docker Desktop
+/// keeps the real thing when the symlink was never created or has been removed.
+///
+/// Linux: the distro package, then a manual install, then the snap.
+///
+/// Windows is deliberately EMPTY. Its GUI processes inherit the user's `PATH`,
+/// so the spawn probe in [`docker_binary`] already covers it — and a hard-coded
+/// `C:\Program Files\Docker\…` would be a second thing to keep in step with
+/// Docker's installer for no gain.
+fn docker_candidates() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        &[
+            "/usr/bin/docker",
+            "/usr/local/bin/docker",
+            "/snap/bin/docker",
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        &[]
+    }
+}
+
+/// The ordering policy, with both ways of asking the world injected so the
+/// order can be tested without a Docker on the machine running the test.
+///
+/// **`PATH` wins.** Somebody who has put a `docker` shim on their `PATH` —
+/// Colima, Podman's `docker` alias, a wrapper that sets `DOCKER_HOST` — means
+/// it, and a hard-coded `/usr/local/bin/docker` that quietly outranked it would
+/// be Kavka choosing a different Docker than the user's own terminal does. The
+/// candidate list is a FALLBACK for the launchd case, not a preference.
+fn resolve_docker(
+    candidates: &[&str],
+    on_path: impl Fn() -> bool,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if on_path() {
+        // The bare name, not a resolved absolute path: this is exactly what a
+        // shell would run, and re-resolving it ourselves could pick a different
+        // one than `PATH` order does.
+        return Some(PathBuf::from("docker"));
+    }
+    candidates
+        .iter()
+        .map(Path::new)
+        .find(|candidate| exists(candidate))
+        .map(Path::to_path_buf)
+}
+
+/// The cheap spawn probe: is there a `docker` on this process's `PATH` at all?
+///
+/// `--version` is answered by the CLI itself and never touches the daemon, so
+/// this is a few milliseconds whether or not Docker Desktop is running — which
+/// matters, because this runs on first paint. The question is whether the
+/// binary EXISTS, so a non-zero exit still counts: `spawn_failed` is the only
+/// answer that means "there is nothing here".
+fn docker_on_path() -> bool {
+    !run_bounded(
+        Path::new("docker"),
+        &["--version"],
+        DOCKER_PROBE_TIMEOUT,
+        |_, _| {},
+    )
+    .spawn_failed
+}
+
+/// The `docker` Kavka runs, resolved once per process.
+///
+/// Cached because every playground operation spawns two or three children and
+/// the answer cannot change while the app is open — a Docker installed
+/// mid-session is a restart, not a re-probe, and paying for a spawn on every
+/// `docker compose ps` would be a probe on the first-paint path.
+fn docker_binary() -> Option<&'static Path> {
+    static DOCKER: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DOCKER
+        .get_or_init(|| resolve_docker(docker_candidates(), docker_on_path, |path| path.exists()))
+        .as_deref()
+}
+
+/// Where Kavka looked, verbatim, for the `Show details` half of the "no Docker"
+/// refusal (docs/DESIGN.md §7: when we know the answer, put the answer in the
+/// message). We know precisely where we looked, so a user whose Docker is in a
+/// fourth place can see that in one glance instead of arguing with a program
+/// that insists their installed Docker is not installed.
+///
+/// It names itself rather than relying on a caller's header, because the other
+/// thing a failed spawn produces is an OS error — and a block labelled "where
+/// Kavka looked" containing `Permission denied` would be neither.
+fn docker_search_detail() -> String {
+    let candidates = docker_candidates();
+    if candidates.is_empty() {
+        return "Kavka looked for `docker` on PATH and found nothing.".to_string();
+    }
+    format!(
+        "Kavka looked for `docker` on PATH, then at:\n{}",
+        candidates.join("\n")
+    )
+}
+
+/// Runs the resolved Docker CLI, or reports the same `spawn_failed` a missing
+/// binary would — with the search list as the reason, so the failure explains
+/// itself wherever it is quoted.
+///
+/// EVERY docker invocation in the playground goes through here. A second
+/// `Command::new("docker")` anywhere in this file is the macOS bug again.
+fn run_docker(
+    args: &[&str],
+    timeout: Duration,
+    on_tick: impl FnMut(Option<&str>, Duration),
+) -> Ran {
+    let Some(docker) = docker_binary() else {
+        return Ran {
+            ok: false,
+            spawn_failed: true,
+            timed_out: false,
+            out: Vec::new(),
+            err: vec![docker_search_detail()],
+        };
+    };
+    run_bounded(docker, args, timeout, on_tick)
+}
+
 /// Where the Docker CLI is actually pointing, once `DOCKER_HOST` and the
 /// active context have both had their say.
 ///
@@ -2088,8 +2256,7 @@ fn resolve_endpoint(docker_host: Option<&str>, context_host: Option<&str>) -> En
 /// away by, and refusing to start a playground because a *query about* the
 /// endpoint failed would be the wrong direction to fail in.
 fn docker_context_host() -> Option<String> {
-    let ran = run_bounded(
-        "docker",
+    let ran = run_docker(
         &[
             "context",
             "inspect",
@@ -2104,14 +2271,17 @@ fn docker_context_host() -> Option<String> {
 
 /// Whether Docker is installed, running, **on this machine**, and has Compose.
 fn probe_docker() -> (DockerState, Option<String>) {
-    let info = run_bounded(
-        "docker",
+    let info = run_docker(
         &["info", "--format", "{{.ServerVersion}}"],
         DOCKER_PROBE_TIMEOUT,
         |_, _| {},
     );
     if info.spawn_failed {
-        return (DockerState::Absent, None);
+        // The detail is where Kavka looked — the one thing that makes this
+        // refusal checkable by the person reading it. See
+        // [`docker_search_detail`], and the header above [`docker_candidates`]
+        // for the macOS launchd `PATH` this used to get wrong.
+        return (DockerState::Absent, Some(info.tail(4)));
     }
     if info.timed_out {
         return (
@@ -2138,8 +2308,7 @@ fn probe_docker() -> (DockerState, Option<String>) {
     {
         return (DockerState::Remote, Some(endpoint));
     }
-    let compose = run_bounded(
-        "docker",
+    let compose = run_docker(
         &["compose", "version", "--short"],
         DOCKER_PROBE_TIMEOUT,
         |_, _| {},
@@ -2153,8 +2322,7 @@ fn probe_docker() -> (DockerState, Option<String>) {
 /// Whether the playground's containers are up right now.
 fn playground_running(compose_file: &Path) -> bool {
     let file = compose_file.to_string_lossy().into_owned();
-    let ran = run_bounded(
-        "docker",
+    let ran = run_docker(
         &[
             "compose",
             "-p",
@@ -2271,6 +2439,12 @@ fn start_playground(
             // The remote endpoint is already in the sentence; quoting it a
             // second time under "Docker said" would read as two problems.
             Some(_) if docker == DockerState::Remote => trouble,
+            // NOT "Docker said": when there is no Docker, nothing said
+            // anything — this detail is Kavka's own search (or the OS's spawn
+            // error), and attributing it to a program that never ran is the
+            // kind of small lie §7 is against. It names itself instead — see
+            // [`docker_search_detail`].
+            Some(detail) if docker == DockerState::Absent => format!("{trouble}\n\n{detail}"),
             Some(detail) => format!("{trouble}\n\nDocker said:\n{detail}"),
             None => trouble,
         }));
@@ -2297,8 +2471,7 @@ fn start_playground(
         UP.1,
         Some("The first run pulls the Kafka image — about 400 MB.".to_string()),
     );
-    let up = run_bounded(
-        "docker",
+    let up = run_docker(
         &[
             "compose",
             "-p",
@@ -2452,8 +2625,7 @@ fn stop_playground(app: &AppHandle, compose: Option<&Path>) -> kavka_core::Resul
 
     let file = compose.to_string_lossy().into_owned();
     ladder.running(DOWN.0, DOWN.1, None);
-    let down = run_bounded(
-        "docker",
+    let down = run_docker(
         &["compose", "-p", PLAYGROUND_PROJECT, "-f", &file, "down"],
         PLAYGROUND_STOP_TIMEOUT,
         |line, elapsed| {
@@ -2470,7 +2642,13 @@ fn stop_playground(app: &AppHandle, compose: Option<&Path>) -> kavka_core::Resul
     );
     if down.spawn_failed || down.timed_out || !down.ok {
         let said = if down.spawn_failed {
-            docker_trouble(DockerState::Absent, None)
+            // The tail is the search list — or the OS's own spawn error — and
+            // says which it is. See [`docker_search_detail`].
+            format!(
+                "{}\n\n{}",
+                docker_trouble(DockerState::Absent, None),
+                down.tail(4)
+            )
         } else if down.timed_out {
             "Docker didn't finish stopping the playground in time.".to_string()
         } else {
@@ -2507,10 +2685,17 @@ fn docker_trouble(state: DockerState, endpoint: Option<&str>) -> String {
              `docker context use default` (or clear DOCKER_HOST), then check again.",
             where_ = endpoint.unwrap_or("another machine"),
         ),
+        // NOT "there's no Docker on this machine" any more. Kavka cannot know
+        // that — all it knows is where it looked, which is what the detail
+        // beside this says. A Mac with Docker Desktop running was told it had
+        // no Docker for exactly this reason (see [`docker_candidates`]), and a
+        // refusal that had named its search would have been reported as a bug
+        // against Kavka in a day rather than lived with.
         DockerState::Absent => {
-            "There's no `docker` command on this machine. Install Docker Desktop (or any \
-             Docker-compatible runtime with the `compose` plugin) and Kavka can start a broker \
-             for you."
+            "Kavka couldn't find a `docker` command — not on PATH, and not in the usual install \
+             locations, which the details list. Install Docker Desktop (or any Docker-compatible \
+             runtime with the `compose` plugin) and Kavka can start a broker for you. If your \
+             Docker is somewhere that isn't on that list, that's a bug in Kavka worth reporting."
                 .to_string()
         }
         DockerState::Stopped => {
@@ -5607,6 +5792,9 @@ mod tests {
     use kavka_core::masking::MaskTarget;
     use kavka_core::profiles::{AuthConfig, MetricsEndpointConfig};
     use kavka_core::serdes::{DecodedPayload, Encoding, HeaderEntry};
+    // Counts how often the Docker fallback list is consulted, in a closure the
+    // resolver takes by `Fn` — see `docker_is_looked_for_on_path_first…`.
+    use std::cell::Cell;
 
     fn payload(text: &str) -> DecodedPayload {
         DecodedPayload {
@@ -6759,6 +6947,115 @@ mod tests {
     // state produces which sentence, and which stream a failure is quoted
     // from — the two places this feature decides something rather than
     // forwarding it.
+
+    /// THE macOS FIELD BUG, as a unit test: `PATH` first, then the install
+    /// locations, in order, and nothing at all when there is nothing there.
+    ///
+    /// Both ways of asking the world are injected, so this runs identically on
+    /// a CI box with Docker and a laptop without one — the thing under test is
+    /// the ORDER, which is what was wrong: a Mac GUI app gets launchd's
+    /// `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), Docker Desktop installs to
+    /// `/usr/local/bin`, and the old code stopped at the first question.
+    #[test]
+    fn docker_is_looked_for_on_path_first_and_then_where_it_installs() {
+        let candidates = ["/one/docker", "/two/docker", "/three/docker"];
+
+        // On PATH: the bare name, and NOT a candidate — a `docker` shim the
+        // user put on their own `PATH` has to keep winning, or Kavka would
+        // quietly run a different Docker than their terminal does.
+        let asked = Cell::new(0);
+        let found = resolve_docker(
+            &candidates,
+            || true,
+            |_| {
+                asked.set(asked.get() + 1);
+                true
+            },
+        );
+        assert_eq!(found, Some(PathBuf::from("docker")));
+        assert_eq!(asked.get(), 0, "the fallback list was consulted anyway");
+
+        // Not on PATH: the FIRST candidate that exists, in list order — two of
+        // them are there and the earlier one wins.
+        let found = resolve_docker(
+            &candidates,
+            || false,
+            |path| path == Path::new("/two/docker") || path == Path::new("/three/docker"),
+        );
+        assert_eq!(found, Some(PathBuf::from("/two/docker")));
+
+        // Nothing anywhere is `None`, not a guess: spawning a path that does
+        // not exist would report "Docker isn't installed" through an OS error
+        // nobody can read.
+        assert_eq!(resolve_docker(&candidates, || false, |_| false), None);
+        // …and an empty list is the same answer, which is the Windows arm.
+        assert_eq!(resolve_docker(&[], || false, |_| true), None);
+    }
+
+    /// The list itself, per platform — the actual content of the fix.
+    ///
+    /// Asserted rather than left to the reader because each entry is a claim
+    /// about somebody else's installer: `/usr/local/bin/docker` is Docker
+    /// Desktop's own symlink, `/opt/homebrew/bin/docker` is Apple Silicon
+    /// Homebrew, and the `.app` path is where the real binary lives when the
+    /// symlink was never made. Losing one silently reinstates the bug for a
+    /// slice of Macs.
+    #[test]
+    fn the_install_locations_kavka_falls_back_to() {
+        let candidates = docker_candidates();
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            candidates,
+            [
+                "/usr/local/bin/docker",
+                "/opt/homebrew/bin/docker",
+                "/Applications/Docker.app/Contents/Resources/bin/docker",
+            ]
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            candidates,
+            [
+                "/usr/bin/docker",
+                "/usr/local/bin/docker",
+                "/snap/bin/docker",
+            ]
+        );
+        // Windows inherits the user's `PATH` in a GUI process, so the spawn
+        // probe is the whole answer and a hard-coded Program Files path would
+        // just be another thing to keep in step with Docker's installer.
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        assert!(candidates.is_empty());
+
+        // Whatever the platform: absolute paths that end in the binary, or the
+        // existence check is asking a question about the wrong thing.
+        for candidate in candidates {
+            let path = Path::new(candidate);
+            assert!(path.is_absolute(), "{candidate} is not absolute");
+            assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("docker"));
+        }
+    }
+
+    /// §7: when we know the answer, put the answer in the message. Here we
+    /// know precisely where we looked, so the refusal says so — otherwise a
+    /// user whose Docker Desktop is plainly running is told it is not
+    /// installed with no way to see why Kavka thinks that.
+    #[test]
+    fn the_no_docker_refusal_names_every_place_it_looked() {
+        let said = docker_search_detail();
+        assert!(said.contains("PATH"), "{said}");
+        for candidate in docker_candidates() {
+            assert!(said.contains(candidate), "{candidate} missing from: {said}");
+        }
+        // The detail names itself, because the other thing a failed spawn
+        // produces is an OS error and the two must not be labelled alike.
+        assert!(said.starts_with("Kavka looked for"), "{said}");
+        // The sentence above it stops claiming knowledge it never had.
+        let trouble = docker_trouble(DockerState::Absent, None);
+        assert!(trouble.contains("couldn't find"), "{trouble}");
+        assert!(!trouble.contains("There's no `docker`"), "{trouble}");
+    }
 
     /// docs/DESIGN.md §5.5's "every disabled control says why" applied to a
     /// state machine: a Docker state with no sentence is a first-run screen

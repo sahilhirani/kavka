@@ -3250,9 +3250,13 @@ export interface SandboxStatus {
   /** The Playground connection's id, if it is already on this machine. */
   profile_id: string | null;
   /**
-   * What Docker actually said, when Kavka doesn't recognise it — and, for
-   * `remote`, the endpoint itself, which the panel puts in the sentence rather
-   * than behind `Show details ▾`.
+   * What Docker actually said, when Kavka doesn't recognise it — with two
+   * states where it is something else entirely. For `remote` it is the
+   * endpoint, which the panel puts in the sentence rather than behind
+   * `Show details ▾`. For `absent` nothing said anything, so it is Kavka's own
+   * search: the `PATH` lookup and the install locations it then checked,
+   * verbatim, so a Mac with Docker Desktop plainly running can be told exactly
+   * why Kavka disagrees. Each of those strings names what it is.
    */
   detail: string | null;
 }

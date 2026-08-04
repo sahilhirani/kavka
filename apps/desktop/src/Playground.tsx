@@ -62,7 +62,13 @@ interface PlaygroundProps {
 function dockerTrouble(state: DockerState, endpoint: string | null): string {
   switch (state) {
     case "absent":
-      return "There's no Docker on this machine.";
+      // NOT "there's no Docker on this machine": Kavka only knows where it
+      // looked, and on macOS that used to be the whole bug — a GUI app gets
+      // launchd's `PATH`, not the user's, so Docker Desktop was invisible to a
+      // plain `docker` lookup. `status.detail` carries the search itself
+      // (`docker_search_detail` in `src-tauri/src/lib.rs`), and it is one
+      // "Show details" away below.
+      return "Kavka couldn't find a Docker command — the details say where it looked.";
     case "stopped":
       return "Docker is installed, but its engine isn't answering — it's usually not started yet.";
     case "remote":
