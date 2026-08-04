@@ -1,7 +1,7 @@
 # Cross-Platform Kafka Client — Full-App Feature Specification
 
 **Date:** 2026-08-02 (revised same day: pivot to fully open source)
-**Decisions locked:** Fully open source (AGPL-3.0 — no closed forks), every feature free, donation-funded (Buy Me a Coffee) · Desktop app only — no server component, no SSO/enterprise plane · Tauri + Rust (rust-rdkafka/librdkafka) · Full monitoring in scope · Repo private until launch
+**Decisions locked:** Fully open source (AGPL-3.0 — no closed forks), every feature free, donation-funded (Buy Me a Coffee) · Desktop app only — no server component, no SSO/enterprise plane · Tauri + Rust (rust-rdkafka/librdkafka) · Full monitoring in scope · Public repo since the Phase 6 launch
 **Positioning:** Fill the vacuum left by Conduktor Desktop's retirement (end 2025) and provectus/kafka-ui's abandonment. A modern, tiny, no-Docker, no-JVM desktop Kafka client for macOS + Windows that is completely free and open source — directly attacking Offset Explorer's personal-use-only license, dated UI, and bounded search, and answering the explicit "open source clone of Conduktor Desktop" community demand.
 
 ---
@@ -146,7 +146,7 @@ Formerly sketched as a paid "Desktop Pro" tier; with the open-source pivot they 
 ## Open-source & sustainability model
 Fully open source under **AGPL-3.0** — strong copyleft, chosen deliberately: everyone can use Kavka free of charge, personally or commercially, but forks and modified versions must stay open source under the same license, and the network clause stops anyone from wrapping `kavka-core` into a closed SaaS. **No closed-source forks** (the Grafana/Mattermost licensing model). For users this changes nothing — using an AGPL app at work is unrestricted; the obligations bind only redistributors. It converts Offset Explorer's entire resentful user base (personal-use-only license), the Conduktor-Desktop diaspora, and the explicit "open source clone of Conduktor Desktop" demand — with zero adoption friction and no reason for anyone to pick a competitor on price or license.
 
-The repo stays **private until the Phase 6 launch**; the license governs from the first public release.
+The repo went **public at the Phase 6 launch** ([github.com/sahilhirani/kavka](https://github.com/sahilhirani/kavka)); the license governs from that first public release.
 
 Funding is by donation:
 - **Buy Me a Coffee** button ([buymeacoffee.com/sahilhirani](https://buymeacoffee.com/sahilhirani)) in the README and on the docs site

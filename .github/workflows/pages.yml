@@ -1,0 +1,48 @@
+# Deploys docs-site/ to GitHub Pages on every merge to main.
+#
+# The site is hand-rolled HTML/CSS with no build system (docs-site/README.md),
+# so "building" it is copying files: the site itself plus the app screenshots
+# it embeds, which live in docs/screenshots and are copied in rather than
+# duplicated in git.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - "docs/screenshots/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/screenshots
+          cp -r docs-site/. _site/
+          rm -f _site/README.md
+          cp docs/screenshots/*.png docs/screenshots/*.gif _site/screenshots/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

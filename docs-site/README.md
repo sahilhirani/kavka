@@ -7,8 +7,25 @@ The Kavka website. Two files: `index.html` and `styles.css`.
 Open `index.html` in a browser. That is the whole workflow — there is no build
 step, no dependency, no dev server, no `npm install`. Every path in the page is
 relative, so it renders identically from `file://`, from a project site under a
-path prefix (`https://sahilhirani.github.io/kavka/`) and from a domain root
-(`https://kavka.io/`).
+path prefix (`https://sahilhirani.com/kavka/`, `https://sahilhirani.github.io/kavka/`)
+and from a domain root. The single exception is `og:image`, which Open Graph
+requires to be absolute — if the site ever moves, that one tag moves with it.
+
+**One thing does not come for free from `file://`: the screenshots.** They live
+in `docs/screenshots/` and the page references them as `screenshots/<name>`,
+because that is the layout the Pages workflow builds — it copies them into the
+site root rather than duplicating them in git. To preview locally, do the same
+copy once:
+
+```sh
+cd docs-site
+cp -r ../docs/screenshots .     # or: ln -s ../docs/screenshots .
+```
+
+`docs-site/screenshots/` is gitignored, so the copy can never be committed by
+accident. The alternative — pointing the page at `../docs/screenshots/` — would
+preview beautifully and 404 on the deployed site, where there is no parent
+directory to climb into.
 
 That constraint is the point rather than an omission. A marketing page for a
 desktop app is edited a few times a year, usually in a hurry, often by someone
@@ -21,60 +38,83 @@ It is built on the app's own tokens — see `docs/DESIGN.md`. The rules that
 apply here as much as they do in the product:
 
 - **No cards.** Grouping is whitespace plus a top hairline. The feature grid,
-  the download columns and the screenshot frames all follow that; none of them
-  has a border, a radius or a shadow.
+  the download columns and the screenshots all follow that; none of them has a
+  border, a radius or a shadow.
 - **The ledger rule is the signature.** Each section carries a mono address in a
   fixed left gutter with a 1px rule beside it, exactly as the app's tables carry
   offsets and broker ids. It collapses below 900px and the rule stays — the same
   behaviour the app has when a table runs out of width.
 - **The accent means live.** `--accent` appears twice on the page: the wire
   across the top, and one word in the headline. It is never a button fill.
-- **Nothing moves.** Two colour transitions on hover, and a
-  `prefers-reduced-motion` block that removes even those.
+- **Almost nothing moves.** Two colour transitions on hover, and a
+  `prefers-reduced-motion` block that removes even those. The one exception is
+  the live-tail GIF, and it is handled rather than excused — see below.
+- **No cards around the screenshots either.** A capture already has a window
+  frame drawn inside it; a second frame with a radius and a shadow around that
+  is the exact thing this system refuses. Top hairline, whitespace, caption.
 
 The token values are **copied** into `styles.css` rather than imported. The site
 has to render from a static host with no relationship to the app's build, so it
 cannot reach into `apps/desktop/src/styles.css`. If the audited values are ever
 re-derived there, this file is the second place to change.
 
-## Screenshots — all still TODO
+## Screenshots
 
-Search either file for `TODO` — there are three:
+The placeholders are gone; the page now carries real captures from
+`docs/screenshots/`:
+
+| Where | File | Why that one |
+|---|---|---|
+| Features | `06-message-browser.png` | The product in one frame: the table, the inspector, a decoded payload. |
+| Features | `live-tail.gif` | The one thing a still cannot show — records arriving. |
+| Features | `live-tail-still.png` | Not shown by default: the GIF's own last frame, served instead of it under `prefers-reduced-motion`. |
+| AI & MCP | `08-about.png` | The About panel's MCP section, with the path filled in and the copy button. A screenshot of the thing you press beats a screenshot of somebody else's assistant. |
+
+Rules for any capture added later:
+
+- **Capture on the dev cluster** (`dev/docker-compose.yml`), dark theme,
+  default density. A production screenshot puts a real bootstrap address on the
+  internet, and the coral guardrail makes the page look like something is wrong.
+- **Every `<img>` carries `width`, `height`, `loading="lazy"` and real `alt`
+  text.** The dimensions reserve the box so nothing below it jumps; the alt
+  text describes what is on the screen, not what the section is about. Both are
+  the same discipline the app is audited to (`docs/A11Y-AUDIT.md`).
+- **Anything that moves needs a still.** The live-tail GIF loops for about 16
+  seconds, which is past WCAG 2.2.2's five-second line for auto-playing motion,
+  and a GIF has no pause control. `<picture>` therefore serves
+  `live-tail-still.png` — its own last frame — to anyone whose OS asks for
+  reduced motion. No script; the media query does it.
+
+Still open:
 
 | Marker | What belongs there |
 |---|---|
-| `TODO — screenshot` (features) | The message browser on a busy topic: live tail running, inspector open on a JSON payload, dev cluster. |
-| `TODO — screenshot` (AI & MCP) | A Claude Code transcript browsing a topic through the MCP server. Better story than the config dialog. |
-| `TODO(human)` (`<head>`) | `og-card.png`, 1200×630, plus an absolute `og:image` URL — Open Graph rejects relative ones, so the tag is deliberately absent rather than broken. |
-
-Each screenshot placeholder currently renders a mono skeleton of the view that
-belongs there, in `--text-absent`, which is the same device `docs/DESIGN.md` §7
-prescribes for an empty state. **Do not replace them with `<img>` tags before
-the files exist** — a broken image icon is a worse placeholder than an honest
-one. The replacement markup is written out in a comment above each figure.
-
-Capture at 1440×900 on a 2× display, dark theme, default density, on a **dev**
-cluster. A screenshot of a production cluster puts a real bootstrap address on
-the internet, and the coral guardrail makes the page look like something is
-wrong.
+| `TODO(human)` (`<head>`) | `og-card.png`, 1200×630, purpose-built. `og:image` currently points at the message-browser screenshot, which is 1296×839 (≈1.54:1) against the card slot's 1.91:1 — every platform crops it differently and the inspector is what goes. A real card would carry the name, the one line and the licence at a size that survives a timeline. |
 
 ## Publishing to GitHub Pages
 
-Not wired up, deliberately — the repository is private until launch, and
-switching Pages on is one of the things that makes it public.
+Wired up and live at **<https://sahilhirani.com/kavka/>**.
 
-When it is time, the smallest version that works:
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) does it on every
+push to `main` that touches `docs-site/**` or `docs/screenshots/**`. It is the
+artifact-upload route rather than *Deploy from a branch*, because Pages only
+serves the repository root or `/docs`, and `/docs` is taken by the project's
+specification — so the workflow assembles a `_site/` instead:
 
-1. **Settings → Pages → Source: Deploy from a branch**, branch `main`, folder
-   `/docs`. GitHub Pages only serves the repository root or `/docs`, and
-   `/docs` is taken by the project's specification. So either
-   - rename this directory to `docs/` and move the specification elsewhere, or
-   - add a Pages workflow that uploads `docs-site/` as the artifact
-     (`actions/upload-pages-artifact` with `path: docs-site`), which keeps both
-     directories where they are and is what this repository should do.
-2. `.nojekyll` is already here so Pages serves the files as they are instead of
-   running them through Jekyll.
-3. For the custom domain, add a `CNAME` file containing `kavka.io` **after** the
-   domain is registered and its DNS points at GitHub, and turn on *Enforce
-   HTTPS*. The domain was verified unregistered on 2026-08-02 — registering it
-   is a human action and nothing in this repository can do it.
+```sh
+cp -r docs-site/. _site/       # the page, minus this README
+cp docs/screenshots/*.png docs/screenshots/*.gif _site/screenshots/
+```
+
+That copy is the whole "build". It is also why the page says
+`screenshots/<name>` and why a local preview needs the same copy by hand
+(see *Running it* above).
+
+`.nojekyll` is here so Pages serves the files as they are instead of running
+them through Jekyll.
+
+**Still a human action:** a domain of Kavka's own. `kavka.io` was verified
+unregistered on 2026-08-02; if it is ever registered, add a `CNAME` file here
+containing it, point its DNS at GitHub, turn on *Enforce HTTPS* — and update the
+absolute `og:image` in `index.html`, which is the one URL in this directory that
+does not move by itself.

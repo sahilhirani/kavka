@@ -1,33 +1,48 @@
 # Kavka
 
-**A modern, fast, fully open-source Kafka client for macOS and Windows.**
+**A modern, fast, fully open-source Kafka desktop client for macOS and Windows.**
+
+[![CI](https://img.shields.io/github/actions/workflow/status/sahilhirani/kavka/ci.yml?branch=main&label=CI&logo=github)](https://github.com/sahilhirani/kavka/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/sahilhirani/kavka?include_prereleases&sort=semver&label=release)](https://github.com/sahilhirani/kavka/releases)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-4fc3b0)](LICENSE)
+[![macOS 12+](https://img.shields.io/badge/macOS-12%2B-000000?logo=apple&logoColor=white)](#installing)
+[![Windows 10+](https://img.shields.io/badge/Windows-10%2B-0078D4?logo=windows&logoColor=white)](#installing)
+[![Rust](https://img.shields.io/badge/Rust-stable-B7410E?logo=rust&logoColor=white)](#development-setup)
+
+**[Website](https://sahilhirani.com/kavka/)** · **[Download](https://github.com/sahilhirani/kavka/releases/latest)** · **[Features](docs/FEATURES.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Roadmap](docs/ROADMAP.md)**
+
+![Kavka's message browser: a table of offsets, partitions, timestamps and keys for the orders topic, with the inspector docked on the right showing one record's JSON value formatted with line numbers.](docs/screenshots/06-message-browser.png)
+
+*Every partition in one chronological table, the inspector docked on the right, and the app naming how it read those bytes instead of leaving you to guess.*
+
+![Live tail running on the orders topic: rows of new records appending to the bottom of the table as they are produced, with the status bar counting up.](docs/screenshots/live-tail.gif)
+
+*Live tail: records land as they are produced, and the app says `Live` in words rather than only in colour.*
+
+---
 
 *Kavka* (Czech: jackdaw) is the bird Franz Kafka's surname comes from. The app fills the gap left by Conduktor Desktop's retirement and Offset Explorer's stagnation: a tiny, no-Docker, no-JVM desktop client that is **free for everyone — personal and commercial use alike — with every feature included**. No tiers, no license keys, no server component. If Kavka saves you time, you can [buy us a coffee](#supporting-kavka).
 
-Everything ships in the one free app:
+## Everything is in the one free app
 
-- **Connectivity:** full auth matrix (MSK IAM, OAuth-to-broker, Kerberos, PEM certs without keystore conversion), OS-keychain secret storage, per-connection read-only mode.
-- **Browse & search:** unbounded streaming message search (≥1M msgs/min target), Avro/Protobuf/JSON Schema via Schema Registry, CEL push-down filters, cross-partition chronological sort.
-- **Operations:** consumer-group lag + offset reset, full ACL management, partition reassignment, client quotas, Kafka Connect CRUD, Schema Registry management.
-- **Monitoring:** lag history, throughput charts, alert rules with OS notifications and webhooks, Kafka Streams topology visualization.
-- **Power tools:** SQL over topics, cross-cluster replay/diff, DLQ workflows, AI query generation + MCP server, custom WASM serdes.
+- **Connect** — the whole auth matrix: PLAINTEXT, TLS and mTLS from PEM files with no keystore conversion, SASL PLAIN and SCRAM, OAUTHBEARER/OIDC, AWS MSK IAM, Kerberos. Secrets go to the OS keychain; per-connection read-only mode is enforced in the core, not the UI.
+- **Browse & search** — unbounded streaming search across every partition (≥1M msgs/min target) with raw-byte prefilters and CEL push-down, progressive results, cancellation and cross-partition chronological sort. It never silently truncates: it says what it scanned and where it stopped.
+- **Decode** — Avro, Protobuf and JSON Schema through Schema Registry (Confluent, Apicurio, Glue), plus XML, MessagePack, CBOR and hex. Every message shows the subject, version and id it was decoded with.
+- **Operate** — consumer-group lag and every offset-reset mode, ACLs, client quotas, partition reassignment with throttles, preferred leader election, broker configs, the KRaft quorum, Kafka Connect CRUD and Schema Registry management.
+- **Monitor** — a local sampler writes lag to an embedded store, so the charts cover last week rather than since you opened the window. Alert rules fire OS notifications and webhooks; Kafka Streams topologies render; KIP-932 share groups are visible.
+- **Power tools** — SQL over a bounded scan of a topic, cross-cluster replay and config diff, consumer-offset migration, DLQ workflows, AI query generation, an MCP server, and custom decoders as sandboxed WebAssembly plugins.
+- **Guardrails** — nine independent layers, starting with the ledger rule turning coral in every table on a production cluster. Destructive actions there ask you to type the name. Most incidents are right-action-wrong-cluster.
+- **Accessibility** — built to WCAG 2.2 AA: zero contrast failures, no state encoded by colour alone, a 24px minimum hit target, full keyboard navigation, and a command palette that is the real navigation. Verified in Windows high-contrast mode.
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the complete specification, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, and [docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan.
 
-## Repository layout
+## What it looks like
 
-```
-apps/desktop/           Tauri 2 desktop app (React + TypeScript UI, Rust shell)
-  src/                  UI (Vite + React)
-  src-tauri/            Tauri Rust shell + IPC commands
-    playground/         the single-node Kafka the app can start for you
-crates/kavka-core/      Rust core: connections, admin ops, consume/search engine, serdes
-crates/kavka-mcp/       MCP server — the same profiles, over stdio, for AI clients
-crates/kavka-cli/       `kavka` — the same profiles, on a terminal
-docs/                   Product spec, architecture, roadmap, design system
-docs-site/              The website. Hand-rolled HTML/CSS, no build system
-packaging/              winget / Chocolatey / Homebrew manifest templates
-```
+|  |  |
+| :-- | :-- |
+| ![The command palette open over the connection form, listing Connect to local, Add connection, Disconnect, Export connections, Import connections, About Kavka and Support Kavka.](docs/screenshots/02-command-palette.png)<br>**Command palette** — `Ctrl`/`Cmd` `K` reaches every command and every cluster. It is the real navigation, not a shortcut for it. | ![The cluster overview tab showing cluster id, broker, topic and partition counts, a broker table, and a metadata quorum panel with leader, epoch, high watermark and voter count.](docs/screenshots/03-cluster-overview.png)<br>**Overview & KRaft quorum** — brokers, counts and the metadata quorum, each number explained in place rather than in a manual. |
+| ![The topic detail view for orders: counts for partitions, messages and settings set on the topic, then a partition table with leader, replicas, in-sync count, earliest and latest offsets and health.](docs/screenshots/05-topic-detail.png)<br>**Topic detail** — partitions, leaders, ISR and offsets, with preferred-leader election and reassignment one click away. | ![The Environments dialog listing dev, staging, prod, UAT and QA with their colours; prod is marked protected, the rest are not.](docs/screenshots/09-environments.png)<br>**Environments** — you name them, you colour them, and *protected* is the guardrail. Kavka colours every view by environment. |
+| ![The Alerts tab with one rule watching consumer-group lag, its state Firing, notification and webhook settings below, and a toast in the corner naming the group, the topic, the partition and the threshold.](docs/screenshots/10-alerts.png)<br>**Alerts** — a rule watches one number and waits before it fires, because a rule that fires on every rebalance is one people learn to ignore. | ![A lag history chart for the payments topic, one line per partition, lag climbing across the most recent stretch; below it a throughput section explaining that this connection has no metrics endpoint and what to point it at.](docs/screenshots/11-monitoring.png)<br>**Monitoring** — lag history that survives restarts, sampled locally. When a metrics endpoint is missing it says so, and says what to point it at. |
 
 ## Installing
 
@@ -111,13 +126,48 @@ Errors come from the same library the app's banners use (docs/DESIGN.md §7): a 
 
 The write surface is one command, `produce`, behind two gates: a connection marked read-only refuses and no flag lifts it, and a connection tagged `prod` needs `--yes-prod` on the command line. Every command on a prod connection also prints `! PROD · <name> · <bootstrap>` to stderr first — in words, so it survives a pipe, a log and colour-blindness. There is deliberately no `delete-topic`, no config editing and no offset reset: those belong behind the app's confirmations, where the blast radius can be stated before the click.
 
+## Your clusters, in Claude and Cursor
+
+`kavka-mcp` is a third binary that speaks the Model Context Protocol over stdio and reads the same `profiles.json` and the same keychain. Nothing listens on a port, and nothing leaves the machine unless your assistant sends it. The About panel prints the command with the installed path already filled in:
+
+```sh
+claude mcp add kavka -- "/Applications/Kavka.app/Contents/MacOS/kavka-mcp"
+```
+
+| Tool | What it returns |
+|---|---|
+| `kavka_list_topics` | Every topic, with partitions and replication. |
+| `kavka_fetch_messages` | Records from a seek point — at most 500. |
+| `kavka_search` | A bounded scan: matches and counts, never a whole topic. |
+| `kavka_sql` | SQL over a bounded scan of one topic. |
+| `kavka_group_detail` | One group's members, offsets and lag. |
+
+**It is read-only until you say otherwise.** The two tools that write — `kavka_produce` and `kavka_reset_offsets` — only exist if the client started the server with `KAVKA_MCP_ALLOW_WRITES=1`, and a production connection needs `KAVKA_MCP_ALLOW_PROD=1` as well. A connection you marked read-only refuses regardless. There is no delete, no create, no ACL change and no config change over MCP at all.
+
+Session masking rules travel to it: redactions you configure in the app are stored beside the connection file the server reads, so they apply to what an assistant is handed — not just to what is on your screen. An assistant's context is logged, replayed and sent to somebody else's server, which is exactly why that direction matters.
+
+## Repository layout
+
+```
+apps/desktop/           Tauri 2 desktop app (React + TypeScript UI, Rust shell)
+  src/                  UI (Vite + React)
+  src-tauri/            Tauri Rust shell + IPC commands
+    playground/         the single-node Kafka the app can start for you
+crates/kavka-core/      Rust core: connections, admin ops, consume/search engine, serdes
+crates/kavka-mcp/       MCP server — the same profiles, over stdio, for AI clients
+crates/kavka-cli/       `kavka` — the same profiles, on a terminal
+docs/                   Product spec, architecture, roadmap, design system
+docs-site/              The website. Hand-rolled HTML/CSS, no build system
+packaging/              winget / Chocolatey / Homebrew manifest templates
+```
+
 ## Development setup
 
 Prerequisites:
 
 1. **Rust** stable via rustup (`winget install Rustlang.Rustup`)
-2. **Node.js ≥ 20** (installed) and npm
-3. **CMake + Visual Studio Build Tools** (required later when the `kafka` feature flag is enabled — rust-rdkafka builds librdkafka via cmake)
+2. **Node.js ≥ 20** and npm
+3. **CMake + Visual Studio Build Tools** (required when the `kafka` feature flag is enabled — rust-rdkafka builds librdkafka via cmake)
 4. Tauri 2 prerequisites: WebView2 (preinstalled on Win 11); on macOS, Xcode CLT
 
 ```sh
@@ -144,8 +194,30 @@ KAVKA_IT=1 cargo test -p kavka-core --features kafka --test local_cluster
 
 - `kafka` (enabled by the desktop app): compiles librdkafka via `cmake-build` — needs CMake + MSVC Build Tools (`winget install Kitware.CMake`)
 - `kafka-ssl`: adds TLS/SASL_SSL via vendored OpenSSL — additionally needs Strawberry Perl + NASM on Windows
+- `wasm-serdes`: the sandboxed WebAssembly decoder plugin tier
 
 App icons are generated from `assets/icon-source.png` (a placeholder "K" mark) — when a real logo exists, replace that file and re-run `npm run tauri icon assets/icon-source.png` from `apps/desktop/`.
+
+## Contributing
+
+Pull requests are welcome — bug fixes, serdes, auth providers, translations, and small honest improvements to the words in the UI most of all.
+
+**Read the contract first.** [`docs/DESIGN.md`](docs/DESIGN.md) is the design system and the voice: no cards, the ledger rule, guardrails in words as well as colour, WCAG 2.2 AA. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is where the boundaries are: anything that talks to a broker belongs in `kavka-core`, so the app, the CLI and the MCP server all get it. A change that reads either document first is a change that gets merged quickly.
+
+**The gate is CI, and it is the same gate on every PR** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — run it locally before you push:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -p kavka-core --features kafka-ssl --all-targets -- -D warnings
+cargo clippy -p kavka-mcp --all-targets -- -D warnings
+cargo clippy -p kavka-cli --all-targets -- -D warnings
+cargo test -p kavka-core --features kafka-ssl        # KAVKA_IT=1 adds the cluster tests
+cd apps/desktop && npm ci && npm run build           # tsc, then vite build
+```
+
+CI runs all of that on Linux against a real single-node Kafka (`dev/docker-compose.yml`), then does a full `cargo check --workspace` on Windows, where librdkafka is built through CMake. Warnings are errors. If a test needs a broker it is gated behind `KAVKA_IT=1` so a laptop with no Docker still runs the rest.
+
+Open an issue before a large change so nobody writes the same thing twice.
 
 ## Supporting Kavka
 
@@ -153,20 +225,22 @@ Kavka is free and open source, and always will be — no paid tiers, no feature 
 
 ☕ **[Buy Me a Coffee](https://buymeacoffee.com/sahilhirani)**
 
-The app itself will carry a small, unobtrusive "Support Kavka ☕" link in its About panel and command palette — never a nag screen.
+The app itself carries a small, unobtrusive "Support Kavka ☕" link in its About panel and command palette — never a nag screen.
 
 ## License
 
 [AGPL-3.0](LICENSE). Free to use anywhere — personally or commercially. Copyleft: if you distribute a modified Kavka, or offer one as a network service, you must publish your source under the same license. **No closed-source forks.**
 
+Kavka is not affiliated with or endorsed by the Apache Software Foundation; Apache Kafka is a trademark of the ASF.
+
 ## Status
 
-Feature-complete through Phase 5 (see [docs/ROADMAP.md](docs/ROADMAP.md)); Phase 6 polish is in progress. The repo stays private until the Phase 6 launch.
+**Public, pre-1.0.** Feature-complete through the roadmap — every phase in [docs/ROADMAP.md](docs/ROADMAP.md) is built, including the polish pass — and the version is `0.1.x` for an honest reason: it has been run against dev clusters and CI's, not against yours. Expect bugs, and please [report them](https://github.com/sahilhirani/kavka/issues).
 
 Distribution is prepared but not executed — everything below needs a human, money or an account, and none of it can be done from this repository:
 
-- **Domain** — `kavka.io` was verified unregistered on 2026-08-02. Register it, point it at GitHub Pages, and add a `CNAME` to `docs-site/`.
+- **The site** — live at [sahilhirani.com/kavka](https://sahilhirani.com/kavka/), deployed from [`docs-site/`](docs-site/) by [`.github/workflows/pages.yml`](.github/workflows/pages.yml). The one thing still missing is a 1200×630 Open Graph card of its own.
+- **A domain** — `kavka.io` was verified unregistered on 2026-08-02. Registering it and adding a `CNAME` to `docs-site/` is a human action.
 - **macOS** — Apple Developer Program membership, a Developer ID Application certificate, and `notarytool` credentials in the release workflow. Until then the `.dmg` is unsigned and Gatekeeper says the app is "damaged", which is the wrong message for the truth.
 - **Windows** — an OV or EV code-signing certificate. Until then SmartScreen warns on every first run.
 - **Package managers** — a fork and a pull request each for winget-pkgs and homebrew-cask, a chocolatey.org account and API key. Manifests are rendered onto every release; see [`packaging/README.md`](packaging/README.md).
-- **The site** — [`docs-site/`](docs-site/) is written and has three `TODO` screenshot placeholders in it.
