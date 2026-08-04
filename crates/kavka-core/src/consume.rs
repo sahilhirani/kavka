@@ -853,7 +853,7 @@ mod wire {
 #[cfg(all(test, feature = "kafka"))]
 mod tests {
     use super::*;
-    use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+    use crate::profiles::{AuthConfig, ConnectionProfile};
     use rdkafka::config::ClientConfig;
     use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 
@@ -877,7 +877,7 @@ mod tests {
         ClusterConnection::connect(ConnectionProfile {
             id: "it-consume".into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![bootstrap()],
             auth: AuthConfig::Plaintext,
             read_only,

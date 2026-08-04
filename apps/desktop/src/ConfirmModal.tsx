@@ -7,8 +7,9 @@ import Overlay from "./Overlay";
  * Three rules it exists to enforce, so no call site has to remember them:
  *
  *  - The confirm button restates the verb (`Delete topic`), never "OK".
- *  - Type-to-confirm is ENVIRONMENT-gated, not action-gated: prod always asks,
- *    dev never does (§6 layer 4). Friction where the stakes are, nowhere else.
+ *  - Type-to-confirm is ENVIRONMENT-gated, not action-gated: a PROTECTED
+ *    environment always asks, an unprotected one never does (§6 layer 4).
+ *    Friction where the stakes are, nowhere else.
  *  - Initial focus is Cancel, `Esc` cancels, and `⏎` does NOT confirm — a
  *    destructive modal must not be dismissable by the key a user was already
  *    pressing.
@@ -29,13 +30,14 @@ export interface ConfirmModalProps {
    * red wire would be crying wolf: §5.5's guardrail rule says a filled red
    * button exists one click from a destructive action, so a modal that isn't
    * one must not wear it. Everything else (focus on Cancel, Esc, the restated
-   * verb, type-to-confirm on prod) is identical, because the friction is what
+   * verb, type-to-confirm when protected) is identical, because the friction is what
    * the environment asked for, not what the tone is.
    */
   tone?: "destructive" | "plain";
   /**
    * When non-null the user must type this string exactly. Pass the topic name
-   * on prod, null everywhere else — the gate is the environment, not the verb.
+   * when the connection's environment is PROTECTED, null everywhere else — the
+   * gate is the environment, not the verb.
    */
   typeToConfirm?: string | null;
   /** Overrides the default "Type `x` to confirm" line when there is more to say. */

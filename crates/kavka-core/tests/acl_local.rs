@@ -17,7 +17,7 @@
 
 use kavka_core::acl::{acls_create, acls_delete, acls_list, AclBinding, AclFilter};
 use kavka_core::connection::ClusterConnection;
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use std::time::{Duration, Instant};
 
 /// How long to let a write reach the broker's authorizer. CreateAcls answers
@@ -38,7 +38,7 @@ fn local_connection(read_only: bool) -> ClusterConnection {
     ClusterConnection::connect(ConnectionProfile {
         id: "it-acl".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

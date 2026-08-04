@@ -13,7 +13,7 @@
 
 use kavka_core::admin::{broker_config_set, broker_configs, ConfigEntry};
 use kavka_core::connection::ClusterConnection;
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use std::time::{Duration, Instant};
 
 /// A per-broker dynamic config with no side effects worth worrying about on a
@@ -42,7 +42,7 @@ fn local_connection(read_only: bool) -> ClusterConnection {
     ClusterConnection::connect(ConnectionProfile {
         id: "it-broker-config".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

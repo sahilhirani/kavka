@@ -98,7 +98,7 @@ const en = {
   "palette.connectTo": "Connect to {name}",
   "palette.state.connected": "connected",
   "palette.state.connecting": "connecting…",
-  "palette.prodCluster": "prod cluster",
+  "palette.protectedCluster": "protected cluster",
   "palette.profile.kw": "connect open switch cluster broker bootstrap",
   "palette.add.context": "A name, one broker, and how to sign in",
   "palette.add.kw": "new connection profile cluster create bootstrap broker",
@@ -180,6 +180,11 @@ const en = {
   "transfer.report.replaced": "{count, plural, other {# replaced}}",
   "transfer.report.skipped":
     "{count, plural, other {# skipped — already on this machine}}",
+  "transfer.report.envAdded":
+    "{count, plural, one {# environment added} other {# environments added}}",
+  "transfer.report.envSkipped":
+    "{count, plural, one {# environment already defined} other {# environments already defined}}",
+  "transfer.report.envOnly.title": "No new connections — only environments",
   "transfer.report.unchanged.title":
     "{count, plural, one {Nothing changed — # connection was already here} other {Nothing changed — # connections were already here}}",
   "transfer.report.unchanged.detail":
@@ -199,10 +204,13 @@ const en = {
   "editor.name.hint":
     "Whatever you'll recognise in the sidebar. Only Kavka sees it.",
   "editor.env.label": "Environment",
-  "editor.env.hint.prod":
-    "Prod turns the ledger rule coral in every table, marks this cluster in the sidebar and puts a warning bar across the top of the window. Turn on read-only below unless you actually need to write.",
+  "editor.env.hint.protected":
+    "This environment is marked protected: the ledger rule carries its colour in every table, the sidebar marks this cluster, a warning bar sits across the top of the window, and every destructive action asks you to type the name first. Turn on read-only below unless you actually need to write.",
   "editor.env.hint.other":
     "Kavka colours every view by environment, so you can't mistake one cluster for another.",
+  "editor.env.manage": "Manage environments…",
+  "editor.env.hint.unknown":
+    "Nothing on this machine defines {name}, so Kavka shows it in neutral grey and applies no guardrails. Add it under Manage environments to give it a colour and decide whether it is protected.",
   "editor.bootstrap.label": "Bootstrap servers",
   "editor.bootstrap.hint":
     "Any single broker in your cluster — Kavka finds the rest from there. One per line, or comma separated. Running this repo's dev cluster? Use {local}.",
@@ -383,6 +391,59 @@ const en = {
   // Spans. ProfileEditor formats its own rather than importing monitoring.ts's
   // English `formatSpan`, so the sampler sentence has no English island in it.
   // Same thresholds as that function — change both or neither.
+
+  // ── Environments: the registry, and the manager that edits it ───────────
+  "env.color.green": "green",
+  "env.color.amber": "amber",
+  "env.color.red": "red",
+  "env.color.blue": "blue",
+  "env.color.violet": "violet",
+  "env.color.cyan": "cyan",
+  "env.color.slate": "slate",
+
+  "env.mgr.title": "Environments",
+  "env.mgr.intro":
+    "Name the environments your organisation actually runs. Colour tells them apart at a glance; protected is the guardrail.",
+  "env.mgr.failed": "That didn't go through",
+  "env.mgr.working": "Kavka is working on it",
+  "env.mgr.add": "Add environment",
+  "env.mgr.edit": "Edit",
+
+  "env.mgr.row.protected": "protected",
+  "env.mgr.row.unprotected": "not protected",
+  "env.mgr.row.used":
+    "{count, plural, =0 {no connections} one {# connection} other {# connections}}",
+
+  "env.mgr.name.label": "Name",
+  "env.mgr.name.hint":
+    "Whatever your team calls it — dev, QA, UAT, production. Shown exactly as you type it, and never translated.",
+  "env.mgr.name.taken": "There's already an environment with this name.",
+  "env.mgr.name.required": "Give the environment a name first",
+
+  "env.mgr.color.label": "Colour",
+  "env.mgr.color.hint":
+    "Identity only. The colour tints the ledger rule and the chip; it never decides what Kavka lets you do.",
+
+  "env.mgr.protected.label": "Treat this environment as protected",
+  "env.mgr.protected.hint":
+    "Kavka switches to the warning substrate, asks you to type the topic or group name before anything destructive, marks the window, and refuses writes from the command line and from AI assistants unless they are explicitly told otherwise.",
+  "env.mgr.unprotect.prompt": "Type {name} to remove its protection",
+  "env.mgr.unprotect.hint":
+    "Every connection in {name} loses its guardrails: no typed confirmations, and the command line and AI assistants stop refusing writes.",
+
+  "env.mgr.delete.title": "Remove {name}?",
+  "env.mgr.delete.unused":
+    "No connection uses {name}, so nothing else changes.",
+  "env.mgr.delete.used":
+    "{count, plural, one {# connection uses} other {# connections use}} {name}. Pick where they go — Kavka moves them before removing it.",
+  "env.mgr.delete.moveTo": "Move those connections to",
+  "env.mgr.delete.moveHint": "These connections will move: {names}.",
+  "env.mgr.delete.confirm": "Remove environment",
+  "env.mgr.delete.needTarget":
+    "Pick an environment to move those connections to.",
+  "env.mgr.delete.last":
+    "This is the only environment left — add another one first",
+
   "unit.seconds": "{count, plural, one {# second} other {# seconds}}",
   "unit.minutes": "{count, plural, one {# minute} other {# minutes}}",
   "unit.hours": "{count, plural, one {# hour} other {# hours}}",

@@ -1,23 +1,13 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ConnectionProfile, ConnState, ConnStatus, Environment } from "./api";
 import { SUPPORT_URL } from "./AboutDialog";
+import {
+  envAttrs,
+  resolveEnvironment,
+  useEnvironment,
+  useEnvironments,
+} from "./environments";
 import { useI18n, type MessageKey } from "./i18n";
-
-/**
- * Sentence-case everywhere except env chips and table column headers. The
- * chip renders uppercase via CSS, so the word stays readable in the DOM.
- *
- * DELIBERATELY NOT TRANSLATED. `dev` / `staging` / `prod` are the same three
- * tokens as `data-env`, the window title and the forced-colors `PROD` label
- * on the wire (§6, §10). Prod is a guardrail that has to read identically in
- * every locale, in every one of its nine layers; a chip that says one thing
- * and a wire that says another is two signals where the design specifies one.
- */
-const ENV_LABEL: Record<Environment, string> = {
-  dev: "dev",
-  staging: "staging",
-  prod: "prod",
-};
 
 /**
  * Law 2: every dot has a word. "disconnected" used to map to the empty
@@ -32,8 +22,27 @@ const STATUS_KEY: Record<ConnStatus, MessageKey> = {
   connected: "sidebar.status.connected",
 };
 
+/**
+ * The environment chip — identity, in one pill.
+ *
+ * The NAME IS NEVER TRANSLATED and never sentence-cased in the DOM: it is user
+ * data now, and it is the same string as the `data-env-color` sibling, the
+ * forced-colors wire label, the CLI's refusal and the window title (§6, §10).
+ * The chip uppercases in CSS so the word stays readable to anyone reading the
+ * DOM or copying it into a bug report.
+ *
+ * Colour is identity; the FILLED form is the guardrail. An unprotected
+ * environment is a tint-on-tag, a protected one a solid badge — the treatment
+ * prod had, re-keyed onto the flag rather than onto the name, so a company
+ * whose production environment is called `PRD` gets the badge too.
+ */
 export function EnvChip({ env }: { env: Environment }) {
-  return <span className={`env-chip env-${env}`}>{ENV_LABEL[env]}</span>;
+  const def = useEnvironment(env);
+  return (
+    <span className="env-chip" {...envAttrs(def)}>
+      {def.name}
+    </span>
+  );
 }
 
 interface SidebarProps {
@@ -56,6 +65,10 @@ export default function Sidebar({
   onAbout,
 }: SidebarProps) {
   const { t } = useI18n();
+  // Read once for the whole list rather than per row: a hook cannot be called
+  // inside `profiles.map`, and resolving against one snapshot also guarantees
+  // every row in a single paint agrees about what is protected.
+  const envDefs = useEnvironments();
   return (
     // Named landmarks: "complementary" and "navigation" with no accessible
     // name are two unlabelled entries in a screen reader's landmark list, on
@@ -78,9 +91,13 @@ export default function Sidebar({
             const status = connections[profile.id]?.status ?? "disconnected";
             const address = profile.bootstrap_servers.join(", ");
             const statusWord = t(STATUS_KEY[status]);
+            const envDef = resolveEnvironment(profile.environment, envDefs);
             const classes = [
               "profile-row",
-              profile.environment === "prod" ? "profile-row-prod" : "",
+              // Guardrail layer 6, re-keyed: the row stays tinted whether it is
+              // selected or not, for every PROTECTED environment — not for the
+              // one that happens to be spelled "prod".
+              envDef.protected ? "profile-row-protected" : "",
               profile.id === selectedId ? "profile-row-selected" : "",
             ]
               .filter(Boolean)

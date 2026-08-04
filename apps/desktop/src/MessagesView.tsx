@@ -13,6 +13,7 @@ import {
   type TailPayload,
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { looksLikeDlqTopic, replayBlockedWhy } from "./dlq";
 import ExportButton from "./ExportButton";
 import { groupDigits } from "./format";
@@ -107,6 +108,10 @@ export default function MessagesView({
   onBrowseOriginal,
   onReproduce,
 }: MessagesViewProps) {
+  // Guardrail layer 7: a write action changes class in a protected
+  // environment — Produce renders danger-outlined even when routine.
+  const isProtected = useIsProtected(profile.environment);
+
   // ── Seek bar ───────────────────────────────────────────────────────────
   const [seek, setSeek] = useState<SeekState>(() => {
     const base = initialSeekState("latest", "100");
@@ -223,24 +228,34 @@ export default function MessagesView({
 
   // First paint fetches the default range rather than showing an empty table
   // with a button: the user asked for this topic's messages by clicking
-  // "Browse messages", and asking twice is a dead end.
-  const firstFetch = useRef(false);
+  // "Browse messages", and asking twice is a dead end. Leaving on the topic —
+  // or the connection — invalidates whatever is still in flight, so a stale
+  // answer cannot land in the next topic's table.
+  //
+  // THE TWO HALVES MUST LIVE IN ONE EFFECT. A `fetchSeq` bump with no re-run
+  // behind it retires an answer that nothing replaces, and `runFetch`'s guards
+  // then skip BOTH `setRows` and `setFetching(false)` — a spinner that never
+  // stops on a fetch the core answered in a second. Splitting them (the fetch
+  // behind a `useRef` "once" latch, the invalidation in an effect of its own)
+  // is exactly that shape under React's StrictMode, which in dev mounts,
+  // cleans up and mounts again with the refs intact: the latch swallowed the
+  // second run while the cleanup had already retired the first, so the message
+  // browser hung on first paint for the whole session while every other view —
+  // GroupsTab, MonitoringTab, AlertsTab, all of which start and invalidate in
+  // one effect — was fine. Under StrictMode this now costs one extra fetch on
+  // mount, which the shell cancels the moment the second registers
+  // (`AppState::begin_fetch`); a release build runs the effect once.
   useEffect(() => {
-    if (firstFetch.current) return;
-    firstFetch.current = true;
     void runFetch();
-    // Deliberately not re-run when runFetch's identity changes — the seek bar
-    // is the user's, and re-fetching on every keystroke would fight them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Invalidate any in-flight fetch when the topic (or connection) changes.
-  useEffect(
-    () => () => {
+    return () => {
       fetchSeq.current += 1;
-    },
-    [profile.id, topic],
-  );
+    };
+    // Deliberately not re-run when runFetch's identity changes — the seek bar
+    // is the user's, and re-fetching on every keystroke would fight them. The
+    // deps that are left cannot change while this instance is mounted either:
+    // TopicsTab keys the browser by topic, so a new topic is a new component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.id, topic]);
 
   // ── Tail ───────────────────────────────────────────────────────────────
 
@@ -442,9 +457,7 @@ export default function MessagesView({
             </button>
             <button
               type="button"
-              className={`btn ${
-                profile.environment === "prod" ? "btn-danger" : ""
-              }`}
+              className={`btn ${isProtected ? "btn-danger" : ""}`}
               disabled={profile.read_only}
               title={
                 profile.read_only

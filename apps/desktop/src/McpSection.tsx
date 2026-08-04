@@ -220,8 +220,11 @@ export default function McpSection({ onOpenRepo }: McpSectionProps) {
           </dt>
           <dd>
             Needed <em>as well</em> before a write touches a connection whose
-            environment is prod. A read-only connection refuses writes whatever
-            these are set to — that flag is yours and the server honours it.
+            environment is marked <em>protected</em> — whatever that environment
+            is called. The variable keeps its name because it is already in
+            people's MCP client configs. A read-only connection refuses writes
+            whatever these are set to — that flag is yours and the server
+            honours it.
           </dd>
         </div>
       </dl>

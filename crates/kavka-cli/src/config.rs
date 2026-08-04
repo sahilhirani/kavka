@@ -35,7 +35,8 @@ use std::path::PathBuf;
 /// Points the CLI at a different config directory. For tests, for a second
 /// profile set, and for anyone whose app data lives somewhere unusual.
 ///
-/// It changes which `profiles.json` (and `masking.json`) is read and nothing
+/// It changes which `profiles.json` (and the `masking.json` and
+/// `environments.json` beside it) is read and nothing
 /// else: secrets still come from the OS keychain, which is per-user and has no
 /// equivalent knob.
 pub const CONFIG_DIR_ENV: &str = "KAVKA_CONFIG_DIR";

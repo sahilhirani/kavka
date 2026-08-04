@@ -15,13 +15,14 @@ use kavka_core::cancel::CancelToken;
 use kavka_core::connect::{ConfigValidation, ConnectorSummary};
 use kavka_core::connection::{ClusterConnection, ClusterOverview};
 use kavka_core::consume::{self, FetchSpec, TailSession};
+use kavka_core::environments::{EnvironmentDef, EnvironmentStore};
 use kavka_core::history::{self, GroupWindow, HistoryStore, LagSample, SamplerStatus};
 use kavka_core::masking::{MaskRule, MaskSet, MaskStore, MASK_NOTICE_MARKER};
 use kavka_core::metrics::{MetricPoint, MetricsCollector, MetricsStatus};
 use kavka_core::nlq::{self, SchemaHint, Translation};
 use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
 use kavka_core::profiles::{
-    export_json, import_json, AuthConfig, ConnectionProfile, Environment, ImportReport,
+    apply_import, export_json, import_json, AuthConfig, ConnectionProfile, ImportReport,
     ImportStrategy, ProfileStore, WasmSerdeConfig,
 };
 // `TopicPartition` here is the protocol module's — `admin` has an
@@ -104,6 +105,16 @@ const COPY_POLL: Duration = Duration::from_millis(50);
 
 struct AppState {
     store: Arc<ProfileStore>,
+    /// The environment definitions — `environments.json`, beside
+    /// `profiles.json` in the SAME config dir, because a profile's
+    /// `environment` string is meaningless without the file that defines it and
+    /// the two must travel together (a config dir copied to another machine
+    /// carries both, or neither).
+    ///
+    /// Local throughout, like the alert and masking stores: an environment is a
+    /// name, a colour token and a boolean, and nothing here has ever seen a
+    /// cluster.
+    environments: Arc<EnvironmentStore>,
     connections: Mutex<HashMap<String, Arc<ClusterConnection>>>,
     /// Live tails, keyed by the id their events are addressed to.
     tails: SessionMap<TailSession>,
@@ -1627,9 +1638,9 @@ fn mcp_snippets(binary: &str) -> (String, String) {
         "claude mcp add kavka -- \"{binary}\"\n\
          \n\
          # Read-only by default. To also allow the two write tools (produce a\n\
-         # record, reset a group's offsets) — production connections still\n\
-         # refuse without KAVKA_MCP_ALLOW_PROD=1, and connections marked\n\
-         # read-only always refuse:\n\
+         # record, reset a group's offsets) — connections in an environment\n\
+         # marked protected still refuse without KAVKA_MCP_ALLOW_PROD=1, and\n\
+         # connections marked read-only always refuse:\n\
          claude mcp add kavka -e KAVKA_MCP_ALLOW_WRITES=1 -- \"{binary}\"\n"
     );
     // Built with serde_json rather than by hand: a Windows path is full of
@@ -1667,7 +1678,8 @@ fn mcp_snippets(binary: &str) -> (String, String) {
 // brokers, and the playground is not one of them.
 //
 // The one thing they do write is a NEW dev profile called "Playground", and
-// they refuse to touch one that is not still `dev` — see `save_playground`.
+// they refuse to touch one that no longer points at the playground's own
+// address — see `save_playground`.
 
 /// Pinned so `up`, `ps` and `down` are always talking about the same thing.
 ///
@@ -1692,6 +1704,17 @@ const PLAYGROUND_BOOTSTRAP: &str = "localhost:19092";
 /// A fixed id, so starting the playground twice finds the connection it made
 /// last time instead of filling the sidebar with copies of it.
 const PLAYGROUND_PROFILE_ID: &str = "kavka-playground";
+
+/// The environment Kavka tags its own Playground connection with **when it
+/// creates it**, and nothing more: it is a starting value, not an identity.
+/// See `save_playground` for what the guard actually keys on.
+///
+/// It is one of the three [`kavka_core::environments::defaults`], so on a fresh
+/// machine the Playground gets a green chip and no guardrail. A user who has
+/// deleted or renamed `dev` gets the neutral "environment nothing defines"
+/// treatment plus the hint that says how to define it — which is the designed
+/// answer to that state, not a failure.
+const PLAYGROUND_ENVIRONMENT: &str = "dev";
 
 /// The 3-second ceiling the brief asks for, and the right one: this runs on
 /// first paint, and a probe that can hang is a first-run empty state that can
@@ -2347,36 +2370,49 @@ fn start_playground(
 
 /// The Playground connection, created once and never overwritten.
 ///
-/// **Why it refuses a profile that is no longer `dev`.** The id is fixed, so
-/// somebody can open this connection, retag it `prod` and point it at a real
-/// cluster — at which point "start the playground" would silently rewrite a
-/// production connection's address. Kavka would rather say no. This is the
-/// single place in the playground feature where a saved profile is written at
-/// all, which is why the whole guardrail fits in one function.
+/// **Why it refuses a profile that has been pointed somewhere else.** The id is
+/// fixed, so somebody can open this connection and aim it at a real cluster —
+/// at which point "start the playground" would silently hand that connection
+/// back as the playground's. Kavka would rather say no. This is the single
+/// place in the playground feature where a saved profile is written at all,
+/// which is why the whole guardrail fits in one function.
+///
+/// **The guard is keyed on identity, not on a name.** The question is "is this
+/// still the connection Kavka itself created, still pointing at the container
+/// Kavka itself starts" — and the only field that answers it is
+/// `bootstrap_servers`: the id says Kavka made it, the address says it is still
+/// the thing Kavka made it for. It deliberately does *not* look at
+/// `environment`. Environments are the user's to name, rename and delete
+/// (§3.1), so a machine whose `dev` was renamed `local` — or whose Playground
+/// was filed under an environment somebody invented — would have hit a refusal
+/// for an edit that changed nothing about where the connection points. And the
+/// tag was never the protection anyway: a retagged Playground still aimed at
+/// `localhost:19092` is still Kavka's own broker, whatever word is on the chip.
 fn save_playground(store: &ProfileStore) -> kavka_core::Result<String> {
     if let Some(existing) = store
         .list()?
         .into_iter()
         .find(|p| p.id == PLAYGROUND_PROFILE_ID)
     {
-        if existing.environment != Environment::Dev {
+        if existing.bootstrap_servers != [PLAYGROUND_BOOTSTRAP] {
             return Err(kavka_core::Error::Other(format!(
-                "The connection called \"{}\" isn't tagged dev any more, so Kavka left it \
-                 alone. The playground is running on {PLAYGROUND_BOOTSTRAP} — point a \
-                 connection at that address yourself.",
+                "The connection called \"{}\" doesn't point at the playground any more, so \
+                 Kavka left it alone. The playground is running on {PLAYGROUND_BOOTSTRAP} — \
+                 point a connection at that address yourself.",
                 existing.name
             )));
         }
-        // Already there and still a dev connection: keep whatever the user has
-        // done to it (a rename, a read-only flag, a masking rule) rather than
-        // resetting their work every time they press start.
+        // Already there and still aimed at Kavka's own broker: keep whatever
+        // the user has done to it (a rename, a retag, a read-only flag, a
+        // masking rule) rather than resetting their work every time they press
+        // start.
         return Ok(existing.id);
     }
 
     store.upsert(ConnectionProfile {
         id: PLAYGROUND_PROFILE_ID.to_string(),
         name: "Playground".to_string(),
-        environment: Environment::Dev,
+        environment: PLAYGROUND_ENVIRONMENT.into(),
         bootstrap_servers: vec![PLAYGROUND_BOOTSTRAP.to_string()],
         auth: AuthConfig::Plaintext,
         read_only: false,
@@ -3189,12 +3225,30 @@ async fn profiles_delete(state: State<'_, AppState>, profile_id: String) -> CmdR
 }
 
 /// Secret-free by construction — profiles hold keychain refs, not values.
+///
+/// **The environment definitions travel with the profiles.** A profile's
+/// `environment` is a name, and a name alone arrives on the other machine as an
+/// environment nothing defines: neutral, unprotected, and — this is the part
+/// that matters — a `Production` connection that no longer asks before it
+/// writes. `export_json` takes the machine's full list and ships only the ones
+/// these profiles actually reference, so the export stays a description of
+/// these connections rather than a dump of somebody's whole registry.
 #[tauri::command]
 async fn profiles_export(state: State<'_, AppState>) -> CmdResult<String> {
     let store = state.store.clone();
-    blocking(move || Ok(export_json(&store.list()?))).await
+    let environments = Arc::clone(&state.environments);
+    blocking(move || Ok(export_json(&store.list()?, &environments.list()?))).await
 }
 
+/// Applies an export to both stores through `apply_import`, which writes the
+/// **definitions first** — a profile visible for even one concurrent read while
+/// tagged with a name this machine does not define yet is a connection visible
+/// without its guardrail. The ordering rule lives in the core so every front
+/// end gets it; the shell's job is to call the one function that has it.
+///
+/// An import never repaints or unprotects an environment already here, so the
+/// report's two `environments_*` counts are "added" and "already had", never
+/// "changed".
 #[tauri::command]
 async fn profiles_import(
     state: State<'_, AppState>,
@@ -3202,11 +3256,68 @@ async fn profiles_import(
     strategy: String,
 ) -> CmdResult<ImportReport> {
     let store = state.store.clone();
+    let environments = Arc::clone(&state.environments);
     blocking(move || {
         let strategy: ImportStrategy = strategy.parse()?;
-        store.import(import_json(&json)?, strategy)
+        apply_import(&store, &environments, import_json(&json)?, strategy)
     })
     .await
+}
+
+// ── Environments ───────────────────────────────────────────────────────────
+//
+// The registry behind every env chip and every guardrail in the product. Three
+// commands, all local: an environment is a name, a colour token and a boolean,
+// and nothing here opens a connection or takes a `profile_id`.
+//
+// THE GUARDRAIL IS NEVER A NAME COMPARE. Nothing in this shell asks whether an
+// environment is called "prod"; the UI asks `EnvironmentDef.protected` through
+// `useIsProtected`, and the CLI and MCP server ask
+// `EffectiveEnvironment::protected` through their own gates. These commands
+// only move the definitions.
+
+/// Every environment defined on this machine, in the order the manager shows
+/// them.
+///
+/// An absent `environments.json` answers with the three shipped defaults rather
+/// than an empty list — which is the whole migration, and the reason an install
+/// upgrading into this build comes up with `prod` still protected.
+#[tauri::command]
+async fn environments_list(state: State<'_, AppState>) -> CmdResult<Vec<EnvironmentDef>> {
+    let environments = Arc::clone(&state.environments);
+    blocking(move || environments.list()).await
+}
+
+/// Creates or edits one environment — an upsert by case-insensitive name, so
+/// the manager's single "save" covers both and re-casing an existing name
+/// (`prod` → `Prod`) edits it instead of creating a twin.
+///
+/// Validation (a non-empty name, a colour from the closed set) is the core's,
+/// at the store's door, so its refusal is the one the user reads.
+#[tauri::command]
+async fn environments_save(state: State<'_, AppState>, def: EnvironmentDef) -> CmdResult<()> {
+    let environments = Arc::clone(&state.environments);
+    blocking(move || environments.save(def)).await
+}
+
+/// Removes an environment, **unless a connection still points at it**.
+///
+/// The profile list is read here and handed to the core, which owns the
+/// refusal and names the connections in it — "it's in use" would send somebody
+/// through fourteen connections looking for the one. That message reaches the
+/// dialog verbatim: `Error::Other` displays as itself and `blocking` only
+/// stringifies it.
+///
+/// The check lives in the core rather than in the manager because the manager
+/// is not the only caller and because the window listing the connections is not
+/// necessarily the window doing the deleting. Deleting one that is already gone
+/// is not an error, for the same reason — the other window did it, and
+/// idempotence is what keeps that a non-event.
+#[tauri::command]
+async fn environments_delete(state: State<'_, AppState>, name: String) -> CmdResult<()> {
+    let environments = Arc::clone(&state.environments);
+    let store = state.store.clone();
+    blocking(move || environments.delete(&name, &store.list()?)).await
 }
 
 #[tauri::command]
@@ -5321,6 +5432,11 @@ pub fn run() {
             // Masking rules sit beside both, for the same reason and with the
             // same discipline (tmp-then-rename, one write lock).
             let masks = Arc::new(MaskStore::new(dir.clone()));
+            // And the environment definitions beside both, in the same config
+            // dir as profiles.json — see `AppState::environments`. An absent
+            // file is the three shipped defaults, which is what makes every
+            // existing install come up looking and gating exactly as it did.
+            let environments = Arc::new(EnvironmentStore::new(dir.clone()));
             let data_dir = app.path().app_data_dir()?;
             let histories = Arc::new(HistoryStores::new(data_dir.join("history")));
             // Diagnostics: the logs go in the DATA directory beside the history
@@ -5334,6 +5450,7 @@ pub fn run() {
             log_session_header();
             app.manage(AppState {
                 store: Arc::new(ProfileStore::new(dir)),
+                environments,
                 connections: Mutex::new(HashMap::new()),
                 tails: SessionMap::new(),
                 searches: SessionMap::new(),
@@ -5380,6 +5497,9 @@ pub fn run() {
             profiles_delete,
             profiles_export,
             profiles_import,
+            environments_list,
+            environments_save,
+            environments_delete,
             secret_set,
             secret_delete,
             secret_exists,
@@ -5485,7 +5605,7 @@ pub fn run() {
 mod tests {
     use super::*;
     use kavka_core::masking::MaskTarget;
-    use kavka_core::profiles::{AuthConfig, Environment, MetricsEndpointConfig};
+    use kavka_core::profiles::{AuthConfig, MetricsEndpointConfig};
     use kavka_core::serdes::{DecodedPayload, Encoding, HeaderEntry};
 
     fn payload(text: &str) -> DecodedPayload {
@@ -5537,6 +5657,93 @@ mod tests {
         assert_eq!(parsed["mcpServers"]["kavka"]["env"], serde_json::json!({}));
         // The raw text carries escaped separators, not literal ones.
         assert!(cursor.contains(r"C:\\Program Files\\Kavka"), "{cursor}");
+    }
+
+    // ── The playground's one guard ─────────────────────────────────────────
+
+    /// The playground's id is fixed, so the connection it creates can be
+    /// edited afterwards — and the guard has to survive every edit that is
+    /// none of Kavka's business. Environments are the user's to invent and
+    /// rename (§3.1), so the tag cannot be the identity; the address is, and
+    /// the last two blocks are the pin on exactly that.
+    #[test]
+    fn the_playground_keeps_its_connection_and_refuses_a_repointed_one() {
+        let dir = scratch("playground");
+        let store = ProfileStore::new(dir.clone());
+
+        // First press: created, tagged with the environment Kavka ships.
+        let id = save_playground(&store).expect("a fresh store takes the write");
+        assert_eq!(id, PLAYGROUND_PROFILE_ID);
+        let made = stored(&store);
+        assert_eq!(made.environment, PLAYGROUND_ENVIRONMENT);
+        assert_eq!(made.bootstrap_servers, vec![PLAYGROUND_BOOTSTRAP]);
+
+        // Second press: the user's own edits survive rather than being reset.
+        store
+            .upsert(ConnectionProfile {
+                name: "My playground".into(),
+                read_only: true,
+                ..made
+            })
+            .expect("the edit is stored");
+        assert_eq!(save_playground(&store).expect("still the playground"), id);
+        let kept = stored(&store);
+        assert_eq!(kept.name, "My playground");
+        assert!(kept.read_only, "the write must not reset the user's flag");
+
+        // A retag is NOT a repointing. `dev` is a shipped default, not a
+        // fixture: somebody who renamed it `local`, or who filed the
+        // Playground under an environment they invented, still has the
+        // connection Kavka made — and it still points at Kavka's own broker,
+        // whatever word is on the chip.
+        for retagged in ["Dev", "local", "Sandbox", "prod"] {
+            store
+                .upsert(ConnectionProfile {
+                    environment: retagged.into(),
+                    ..kept.clone()
+                })
+                .expect("the retag is stored");
+            assert_eq!(
+                save_playground(&store).expect("the tag is not the identity"),
+                id
+            );
+        }
+
+        // Being aimed somewhere else IS — including "somewhere else as well as
+        // here", which is the shape that would otherwise smuggle a real broker
+        // in beside the playground's. The refusal names the connection and
+        // says where the playground actually is, so the next step is in it.
+        for repointed in [
+            vec!["broker.internal:9092".to_string()],
+            vec![
+                PLAYGROUND_BOOTSTRAP.to_string(),
+                "broker.internal:9092".to_string(),
+            ],
+        ] {
+            store
+                .upsert(ConnectionProfile {
+                    bootstrap_servers: repointed,
+                    ..kept.clone()
+                })
+                .expect("the repointing is stored");
+            let said = save_playground(&store)
+                .expect_err("no longer the connection Kavka made")
+                .to_string();
+            assert!(said.contains("My playground"), "{said}");
+            assert!(said.contains(PLAYGROUND_BOOTSTRAP), "{said}");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Playground profile as the store currently holds it.
+    fn stored(store: &ProfileStore) -> ConnectionProfile {
+        store
+            .list()
+            .expect("the store reads back")
+            .into_iter()
+            .find(|p| p.id == PLAYGROUND_PROFILE_ID)
+            .expect("the playground profile")
     }
 
     #[test]
@@ -5880,7 +6087,7 @@ mod tests {
         ConnectionProfile {
             id: id.into(),
             name: "Orders".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec!["localhost:9092".into()],
             auth: AuthConfig::Plaintext,
             read_only: false,

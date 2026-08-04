@@ -12,7 +12,7 @@
 use kavka_core::admin;
 use kavka_core::connection::ClusterConnection;
 use kavka_core::history::{self, HistoryStore};
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use std::path::PathBuf;
 
 fn enabled() -> bool {
@@ -27,7 +27,7 @@ fn local_profile() -> ConnectionProfile {
     ConnectionProfile {
         id: "it-history".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

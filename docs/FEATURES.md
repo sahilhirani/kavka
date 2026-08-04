@@ -43,7 +43,8 @@ Every dollar on that list is a reason an engineer will try the free, open-source
 ## MUST-HAVE FEATURES
 
 ### 1. Connectivity & security — must match Offset Explorer's one strength, then beat it
-- Multi-cluster saved connection profiles; environment tagging (prod/staging/dev) with color-coded UI chrome; instant cluster switcher
+- Multi-cluster saved connection profiles; **user-defined environment tagging** — name your own (`dev`, `QA`, `UAT`, `Production`, …), each with a colour token and a **protected** flag — with colour-coded UI chrome; instant cluster switcher
+  - **Colour is identity; `protected` is the guardrail.** Marking an environment protected is what turns on the warm substrate, the type-to-confirm on destructive actions, the window-title suffix, the CLI's `--yes-prod` and the MCP server's `KAVKA_MCP_ALLOW_PROD` — for that environment whatever it is called. Ships with `dev`, `staging` and `prod` (protected), which is exactly what earlier versions had
 - Auth matrix: PLAINTEXT, SSL/TLS, mTLS, SASL PLAIN, SCRAM-SHA-256/512, **AWS MSK IAM**, **OAUTHBEARER/OIDC to the broker** (top unresolved ask on every OSS tracker), Kerberos/GSSAPI, Confluent Cloud API keys, Azure Event Hubs connection strings
 - **PEM certs/keys directly — no JKS/keystore conversion ever** (chronically upvoted pain point)
 - Credentials in OS keychain (macOS Keychain / Windows Credential Manager), never plaintext on disk

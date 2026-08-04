@@ -9,6 +9,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { Term } from "./Glossary";
 import { ErrorBanner } from "./ProfileEditor";
 import QuotasPanel from "./QuotasPanel";
@@ -102,7 +103,7 @@ export default function BrokersTab({
 
   useDangerSignal(error !== null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
 
   const fetchConfigs = useCallback(
@@ -419,7 +420,7 @@ export default function BrokersTab({
         <ConfirmModal
           // A broker setting change is a write, not a delete: the red wire is
           // reserved for prod, where §6 layer 7 says every write reads as one.
-          tone={isProd ? "destructive" : "plain"}
+          tone={isProtected ? "destructive" : "plain"}
           title={
             pending.next === null
               ? `Revert ${pending.entry.name}?`
@@ -454,7 +455,7 @@ export default function BrokersTab({
                   keeps whatever it had.
                 </>
               )}
-              {isProd && (
+              {isProtected && (
                 <>
                   {" "}
                   {profile.name} is a production cluster, so this is a live
@@ -466,9 +467,9 @@ export default function BrokersTab({
           confirmLabel={
             pending.next === null ? "Revert to default" : "Change setting"
           }
-          typeToConfirm={isProd ? pending.entry.name : null}
+          typeToConfirm={isProtected ? pending.entry.name : null}
           typePrompt={
-            isProd ? (
+            isProtected ? (
               <>
                 Type <code>{pending.entry.name}</code> to confirm you are
                 changing this on {profile.name}

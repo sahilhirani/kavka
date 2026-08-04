@@ -89,7 +89,14 @@
 //! 2. **`KAVKA_MCP_ALLOW_WRITES=1` must have been set when the server
 //!    started.** Read once at startup, never re-read: what a running server may
 //!    do cannot change under it.
-//! 3. **A `prod` profile additionally needs `KAVKA_MCP_ALLOW_PROD=1`.**
+//! 3. **A profile whose environment is marked PROTECTED additionally needs
+//!    `KAVKA_MCP_ALLOW_PROD=1`.** Environments are the user's to define
+//!    ([`kavka_core::environments`]) — `QA`, `UAT`, `Production` — and the
+//!    gate reads the `protected` flag on the definition, never the name. The
+//!    variable keeps its spelling because it lives in MCP client config files
+//!    that are checked in; `kavka_list_profiles` reports
+//!    `environment_protected` per connection so a model never guesses from a
+//!    name.
 //!
 //! Every refusal names the exact variable, and the server's `initialize`
 //! response says all of this in `instructions` so a model knows the rules

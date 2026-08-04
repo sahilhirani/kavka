@@ -15,6 +15,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import Overlay from "./Overlay";
 import { ErrorBanner } from "./ProfileEditor";
@@ -325,7 +326,7 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
 
   useDangerSignal(error !== null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
 
   const fetchAcls = useCallback(
@@ -447,7 +448,7 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
                 routine (§6 layer 7). */}
             <button
               type="button"
-              className={`btn ${isProd ? "btn-danger" : ""}`}
+              className={`btn ${isProtected ? "btn-danger" : ""}`}
               disabled={readOnly}
               title={readOnly ? READ_ONLY_WHY : "Write a new access rule"}
               onClick={() => setCreating(true)}
@@ -617,7 +618,7 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
       {removing !== null && (
         <ConfirmModal
           title={
-            isProd
+            isProtected
               ? `Remove this rule on ${profile.name}?`
               : "Remove this access rule?"
           }
@@ -640,9 +641,10 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
             </>
           }
           confirmLabel="Remove rule"
-          // Environment-gated, not action-gated: prod always asks, dev never
+          // Environment-gated, not action-gated: a protected environment
+          // always asks, an unprotected one never
           // does (§6 layer 4).
-          typeToConfirm={isProd ? removing.resource_name : null}
+          typeToConfirm={isProtected ? removing.resource_name : null}
           extra={
             removing.permission === "deny" ? (
               <div className="banner banner-warn" role="note">
@@ -882,7 +884,7 @@ function AclCreateModal({
     [patternType],
   );
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const isCluster = resourceType === "cluster";
   // Kafka's own literal for the cluster resource. It is not a name the user
   // gets to pick, so the field is filled in and explained rather than left
@@ -1008,7 +1010,7 @@ function AclCreateModal({
           Add an access rule
         </h2>
 
-        {isProd && (
+        {isProtected && (
           <div className="banner banner-warn" role="note">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -1276,7 +1278,7 @@ function AclCreateModal({
           </button>
           <button
             type="submit"
-            className={`btn ${isProd ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
             disabled={busy}
             aria-busy={busy || undefined}
             title={busy ? "Kavka is writing the rule" : undefined}

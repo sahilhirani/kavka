@@ -27,7 +27,7 @@
 
 use kavka_core::connection::ClusterConnection;
 use kavka_core::consume::{fetch_messages, FetchSpec, SeekSpec};
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment, WasmSerdeConfig};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile, WasmSerdeConfig};
 use kavka_core::search::{SearchQuery, SearchSession, SearchSpec};
 use kavka_core::sql::{SqlSession, SqlSpec};
 use std::time::{Duration, Instant};
@@ -90,7 +90,7 @@ fn connection(name: &str, topics: &[&str]) -> ClusterConnection {
     let conn = ClusterConnection::connect(ConnectionProfile {
         id: format!("it-wasm-{name}"),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

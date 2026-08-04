@@ -710,7 +710,7 @@ fn oauth_protocol() -> Result<&'static str> {
 #[cfg(all(test, feature = "kafka"))]
 mod tests {
     use super::*;
-    use crate::profiles::{Environment, SecretRef};
+    use crate::profiles::SecretRef;
     use std::sync::{Mutex, MutexGuard};
 
     /// The OS keychain is process-wide — worse, machine-wide — state, and cargo
@@ -742,7 +742,7 @@ mod tests {
         ConnectionProfile {
             id: "unit".into(),
             name: "unit".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers,
             auth,
             read_only: false,

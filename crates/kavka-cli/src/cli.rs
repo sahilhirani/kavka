@@ -68,8 +68,8 @@ const STDIN: &str = "-";
         0  answered — an empty result is still an answer\n  \
         1  the cluster, the keychain or the profile file failed\n  \
         2  the command line was wrong\n  \
-        3  a guardrail refused it: read-only, or prod without --yes-prod.\n     \
-           Nothing was sent\n  \
+        3  a guardrail refused it: read-only, or a protected environment\n     \
+           without --yes-prod. Nothing was sent\n  \
         4  no such connection on this machine\n\n\
     EXAMPLES\n  \
         kavka profiles list\n  \
@@ -576,11 +576,18 @@ pub struct ProduceArgs {
     /// Required before this writes to a connection tagged `prod`.
     #[arg(
         long,
-        long_help = "Required before this writes to a connection tagged `prod`.\n\n\
-            Prod always asks; dev and staging never do. Without it the command\n\
-            exits 3 and nothing is sent. A connection marked read-only refuses\n\
-            either way — no flag lifts that, because it is a property of the\n\
-            connection rather than of this command."
+        long_help = "Required when the connection's environment is marked\n\
+            PROTECTED in the Kavka app.\n\n\
+            Environments are yours to define — `dev`, `QA`, `UAT`, `Production`\n\
+            — and each one is protected or not. A protected environment always\n\
+            asks; an unprotected one never does, whatever it is called. Without\n\
+            this flag the command exits 3 and nothing is sent. `kavka profiles\n\
+            list --output json` reports `environment_protected` per connection,\n\
+            so a script can tell without guessing from the name.\n\n\
+            The flag is spelled `--yes-prod` for the shell histories and CI\n\
+            scripts that already carry it. A connection marked read-only\n\
+            refuses either way — no flag lifts that, because it is a property\n\
+            of the connection rather than of this command."
     )]
     pub yes_prod: bool,
 }

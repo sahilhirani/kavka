@@ -25,9 +25,10 @@ use crate::output::{self, grouped, Align, Answer, Body, Column, Mode, Table, ABS
 use kavka_core::admin;
 use kavka_core::connection::ClusterConnection;
 use kavka_core::consume::{self, FetchSpec};
+use kavka_core::environments::{self, EffectiveEnvironment, EnvironmentDef, EnvironmentStore};
 use kavka_core::masking::{MaskSet, MaskStore, MASK_NOTICE_MARKER};
 use kavka_core::produce;
-use kavka_core::profiles::{ConnectionProfile, Environment, ProfileStore};
+use kavka_core::profiles::{ConnectionProfile, ProfileStore};
 use kavka_core::search::{self, SearchProgress, SearchQuery, SearchSession, SearchSpec};
 use kavka_core::serdes::MessageRecord;
 use kavka_core::sql::{self, SqlSession, SqlSpec};
@@ -56,6 +57,7 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
     let session = Session {
         profiles_path: config::profiles_file(&dir),
         masks: MaskStore::new(dir.clone()),
+        environments: EnvironmentStore::new(dir.clone()),
         store: ProfileStore::new(dir),
         requested: cli.profile.clone(),
         unmasked: cli.unmasked,
@@ -101,6 +103,11 @@ struct Session {
     store: ProfileStore,
     /// The app's `masking.json`, from the same directory as `profiles.json`.
     masks: MaskStore,
+    /// The app's `environments.json`, from the same directory again. This is
+    /// what turns a profile's `environment` string into the guardrail
+    /// [`gate::authorize_write`] reads — the CLI and the app must agree about
+    /// which environments are protected, and they agree by reading one file.
+    environments: EnvironmentStore,
     /// Kept for messages: "no connections in <file>" is actionable, "no
     /// connections" is not.
     profiles_path: PathBuf,
@@ -203,9 +210,14 @@ impl Session {
     /// cluster carries them and no command has to remember to.
     fn with_connection<F>(&self, body: F) -> Result<Answer, CliError>
     where
-        F: FnOnce(&ClusterConnection, &ConnectionProfile) -> Result<Answer, CliError>,
+        F: FnOnce(
+            &ClusterConnection,
+            &ConnectionProfile,
+            &EffectiveEnvironment,
+        ) -> Result<Answer, CliError>,
     {
         let (profile, chosen) = self.profile()?;
+        let environment = self.environment(&profile)?;
         let conn = ClusterConnection::connect(profile.clone()).map_err(|e| {
             CliError::failed(
                 format!(
@@ -213,20 +225,55 @@ impl Session {
                     name = profile.name,
                     servers = profile.bootstrap_servers.join(", "),
                 ),
-                &Context::on(profile.environment),
+                &Context::on(&environment),
             )
         })?;
-        let mut answer = body(&conn, &profile)?;
+        let mut answer = body(&conn, &profile, &environment)?;
         // Front of the list, so the loudest thing on stderr is which cluster
         // this was: docs/DESIGN.md §6 layer 3, the bootstrap address is always
         // on screen.
-        if let Some(banner) = prod_banner(&profile) {
-            answer.notes.insert(0, banner);
+        for note in environment_notes(&profile, &environment) {
+            answer.notes.insert(0, note);
         }
         if let Some(line) = chosen {
             answer.notes.insert(0, line);
         }
         Ok(answer)
+    }
+
+    /// This machine's meaning for one profile's environment.
+    ///
+    /// **Fails loudly rather than answering "unprotected".** Every guardrail
+    /// in this program is downstream of it, and an `environments.json` that
+    /// cannot be read is exactly the moment a silent default would open the
+    /// gate on somebody's production cluster. An environment nothing *defines*
+    /// is a different thing and is not an error — see
+    /// [`kavka_core::environments`].
+    fn environment(&self, profile: &ConnectionProfile) -> Result<EffectiveEnvironment, CliError> {
+        Ok(environments::resolve(
+            &self.environment_defs()?,
+            &profile.environment,
+        ))
+    }
+
+    /// This machine's environment definitions.
+    ///
+    /// Read as a list rather than one resolution at a time so a listing cannot
+    /// disagree with itself halfway down: it is one small file, and the app
+    /// may save an environment while this command is running.
+    fn environment_defs(&self) -> Result<Vec<EnvironmentDef>, CliError> {
+        self.environments.list().map_err(|e| {
+            CliError::stated(
+                ExitCode::Failed,
+                "Kavka couldn't read its environment file",
+                format!(
+                    "{e}. That file says which environments are protected, so Kavka won't guess \
+                     — a connection that should have asked for {flag} would otherwise go through \
+                     silently.",
+                    flag = gate::YES_PROD_FLAG,
+                ),
+            )
+        })
     }
 
     /// The masking rules in force for one profile, compiled.
@@ -292,13 +339,26 @@ impl Session {
 
     fn profiles_list(&self) -> Result<Answer, CliError> {
         let profiles = self.profiles()?;
+        let defs = self.environment_defs()?;
+        let environments: Vec<EffectiveEnvironment> = profiles
+            .iter()
+            .map(|profile| environments::resolve(&defs, &profile.environment))
+            .collect();
         let rows: Vec<Value> = profiles
             .iter()
-            .map(|profile| {
+            .zip(&environments)
+            .map(|(profile, environment)| {
                 json!({
                     "id": profile.id,
                     "name": profile.name,
-                    "environment": serde_json::to_value(profile.environment).unwrap_or(Value::Null),
+                    "environment": profile.environment,
+                    // The flag, beside the name: a script deciding whether to
+                    // pass --yes-prod has to read the same thing the gate does,
+                    // and the name stopped answering that question when
+                    // environments became the user's to invent.
+                    "environment_protected": environment.protected,
+                    "environment_color": environment.color,
+                    "environment_known": environment.known,
                     "bootstrap_servers": profile.bootstrap_servers,
                     "auth": serde_json::to_value(&profile.auth)
                         .ok()
@@ -317,11 +377,11 @@ impl Session {
             Column::left("MODE"),
             Column::left("AUTH"),
         ]);
-        for (profile, row) in profiles.iter().zip(&rows) {
+        for ((profile, environment), row) in profiles.iter().zip(&environments).zip(&rows) {
             table.push(vec![
                 profile.id.clone(),
                 profile.name.clone(),
-                environment_word(profile.environment).to_string(),
+                environment.word(),
                 profile.bootstrap_servers.join(", "),
                 // Law 2: the state that matters most is a word, never a colour
                 // and never an empty cell.
@@ -354,10 +414,10 @@ impl Session {
     // -----------------------------------------------------------------------
 
     fn topics_list(&self, args: &TopicsListArgs) -> Result<Answer, CliError> {
-        self.with_connection(|conn, profile| {
+        self.with_connection(|conn, _profile, environment| {
             let all = conn
                 .list_topics()
-                .map_err(|e| CliError::failed(e.to_string(), &Context::on(profile.environment)))?;
+                .map_err(|e| CliError::failed(e.to_string(), &Context::on(environment)))?;
             let internal_total = all.iter().filter(|topic| topic.internal).count();
             let needle = args.contains.as_ref().map(|text| text.to_lowercase());
             let matching: Vec<&admin::TopicInfo> = all
@@ -436,9 +496,9 @@ impl Session {
     }
 
     fn topic_detail(&self, args: &TopicDetailArgs) -> Result<Answer, CliError> {
-        self.with_connection(|conn, profile| {
+        self.with_connection(|conn, _profile, environment| {
             let detail = admin::topic_detail(conn, &args.topic)
-                .map_err(|e| CliError::failed(e.to_string(), &Context::on(profile.environment)))?;
+                .map_err(|e| CliError::failed(e.to_string(), &Context::on(environment)))?;
             let approx: i64 = detail
                 .partitions
                 .iter()
@@ -552,12 +612,10 @@ impl Session {
             max_messages: args.max,
             max_value_bytes: args.max_value_bytes,
         };
-        self.with_connection(|conn, profile| {
+        self.with_connection(|conn, profile, environment| {
             let mut records =
                 consume::fetch_messages(conn, conn.profile().schema_registry.as_ref(), &spec, None)
-                    .map_err(|e| {
-                        CliError::failed(e.to_string(), &Context::on(profile.environment))
-                    })?;
+                    .map_err(|e| CliError::failed(e.to_string(), &Context::on(environment)))?;
 
             let mut notes = Vec::new();
             let rules = self.mask_set(&profile.id, &mut notes);
@@ -635,8 +693,8 @@ impl Session {
             max_buffered: max_matches,
             max_value_bytes: args.max_value_bytes,
         };
-        self.with_connection(|conn, profile| {
-            let context = Context::on(profile.environment);
+        self.with_connection(|conn, profile, environment| {
+            let context = Context::on(environment);
             let session =
                 SearchSession::start(conn, conn.profile().schema_registry.as_ref(), &spec)
                     .map_err(|e| CliError::failed(e.to_string(), &context))?;
@@ -736,8 +794,8 @@ impl Session {
             scan_cap: args.scan_cap,
             max_rows: args.max_rows,
         };
-        self.with_connection(|conn, profile| {
-            let context = Context::on(profile.environment);
+        self.with_connection(|conn, profile, environment| {
+            let context = Context::on(environment);
             let session = SqlSession::start(conn, conn.profile().schema_registry.as_ref(), &spec)
                 .map_err(|e| CliError::failed(e.to_string(), &context))?;
 
@@ -905,11 +963,12 @@ impl Session {
         // parse.
         let record = args.record()?;
         let (profile, chosen) = self.profile()?;
+        let environment = self.environment(&profile)?;
         // …and the gate runs before anything is opened, so a read-only
         // connection never authenticates on behalf of a write.
-        gate::authorize_write(&profile, "produce", args.yes_prod)?;
+        gate::authorize_write(&profile, &environment, "produce", args.yes_prod)?;
 
-        let context = Context::on(profile.environment);
+        let context = Context::on(&environment);
         let conn = ClusterConnection::connect(profile.clone()).map_err(|e| {
             CliError::failed(
                 format!(
@@ -947,8 +1006,8 @@ impl Session {
             }),
             Body::Text(sentence),
         );
-        if let Some(banner) = prod_banner(&profile) {
-            answer.notes.insert(0, banner);
+        for note in environment_notes(&profile, &environment) {
+            answer.notes.insert(0, note);
         }
         if let Some(line) = chosen {
             answer.notes.insert(0, line);
@@ -961,9 +1020,9 @@ impl Session {
     // -----------------------------------------------------------------------
 
     fn groups_list(&self) -> Result<Answer, CliError> {
-        self.with_connection(|conn, profile| {
+        self.with_connection(|conn, _profile, environment| {
             let groups = admin::groups_list(conn)
-                .map_err(|e| CliError::failed(e.to_string(), &Context::on(profile.environment)))?;
+                .map_err(|e| CliError::failed(e.to_string(), &Context::on(environment)))?;
             let rows: Vec<Value> = groups
                 .iter()
                 .map(|group| serde_json::to_value(group).unwrap_or(Value::Null))
@@ -997,9 +1056,9 @@ impl Session {
     }
 
     fn group_detail(&self, group_id: &str) -> Result<Answer, CliError> {
-        self.with_connection(|conn, profile| {
+        self.with_connection(|conn, _profile, environment| {
             let detail = admin::group_detail(conn, group_id)
-                .map_err(|e| CliError::failed(e.to_string(), &Context::on(profile.environment)))?;
+                .map_err(|e| CliError::failed(e.to_string(), &Context::on(environment)))?;
             let total_lag: i64 = detail.offsets.iter().filter_map(|offset| offset.lag).sum();
 
             let mut offsets = Table::new(vec![
@@ -1236,28 +1295,49 @@ impl Ticker {
     }
 }
 
+/// What stderr says about the connection's environment before anything else:
+/// the guardrail banner, and — separately — the hint for an environment this
+/// machine does not define. Quietest first, so a caller that front-inserts
+/// them in order leaves the banner at the top of the list.
+///
+/// Two notes rather than one because they answer different questions and
+/// either can be absent: a protected environment nothing defines is
+/// impossible, but an *undefined* environment on a connection somebody just
+/// imported is routine, and it must not look like a guardrail firing.
+fn environment_notes(
+    profile: &ConnectionProfile,
+    environment: &EffectiveEnvironment,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(hint) = environment.hint() {
+        notes.push(format!("kavka: {hint}"));
+    }
+    if let Some(banner) = protected_banner(profile, environment) {
+        notes.push(banner);
+    }
+    notes
+}
+
 /// docs/DESIGN.md §6 layers 2 and 3, as one line of text: the environment and
 /// the address, before anything else on stderr.
 ///
 /// A word, not a colour — this program has no colour support and does not want
-/// any (Law 2), and a `PROD` a script can grep for is worth more than a red one
-/// it cannot.
-fn prod_banner(profile: &ConnectionProfile) -> Option<String> {
-    (profile.environment == Environment::Prod).then(|| {
+/// any (Law 2), and a `PRODUCTION` a script can grep for is worth more than a
+/// red one it cannot. The word is the environment's own name uppercased
+/// ([`EffectiveEnvironment::word`]), so a company that calls it `UAT` sees
+/// `UAT` rather than a label Kavka invented for them.
+fn protected_banner(
+    profile: &ConnectionProfile,
+    environment: &EffectiveEnvironment,
+) -> Option<String> {
+    environment.protected.then(|| {
         format!(
-            "! PROD · {name} · {servers}",
+            "! {word} · {name} · {servers}",
+            word = environment.word(),
             name = profile.name,
             servers = profile.bootstrap_servers.join(", "),
         )
     })
-}
-
-fn environment_word(environment: Environment) -> &'static str {
-    match environment {
-        Environment::Dev => "dev",
-        Environment::Staging => "staging",
-        Environment::Prod => "PROD",
-    }
 }
 
 /// The empty state that fits, out of docs/DESIGN.md §7's list. Three different
@@ -1329,12 +1409,13 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use crate::cli::ScanArgs;
+    use kavka_core::environments::{resolve, EnvironmentDef};
 
-    fn profile(environment: Environment) -> ConnectionProfile {
+    fn profile(environment: &str) -> ConnectionProfile {
         serde_json::from_value(json!({
             "id": "p1",
             "name": "payments-prod",
-            "environment": serde_json::to_value(environment).expect("an environment"),
+            "environment": environment,
             "bootstrap_servers": ["10.0.4.19:9093", "10.0.4.20:9093"],
             "auth": { "kind": "plaintext" },
             "read_only": false,
@@ -1342,23 +1423,68 @@ mod tests {
         .expect("a ConnectionProfile")
     }
 
-    /// The guardrail that costs nothing and is on every prod command: the
-    /// environment and the address, in words, before the answer.
+    /// The environment as a machine with the shipped definitions resolves it.
+    fn shipped(name: &str) -> EffectiveEnvironment {
+        kavka_core::environments::resolve(&kavka_core::environments::defaults(), name)
+    }
+
+    /// The guardrail that costs nothing and is on every command against a
+    /// protected environment: the environment and the address, in words,
+    /// before the answer.
     #[test]
-    fn prod_announces_itself_with_the_address_and_dev_says_nothing() {
-        let banner = prod_banner(&profile(Environment::Prod)).expect("a prod banner");
+    fn a_protected_environment_announces_itself_with_the_address() {
+        let banner =
+            protected_banner(&profile("prod"), &shipped("prod")).expect("a protected banner");
         assert!(banner.contains("PROD"), "{banner}");
         assert!(banner.contains("10.0.4.19:9093"), "{banner}");
         assert!(banner.contains("payments-prod"), "{banner}");
-        assert!(prod_banner(&profile(Environment::Dev)).is_none());
-        assert!(prod_banner(&profile(Environment::Staging)).is_none());
+        assert!(protected_banner(&profile("dev"), &shipped("dev")).is_none());
+        assert!(protected_banner(&profile("staging"), &shipped("staging")).is_none());
+    }
+
+    /// The banner carries the environment's OWN name, uppercased — not a label
+    /// Kavka invented. A company that calls it `UAT` reads `UAT`.
+    #[test]
+    fn the_banner_word_is_the_users_own_environment_name() {
+        let defs = [
+            EnvironmentDef::new("Production", "violet", true),
+            // Red, and not protected: colour is identity, protection is the
+            // guardrail, and the banner follows the guardrail.
+            EnvironmentDef::new("firedrill", "red", false),
+        ];
+        let banner = protected_banner(&profile("Production"), &resolve(&defs, "Production"))
+            .expect("a protected banner");
+        assert!(banner.starts_with("! PRODUCTION · "), "{banner}");
+        assert!(
+            protected_banner(&profile("firedrill"), &resolve(&defs, "firedrill")).is_none(),
+            "a red chip is not a guardrail"
+        );
+    }
+
+    /// An environment nothing defines is a note, never a refusal and never a
+    /// banner — the connection still works, and the sentence says how to make
+    /// it a real environment.
+    #[test]
+    fn an_undefined_environment_is_a_hint_and_not_a_guardrail() {
+        let notes = environment_notes(&profile("UAT"), &shipped("UAT"));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("UAT"), "{notes:?}");
+        assert!(notes[0].contains("Manage environments"), "{notes:?}");
+        // A defined, unprotected environment says nothing at all.
+        assert!(environment_notes(&profile("dev"), &shipped("dev")).is_empty());
+        // A protected one says exactly the one thing.
+        let protected = environment_notes(&profile("prod"), &shipped("prod"));
+        assert_eq!(protected.len(), 1, "{protected:?}");
+        assert!(protected[0].starts_with("! PROD · "), "{protected:?}");
     }
 
     #[test]
-    fn every_environment_has_a_word() {
-        assert_eq!(environment_word(Environment::Dev), "dev");
-        assert_eq!(environment_word(Environment::Staging), "staging");
-        assert_eq!(environment_word(Environment::Prod), "PROD");
+    fn the_environment_word_uppercases_only_the_protected_one() {
+        assert_eq!(shipped("dev").word(), "dev");
+        assert_eq!(shipped("staging").word(), "staging");
+        assert_eq!(shipped("prod").word(), "PROD");
+        // An undefined one still has a word — the one the profile stores.
+        assert_eq!(shipped("QA").word(), "QA");
     }
 
     /// Every way a scan can be partial produces a sentence. This is the Phase 2

@@ -96,8 +96,12 @@ ENVIRONMENT
       another shell, changes nothing about a running server.
 
   {prod}=1
-      Additionally allow writes to connections tagged `prod`. Connections marked
-      read-only refuse either way, and no variable lifts that.
+      Additionally allow writes to connections whose ENVIRONMENT IS MARKED
+      PROTECTED in the Kavka app. Environments are yours to define — `dev`,
+      `QA`, `UAT`, `Production` — and each one is protected or not; the gate
+      reads that flag, never the name. kavka_list_profiles reports
+      `environment_protected` per connection. Connections marked read-only
+      refuse either way, and no variable lifts that.
 
   {unmasked}=1
       Return payloads RAW. By default this server applies the display-masking
@@ -105,8 +109,8 @@ ENVIRONMENT
       rewrote says so. Read once, at startup, like the two above.
 
   {config_dir}=<folder>
-      Read profiles.json (and masking.json beside it) from this folder instead
-      of the app's own config directory.
+      Read profiles.json (and masking.json and environments.json beside it)
+      from this folder instead of the app's own config directory.
 
 READ TOOLS  list profiles · cluster overview · list topics · topic detail ·
             fetch messages · search · SQL · consumer groups · group detail

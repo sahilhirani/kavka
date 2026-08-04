@@ -45,6 +45,10 @@ pub mod cancel;
 pub mod connect;
 pub mod connection;
 pub mod consume;
+/// Ungated: an environment is a name, a colour token and a boolean, and the
+/// guardrail every front end keys on is a pure function over three of them.
+/// Nothing here has ever seen a cluster.
+pub mod environments;
 pub mod history;
 /// Ungated: masking is a regex over decoded text, and the whole feature is
 /// testable — rules, store and all — with no cluster in sight.

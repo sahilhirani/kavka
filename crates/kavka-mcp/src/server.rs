@@ -23,6 +23,7 @@ use crate::tools::{self, Tool};
 use kavka_core::admin::{self, OffsetResetSpec};
 use kavka_core::connection::ClusterConnection;
 use kavka_core::consume::{self, FetchSpec, SeekSpec};
+use kavka_core::environments::{self, EffectiveEnvironment, EnvironmentDef, EnvironmentStore};
 use kavka_core::masking::{self, MaskSet, MaskStore};
 use kavka_core::produce::{self, ProduceRecordSpec};
 use kavka_core::profiles::{ConnectionProfile, ProfileStore};
@@ -58,6 +59,13 @@ pub struct Server {
     /// The app's `masking.json`, from the same directory as `profiles.json` —
     /// see [`Server::mask_set`].
     masks: MaskStore,
+    /// The app's `environments.json`, from the same directory again. This is
+    /// what turns a profile's `environment` string into the guardrail
+    /// [`gate::authorize_write`] reads: which environments are protected is
+    /// the user's decision, made in the app, and this server has to read the
+    /// same file or it is a second opinion about somebody's production
+    /// cluster.
+    environments: EnvironmentStore,
     /// Kept for messages: "no connections in <file>" is actionable, "no
     /// connections" is not.
     profiles_path: std::path::PathBuf,
@@ -74,6 +82,7 @@ impl Server {
         Self {
             profiles_path: config::profiles_file(&config_dir),
             masks: MaskStore::new(config_dir.clone()),
+            environments: EnvironmentStore::new(config_dir.clone()),
             store: ProfileStore::new(config_dir),
             policy,
             masking,
@@ -188,6 +197,15 @@ impl Server {
              this machine. Start with kavka_list_profiles — every other tool takes a `profile` id \
              from it. Connections and credentials are read from the app's own profiles.json and \
              the OS keychain; nothing is configured here.\n\n\
+             ENVIRONMENTS: each connection carries a user-defined environment — this machine's \
+             may be `dev` and `prod`, or `QA`, `UAT` and `Production`, or anything else its owner \
+             invented. Do NOT infer how dangerous a connection is from that name. Every profile \
+             carries `environment_protected`: true means its owner marked that environment as one \
+             writes must be deliberate about, and it is the ONLY thing the write gate below \
+             reads. A connection whose `environment_known` is false names an environment this \
+             machine defines nothing for — it resolves neutral and UNPROTECTED rather than \
+             failing, so an `environment_hint` comes with it and is worth passing on before you \
+             write anywhere near it.\n\n\
              READS: cluster overview, topics, topic detail, messages (decoded through Kavka's \
              serde ladder), search (raw-byte substring and/or CEL over the decoded record), SQL \
              over a bounded scan, consumer groups and their lag. Every read is capped, and every \
@@ -274,15 +292,35 @@ impl Server {
 
     fn list_profiles(&mut self) -> Result<Value, String> {
         let profiles = self.profiles()?;
+        let defs = self.environment_defs()?;
+        let environments: Vec<EffectiveEnvironment> = profiles
+            .iter()
+            .map(|profile| environments::resolve(&defs, &profile.environment))
+            .collect();
         let listed: Vec<Value> = profiles
             .iter()
-            .map(|profile| {
-                let refusal = gate::authorize_write(self.policy, profile, "a write tool").err();
-                json!({
+            .zip(&environments)
+            .map(|(profile, environment)| {
+                let refusal =
+                    gate::authorize_write(self.policy, profile, environment, "a write tool").err();
+                let mut row = json!({
                     "id": profile.id,
                     "name": profile.name,
-                    "environment": serde_json::to_value(profile.environment)
-                        .unwrap_or(Value::Null),
+                    "environment": profile.environment,
+                    // The flag beside the name, because the name stopped
+                    // answering "is this production" the moment environments
+                    // became the user's to invent. A model deciding whether to
+                    // warn the person before a write reads this, not the word.
+                    "environment_protected": environment.protected,
+                    // And the other half of that answer: whether this machine
+                    // defines the environment at all. `false` with
+                    // `environment_protected: false` is the AMBIGUOUS case —
+                    // unprotected because nothing said otherwise, not because
+                    // somebody decided it was safe — and a model that cannot
+                    // tell the two apart has no way to say so. Same field the
+                    // CLI's `profiles list --json` emits, so a script and an
+                    // agent read the same shape.
+                    "environment_known": environment.known,
                     "bootstrap_servers": profile.bootstrap_servers,
                     "auth": serde_json::to_value(&profile.auth)
                         .ok()
@@ -292,7 +330,14 @@ impl Server {
                     "schema_registry": profile.schema_registry.is_some(),
                     "writes_allowed": refusal.is_none(),
                     "writes_refused_because": refusal,
-                })
+                });
+                // Present only when there is something to say — a known
+                // environment carries no hint, and a null on every row would
+                // be noise a model has to learn to skip.
+                if let Some(hint) = environment.hint() {
+                    row["environment_hint"] = Value::String(hint);
+                }
+                row
             })
             .collect();
         Ok(json!({
@@ -313,10 +358,17 @@ impl Server {
         let profile = self.profile(args)?;
         let conn = self.connection(&profile)?;
         let overview = conn.overview().map_err(|e| e.to_string())?;
-        Ok(json!({
+        let environment = self.environment(&profile)?;
+        let mut answer = json!({
             "profile": profile.id,
             "name": profile.name,
-            "environment": serde_json::to_value(profile.environment).unwrap_or(Value::Null),
+            "environment": profile.environment,
+            "environment_protected": environment.protected,
+            // The same pair the listing carries, because this is the tool a
+            // model calls to "confirm the connection works before a longer
+            // investigation" — and whether the guardrail is armed or merely
+            // undefined is part of what it is confirming.
+            "environment_known": environment.known,
             "read_only": profile.read_only,
             "bootstrap_servers": profile.bootstrap_servers,
             "cluster_id": overview.cluster_id,
@@ -324,7 +376,11 @@ impl Server {
             "broker_count": overview.brokers.len(),
             "topic_count": overview.topic_count,
             "partition_count": overview.partition_count,
-        }))
+        });
+        if let Some(hint) = environment.hint() {
+            answer["environment_hint"] = Value::String(hint);
+        }
+        Ok(answer)
     }
 
     fn list_topics(&mut self, args: &Value) -> Result<Value, String> {
@@ -671,7 +727,12 @@ impl Server {
 
     fn produce(&mut self, args: &Value) -> Result<Value, String> {
         let profile = self.profile(args)?;
-        gate::authorize_write(self.policy, &profile, "kavka_produce")?;
+        gate::authorize_write(
+            self.policy,
+            &profile,
+            &self.environment(&profile)?,
+            "kavka_produce",
+        )?;
         let topic = str_arg(args, "topic")?;
         let record: ProduceRecordSpec = serde_json::from_value(args["record"].clone())
             .map_err(|e| format!("`record` is not a record this tool can send: {e}"))?;
@@ -695,7 +756,12 @@ impl Server {
 
     fn reset_offsets(&mut self, args: &Value) -> Result<Value, String> {
         let profile = self.profile(args)?;
-        gate::authorize_write(self.policy, &profile, "kavka_reset_offsets")?;
+        gate::authorize_write(
+            self.policy,
+            &profile,
+            &self.environment(&profile)?,
+            "kavka_reset_offsets",
+        )?;
         let spec: OffsetResetSpec = serde_json::from_value(args["spec"].clone())
             .map_err(|e| format!("`spec` is not a reset this tool can run: {e}"))?;
 
@@ -719,6 +785,35 @@ impl Server {
             format!(
                 "couldn't read Kavka's connections from {file}: {e}",
                 file = self.profiles_path.display(),
+            )
+        })
+    }
+
+    /// This machine's meaning for one profile's environment.
+    ///
+    /// An environment nothing *defines* is not an error — it resolves neutral
+    /// and unprotected, see [`kavka_core::environments`]. A definitions file
+    /// that cannot be *read* is, and [`Self::environment_defs`] says so rather
+    /// than answering "unprotected": every guardrail this server has is
+    /// downstream of it.
+    fn environment(&self, profile: &ConnectionProfile) -> Result<EffectiveEnvironment, String> {
+        Ok(environments::resolve(
+            &self.environment_defs()?,
+            &profile.environment,
+        ))
+    }
+
+    /// This machine's environment definitions.
+    ///
+    /// Read as a list rather than one resolution at a time so a listing cannot
+    /// disagree with itself halfway down: it is one small file, and the app may
+    /// save an environment while a call is in flight.
+    fn environment_defs(&self) -> Result<Vec<EnvironmentDef>, String> {
+        self.environments.list().map_err(|e| {
+            format!(
+                "Kavka couldn't read the environment definitions ({e}). That file says which \
+                 environments are protected, so this server won't guess — a connection that \
+                 should have needed {ALLOW_PROD_ENV}=1 would otherwise be written to silently."
             )
         })
     }

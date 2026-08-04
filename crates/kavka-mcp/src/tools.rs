@@ -92,7 +92,9 @@ pub const TOOLS: &[Tool] = &[
         destructive: false,
         description: "\
 Lists the Kafka connections saved in the Kavka desktop app on this machine — id, display name, \
-environment tag (dev/staging/prod), bootstrap servers, and whether the connection is read-only. \
+its user-defined environment tag and whether that environment is marked protected, bootstrap \
+servers, and whether the connection is read-only. The environments are whatever this machine's \
+owner invented, so read the protected flag rather than the word. \
 START HERE: every other tool takes the `profile` id from this list. Nothing is contacted; this \
 reads the app's profiles.json only, so it works even when no broker is reachable. The answer also \
 reports this server's write policy and, per connection, whether a write would currently be \
@@ -310,14 +312,19 @@ pub fn gate_state(policy: WritePolicy) -> String {
              server."
         ),
         (true, false) => format!(
-            "WRITE GATE — currently ENABLED for non-production connections ({ALLOW_WRITES_ENV}=1). \
-             Connections tagged `prod` still refuse, because {ALLOW_PROD_ENV}=1 was not set. \
-             Connections marked read-only refuse regardless."
+            "WRITE GATE — currently ENABLED for unprotected environments ({ALLOW_WRITES_ENV}=1). \
+             Connections whose environment is marked PROTECTED in the Kavka app still refuse, \
+             because {ALLOW_PROD_ENV}=1 was not set — environments are user-defined, so which \
+             ones those are is on each connection in kavka_list_profiles as \
+             `environment_protected`, not something to guess from the name. Connections marked \
+             read-only refuse regardless."
         ),
         (true, true) => format!(
-            "WRITE GATE — currently ENABLED, INCLUDING PRODUCTION ({ALLOW_WRITES_ENV}=1 and \
-             {ALLOW_PROD_ENV}=1). Connections marked read-only still refuse — that flag is a \
-             property of the connection and no variable lifts it."
+            "WRITE GATE — currently ENABLED, INCLUDING PROTECTED ENVIRONMENTS \
+             ({ALLOW_WRITES_ENV}=1 and {ALLOW_PROD_ENV}=1). A connection whose \
+             `environment_protected` is true is somebody's production; say which cluster you are \
+             about to write to before you do. Connections marked read-only still refuse — that \
+             flag is a property of the connection and no variable lifts it."
         ),
     }
 }
@@ -968,17 +975,48 @@ mod tests {
         }
         // The prod variable appears whenever it is the thing standing in the
         // way, and when it is the thing that was lifted.
-        assert!(gate_state(WritePolicy {
+        let half_open = gate_state(WritePolicy {
             writes_enabled: true,
-            prod_allowed: false
-        })
-        .contains(ALLOW_PROD_ENV));
+            prod_allowed: false,
+        });
+        assert!(half_open.contains(ALLOW_PROD_ENV), "{half_open}");
+        // And says what it is keyed on — the flag, not the name — because a
+        // model that reads "connections tagged prod" will guess from a name
+        // its user invented. See kavka_core::environments.
+        assert!(half_open.contains("environment_protected"), "{half_open}");
         assert!(gate_state(WritePolicy {
             writes_enabled: true,
             prod_allowed: true
         })
-        .contains("INCLUDING PRODUCTION"));
+        .contains("INCLUDING PROTECTED ENVIRONMENTS"));
         assert!(gate_state(WritePolicy::read_only()).contains("DISABLED"));
+    }
+
+    /// The catalogue is the first thing a model reads, and a description that
+    /// spells out `dev/staging/prod` teaches it that environments are a fixed
+    /// triple — which is exactly the assumption `kavka_core::environments`
+    /// exists to remove. The three words are shipped defaults on a fresh
+    /// machine, nothing more; the field that decides anything is
+    /// `environment_protected`.
+    #[test]
+    fn no_tool_description_names_a_fixed_environment_triple() {
+        for tool in TOOLS {
+            let lowered = tool.description.to_lowercase();
+            for named in ["dev/staging/prod", "dev, staging", "staging/prod"] {
+                assert!(
+                    !lowered.contains(named),
+                    "{} still hard-codes {named:?}",
+                    tool.name
+                );
+            }
+        }
+        // And the one that lists connections says what to read instead.
+        let listing = find("kavka_list_profiles").expect("the entry tool");
+        assert!(
+            listing.description.contains("protected"),
+            "{}",
+            listing.description
+        );
     }
 
     #[test]

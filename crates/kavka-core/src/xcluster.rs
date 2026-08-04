@@ -2949,7 +2949,7 @@ mod session_shape {
 #[cfg(all(test, feature = "kafka"))]
 mod it {
     use super::*;
-    use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+    use crate::profiles::{AuthConfig, ConnectionProfile};
     use rdkafka::config::ClientConfig;
     use rdkafka::producer::BaseProducer;
 
@@ -2969,7 +2969,7 @@ mod it {
         ClusterConnection::connect(ConnectionProfile {
             id: id.into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![bootstrap()],
             auth: AuthConfig::Plaintext,
             read_only,

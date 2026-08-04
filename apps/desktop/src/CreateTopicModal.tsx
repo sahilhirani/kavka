@@ -23,8 +23,12 @@ interface ConfigRow {
 
 interface CreateTopicModalProps {
   profileId: string;
-  /** Prod renders the write action as danger-outlined (§6 layer 7). */
-  isProd: boolean;
+  /**
+   * A PROTECTED environment renders the write action as danger-outlined
+   * (§6 layer 7). Passed in rather than resolved here: the caller already
+   * holds the profile, and this modal takes an id.
+   */
+  isProtected: boolean;
   clusterName: string;
   /** How many brokers there are — an RF above this can never be placed. */
   brokerCount: number;
@@ -38,7 +42,7 @@ let nextRowId = 1;
 
 export default function CreateTopicModal({
   profileId,
-  isProd,
+  isProtected,
   clusterName,
   brokerCount,
   existing,
@@ -204,7 +208,7 @@ export default function CreateTopicModal({
           Create a topic
         </h2>
 
-        {isProd && (
+        {isProtected && (
           <div className="banner banner-warn" role="note">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -402,7 +406,7 @@ export default function CreateTopicModal({
           </button>
           <button
             type="submit"
-            className={`btn ${isProd ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
             disabled={busy}
             aria-busy={busy || undefined}
             title={busy ? "Kavka is creating the topic" : undefined}

@@ -16,6 +16,14 @@ import {
   type Environment,
   type ScramMechanism,
 } from "./api";
+import EnvironmentsManager from "./EnvironmentsManager";
+import {
+  envAttrs,
+  isKnownEnvironment,
+  resolveEnvironment,
+  sameEnvironmentName,
+  useEnvironments,
+} from "./environments";
 import { classifyError } from "./errors";
 import { Term } from "./Glossary";
 import { useI18n, type TFunction } from "./i18n";
@@ -67,10 +75,11 @@ export function ErrorBanner({
 }
 
 /**
- * The environment segments, in order, so the radio group's arrow keys and its
- * rendering read from one list.
+ * The environment picker's options come from the registry now, not from a
+ * literal — which is the whole point of the change. `ENVIRONMENTS` used to
+ * live here as `["dev", "staging", "prod"] as const`, and its removal is what
+ * lets an org with dev/QA/UAT/production describe itself.
  */
-const ENVIRONMENTS = ["dev", "staging", "prod"] as const;
 
 /** Auth kinds the form can create and edit. Everything except Kerberos. */
 type EditableAuthKind =
@@ -213,10 +222,22 @@ interface FormState {
   readOnly: boolean;
 }
 
-function initialForm(profile: ConnectionProfile | null): FormState {
+/**
+ * `fallbackEnvironment` is the environment a NEW connection starts in: the
+ * first one the registry lists, because the registry's order is the user's
+ * order and its first entry is the least dangerous place to land. It is a
+ * parameter rather than the literal `"dev"` this used to hold — a machine
+ * whose environments are `QA`, `UAT` and `Production` has no `dev`, and a form
+ * that starts on a name nothing defines would open showing the unknown-
+ * environment hint.
+ */
+function initialForm(
+  profile: ConnectionProfile | null,
+  fallbackEnvironment: string,
+): FormState {
   const base: FormState = {
     name: "",
-    environment: "dev",
+    environment: fallbackEnvironment,
     bootstrap: "",
     authKind: "plaintext",
     username: "",
@@ -364,6 +385,13 @@ interface ProfileEditorProps {
   onDeleted: (profileId: string) => void;
   onCancelNew: () => void;
   onError: (msg: string) => void;
+  /**
+   * Something other than this form changed the stored connections — today,
+   * only the environment manager's reassign-then-delete flow, which rewrites
+   * every profile that named the environment being removed. The editor has no
+   * business reloading the sidebar itself, so it reports up.
+   */
+  onProfilesChanged: () => void;
 }
 
 export default function ProfileEditor({
@@ -375,12 +403,24 @@ export default function ProfileEditor({
   onDeleted,
   onCancelNew,
   onError,
+  onProfilesChanged,
 }: ProfileEditorProps) {
   const { t, tx } = useI18n();
   const isNew = profile === null;
-  const [form, setForm] = useState<FormState>(() => initialForm(profile));
+  const envDefs = useEnvironments();
+  // Read once at mount, deliberately NOT reactive: if the registry loads a
+  // moment after the form does, a new connection's environment must not slide
+  // out from under a user who has already picked one. The registry landing
+  // late only ever affects a form opened before it — and that form's initial
+  // value is the neutral first entry either way.
+  const fallbackEnv = useRef(envDefs[0]?.name ?? "dev").current;
+  const [form, setForm] = useState<FormState>(() =>
+    initialForm(profile, fallbackEnv),
+  );
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /** The "Manage environments…" dialog. One at a time, like every overlay. */
+  const [managingEnvs, setManagingEnvs] = useState(false);
   // Validation belongs next to the control it is about, not in a banner at
   // the top of the workspace where the user has to hunt for the field.
   const [fieldError, setFieldError] = useState<FieldError | null>(null);
@@ -429,26 +469,58 @@ export default function ProfileEditor({
    * group is ONE tab stop whose members are walked with the arrows, and
    * selection follows focus — so the roving `tabIndex` below and this
    * handler are two halves of the same fix (SC 2.1.1, SC 4.1.2).
+   *
+   * Keyed by name rather than by a closed union now, because the members are
+   * whatever the user defined. The keys are the registry's names verbatim, so
+   * two environments differing only in case cannot collide here — the store
+   * refuses to hold both.
    */
-  const envRefs = useRef<Partial<Record<Environment, HTMLButtonElement | null>>>(
-    {},
+  const envRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const envOptions = useMemo(() => {
+    // A profile can name an environment the registry no longer holds — deleted
+    // in another window, or written by a colleague's export. It gets a segment
+    // of its own at the end so the picker still shows the current value as
+    // selected, rather than silently reading as "none of these".
+    if (form.environment === "" || isKnownEnvironment(form.environment, envDefs))
+      return envDefs;
+    return [...envDefs, resolveEnvironment(form.environment, envDefs)];
+  }, [envDefs, form.environment]);
+  /** The definition behind whatever the form currently says. */
+  const formEnv = resolveEnvironment(form.environment, envDefs);
+  /**
+   * True when the profile names something the registry does not hold. Renders
+   * slate and unprotected with a hint pointing at the manager — never an
+   * error, because the profile is not wrong: the registry is just incomplete
+   * on THIS machine, which is the normal state after importing a colleague's
+   * connections.
+   */
+  const envUnknown =
+    form.environment !== "" && !isKnownEnvironment(form.environment, envDefs);
+  /**
+   * Which segment carries the group's single tab stop. The checked one — or
+   * the first, when nothing is checked, so the radiogroup never falls out of
+   * the tab order entirely.
+   */
+  const rovingIndex = Math.max(
+    envOptions.findIndex((d) => sameEnvironmentName(d.name, form.environment)),
+    0,
   );
   const onEnvKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
       let next: number | null = null;
       if (e.key === "ArrowRight" || e.key === "ArrowDown")
-        next = (index + 1) % ENVIRONMENTS.length;
+        next = (index + 1) % envOptions.length;
       else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
-        next = (index - 1 + ENVIRONMENTS.length) % ENVIRONMENTS.length;
+        next = (index - 1 + envOptions.length) % envOptions.length;
       else if (e.key === "Home") next = 0;
-      else if (e.key === "End") next = ENVIRONMENTS.length - 1;
+      else if (e.key === "End") next = envOptions.length - 1;
       if (next === null) return;
       e.preventDefault();
-      const target = ENVIRONMENTS[next];
+      const target = envOptions[next].name;
       patch({ environment: target });
       envRefs.current[target]?.focus();
     },
-    [patch],
+    [patch, envOptions],
   );
 
   /** Editing a field clears its own error. Never adds one — see §5.3. */
@@ -1173,13 +1245,13 @@ export default function ProfileEditor({
         if (isNew) {
           onCancelNew();
         } else {
-          setForm(initialForm(profile));
+          setForm(initialForm(profile, fallbackEnv));
           setFieldError(null);
           setConfirmingDelete(false);
         }
       }
     },
-    [isNew, profile, onCancelNew],
+    [isNew, profile, onCancelNew, fallbackEnv],
   );
 
   const connecting = connStatus === "connecting";
@@ -1234,12 +1306,13 @@ export default function ProfileEditor({
     ) : null;
 
   return (
-    // Picking prod swaps this form's substrate live — the rule, the tints and
-    // the segmented control all turn coral. That is the single best moment in
-    // the product to teach the guardrail.
+    // Picking a PROTECTED environment swaps this form's substrate live — the
+    // rule, the tints and the picker all turn warm. That is the single best
+    // moment in the product to teach the guardrail, and it now fires for
+    // whatever the user marked protected instead of for one hard-coded name.
     <form
       className="editor"
-      data-env={form.environment}
+      {...envAttrs(formEnv)}
       onKeyDown={handleKeyDown}
       onSubmit={(e) => {
         e.preventDefault();
@@ -1279,42 +1352,93 @@ export default function ProfileEditor({
 
       <div className="field">
         <span className="field-label">{t("editor.env.label")}</span>
-        <div
-          className="env-picker"
-          role="radiogroup"
-          aria-label={t("editor.env.label")}
-        >
-          {ENVIRONMENTS.map((env, index) => (
-            <button
-              key={env}
-              type="button"
-              role="radio"
-              aria-checked={form.environment === env}
-              // One tab stop for the group; the arrows walk it (onEnvKeyDown).
-              tabIndex={form.environment === env ? 0 : -1}
-              ref={(el) => {
-                envRefs.current[env] = el;
-              }}
-              className={`env-option ${
-                form.environment === env ? "env-option-active" : ""
-              }`}
-              onClick={() => patch({ environment: env })}
-              onKeyDown={(e) => onEnvKeyDown(e, index)}
-            >
-              {env}
-            </button>
-          ))}
+        <div className="env-row">
+          <div
+            className="env-picker"
+            role="radiogroup"
+            aria-label={t("editor.env.label")}
+          >
+            {envOptions.map((def, index) => {
+              // The registry's own uniqueness rule, not `===`: a profile
+              // stored as `Prod` names the same environment the manager holds
+              // as `prod`, and an exact comparison would leave the picker
+              // showing nothing checked for a value it is already carrying.
+              const active = sameEnvironmentName(def.name, form.environment);
+              return (
+                <button
+                  key={def.name}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  // One tab stop for the group; the arrows walk it. When
+                  // NOTHING is checked — a profile whose environment is the
+                  // empty string, which a hand-edited profiles.json can
+                  // produce — the first segment takes the stop anyway, or the
+                  // whole group drops out of the tab order (SC 2.1.1).
+                  tabIndex={index === rovingIndex ? 0 : -1}
+                  ref={(el) => {
+                    envRefs.current[def.name] = el;
+                  }}
+                  className={`env-option ${active ? "env-option-active" : ""}`}
+                  {...envAttrs(def)}
+                  onClick={() => patch({ environment: def.name })}
+                  onKeyDown={(e) => onEnvKeyDown(e, index)}
+                >
+                  {/* Law 2: the chosen segment is never chosen by colour
+                      alone. `aria-checked` says it to assistive tech; this
+                      glyph says it to everyone else. */}
+                  {active && (
+                    <span className="env-option-check" aria-hidden="true">
+                      ✓
+                    </span>
+                  )}
+                  {def.name}
+                </button>
+              );
+            })}
+          </div>
+          {/* Not inside the radio group: it is not one of the choices, and a
+              radiogroup with a non-radio child is a broken promise about what
+              the arrow keys reach. */}
+          <button
+            type="button"
+            className="btn btn-ghost env-manage-btn"
+            onClick={() => setManagingEnvs(true)}
+          >
+            {t("editor.env.manage")}
+          </button>
         </div>
-        {/* The three segment labels are NOT translated — see Sidebar's
-            ENV_LABEL. `dev`/`staging`/`prod` are the same tokens as `data-env`
-            and the forced-colors PROD wire, and the guardrail has to read the
-            same in every locale. */}
+        {/* The segment labels are NOT translated. They are user data now, and
+            they are the same strings as `data-env-color`'s sibling attribute,
+            the forced-colors wire label and the CLI's refusal — a guardrail
+            that reads differently per locale is two signals where the design
+            specifies one. */}
         <span className="field-hint">
-          {form.environment === "prod"
-            ? t("editor.env.hint.prod")
-            : t("editor.env.hint.other")}
+          {envUnknown
+            ? t("editor.env.hint.unknown", { name: form.environment })
+            : formEnv.protected
+              ? t("editor.env.hint.protected")
+              : t("editor.env.hint.other")}
         </span>
       </div>
+
+      {managingEnvs && (
+        <EnvironmentsManager
+          onClose={() => setManagingEnvs(false)}
+          onProfilesChanged={onProfilesChanged}
+          // The form holds an environment NAME in local state, and the manager
+          // rewriting the stored profiles does not reach it. Follow the move,
+          // or renaming the environment you are looking at leaves the picker
+          // reading "unknown" about a change you just made.
+          onEnvironmentMoved={(from, to) => {
+            setForm((prev) =>
+              sameEnvironmentName(prev.environment, from)
+                ? { ...prev, environment: to }
+                : prev,
+            );
+          }}
+        />
+      )}
 
       <div className="field">
         <label className="field-label" htmlFor="pe-bootstrap">

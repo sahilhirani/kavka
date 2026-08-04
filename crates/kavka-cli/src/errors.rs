@@ -29,7 +29,7 @@
 //! PURE AND TOTAL, like its twin: no I/O, no clock, no globals. Every branch is
 //! decided by its two arguments alone.
 
-use kavka_core::profiles::Environment;
+use kavka_core::environments::EffectiveEnvironment;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -225,8 +225,16 @@ pub struct Context {
     pub group_state: Option<String>,
     /// How many members that group has right now.
     pub member_count: Option<usize>,
-    /// The profile's environment.
-    pub environment: Option<Environment>,
+    /// Whether the profile's environment is marked protected.
+    ///
+    /// **The flag, not the name.** Environments are user-defined
+    /// ([`kavka_core::environments`]), so "is this prod" is not a string
+    /// comparison any more — it is the box somebody ticked. `None` is "the
+    /// caller didn't say", which every branch degrades to the generic advice
+    /// for. This mirrors `apps/desktop/src/errors.ts`'s
+    /// `environmentProtected?: boolean`, which replaced its
+    /// `environment === "prod"` for the same reason.
+    pub environment_protected: Option<bool>,
 }
 
 impl Context {
@@ -236,9 +244,9 @@ impl Context {
     /// into it. A CLI has no store to reach into and no component tree to
     /// thread through: the profile is right there, so it is passed, and the
     /// prod wording actually reaches a user here.
-    pub fn on(environment: Environment) -> Self {
+    pub fn on(environment: &EffectiveEnvironment) -> Self {
         Self {
-            environment: Some(environment),
+            environment_protected: Some(environment.protected),
             ..Self::default()
         }
     }
@@ -314,7 +322,7 @@ pub fn classify(raw: &str, ctx: &Context) -> Classified {
         .group_state
         .as_deref()
         .is_some_and(|state| !state.eq_ignore_ascii_case("empty"));
-    let on_prod = ctx.environment == Some(Environment::Prod);
+    let on_protected = ctx.environment_protected == Some(true);
 
     let row = |title: String, detail: &str, cause: Cause| Classified {
         title,
@@ -561,7 +569,7 @@ pub fn classify(raw: &str, ctx: &Context) -> Classified {
             // suspect is not the user's own machine, and saying so stops a
             // support engineer taking their laptop apart at 3am over a broker
             // restart.
-            if on_prod {
+            if on_protected {
                 "Nothing changed on your machine — this is usually the VPN or a broker restart."
             } else {
                 "The address is routable but nothing answered on that port. Check the port \
@@ -579,7 +587,7 @@ pub fn classify(raw: &str, ctx: &Context) -> Classified {
     ) {
         return row(
             format!("Can't reach {where_}"),
-            if on_prod {
+            if on_protected {
                 "Nothing changed on your machine — this is usually the VPN or a broker restart."
             } else {
                 "The connection didn't get far enough to speak Kafka. Check the address and \
@@ -639,6 +647,7 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kavka_core::environments::{resolve, EnvironmentDef};
 
     /// The app's own copy of this table, read at compile time.
     const TS: &str = include_str!("../../../apps/desktop/src/errors.ts");
@@ -831,14 +840,49 @@ mod tests {
     /// §7's "Timeout, prod" row — the one the app documents as having a branch
     /// and no renderer. Here the profile is always in scope, so it reaches a
     /// user.
+    ///
+    /// Keyed on `protected`, never on a name: a company whose production
+    /// environment is called `Production` gets the same advice, and a `prod`
+    /// somebody unprotected gets the generic one.
     #[test]
-    fn prod_changes_the_advice_for_a_timeout() {
+    fn a_protected_environment_changes_the_advice_for_a_timeout() {
         let raw = "payments-prod-1:9093/2: Connection setup timed out";
-        let dev = classify(raw, &Context::default());
-        let prod = classify(raw, &Context::on(Environment::Prod));
-        assert_eq!(dev.cause, prod.cause);
-        assert!(dev.detail.contains("Check the port number"), "{dev:?}");
-        assert!(prod.detail.contains("VPN or a broker restart"), "{prod:?}");
+        let defs = [
+            EnvironmentDef::new("Production", "violet", true),
+            EnvironmentDef::new("prod", "red", false),
+        ];
+        let unsaid = classify(raw, &Context::default());
+        let protected = classify(raw, &Context::on(&resolve(&defs, "Production")));
+        let unprotected = classify(raw, &Context::on(&resolve(&defs, "prod")));
+
+        assert_eq!(unsaid.cause, protected.cause);
+        assert!(
+            unsaid.detail.contains("Check the port number"),
+            "{unsaid:?}"
+        );
+        assert!(
+            protected.detail.contains("VPN or a broker restart"),
+            "{protected:?}"
+        );
+        assert_eq!(
+            unprotected.detail, unsaid.detail,
+            "the word `prod` decides nothing"
+        );
+    }
+
+    /// The app's context field is the boolean this port mirrors. A rename on
+    /// either side is a failing test rather than two front ends giving
+    /// different advice about the same broker string.
+    #[test]
+    fn the_context_flag_is_the_apps_context_flag() {
+        assert!(
+            TS.contains("environmentProtected?: boolean"),
+            "errors.ts no longer declares environmentProtected"
+        );
+        assert!(
+            !TS.contains("=== \"prod\""),
+            "errors.ts is comparing an environment name again"
+        );
     }
 
     #[test]

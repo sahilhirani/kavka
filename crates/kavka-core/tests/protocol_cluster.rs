@@ -18,7 +18,7 @@
 
 use kavka_core::admin;
 use kavka_core::connection::ClusterConnection;
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use kavka_core::protocol::{ProtocolClient, ReassignmentSpec, ReassignmentState};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ fn cluster_profile() -> ConnectionProfile {
     ConnectionProfile {
         id: "it-protocol-cluster".into(),
         name: "local docker cluster".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: std::env::var("KAVKA_TEST_CLUSTER_BOOTSTRAP")
             .unwrap_or_else(|_| "localhost:19092,localhost:19093,localhost:19094".into())
             .split(',')

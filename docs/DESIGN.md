@@ -28,8 +28,8 @@ pixels on screen are always topic names, offsets and payloads — never chrome.
 ### Law 2 — No state is ever encoded by colour alone
 
 Every dot has a word. Every severity has a glyph. Every lag figure has a bar
-length **and** a number **and** a trend arrow. The prod signal has four
-independent channels. If you can only tell the difference by hue, it is broken.
+length **and** a number **and** a trend arrow. The protected-environment
+signal has four independent channels. If you can only tell the difference by hue, it is broken.
 
 **"Every dot has a word" includes the quiet states.** A status map with
 `disconnected: ""` is the bug this law is written to prevent: the one state
@@ -39,7 +39,7 @@ the sidebar's second line reads *"address · state"* in **every** state, and the
 dot stays `aria-hidden` decoration.
 
 This is WCAG 2.2 SC 1.4.1, but it is mostly just correct: a support engineer
-with deuteranopia has to be able to tell prod from dev at a glance.
+with deuteranopia has to be able to tell production from dev at a glance.
 
 ### Law 3 — Nothing inside a scrolling table gets a `transition`, `filter`, `backdrop-filter`, `border-radius` or `box-shadow`
 
@@ -56,9 +56,9 @@ A fixed left gutter carries the row's address **in Kafka's own vocabulary** —
 offset, broker id, partition index, line number — then a 1px vertical rule runs
 the full height of the data, then the payload.
 
-The rule is coloured by environment. **Prod is therefore visible in every data
-view in the app without a single banner.** It is the brand, the information
-architecture and the guardrail, in six lines of CSS.
+The rule is coloured by environment. **A production cluster is therefore
+visible in every data view in the app without a single banner.** It is the
+brand, the information architecture and the guardrail, in six lines of CSS.
 
 ```css
 .ledger-gutter {
@@ -112,7 +112,7 @@ near-white, which is what frees the accent to keep this meaning.
 
 Full source of truth: the `:root` block in `apps/desktop/src/styles.css`. Ratios
 below are measured, not estimated, and there are **zero contrast failures**
-across 12 dark/prod surfaces and 6 light surfaces.
+across 12 dark/protected surfaces and 6 light surfaces.
 
 ### Surfaces
 
@@ -124,7 +124,7 @@ across 12 dark/prod surfaces and 6 light surfaces.
 | `--bg-sunken` | `#0A0D10` | Inputs, payload inspector, code |
 | `--bg-row-hover` | `#161C22` | |
 | `--bg-row-selected` | `#152227` | Teal-tinted; primary text 13.57:1 |
-| `--bg-row-prod-hover` | `#241816` | Prod sidebar rows (guardrail layer 6) |
+| `--bg-row-prod-hover` | `#241816` | Protected sidebar rows (guardrail layer 6). The token name still says `prod`; see §11 |
 | `--bg-row-prod-selected` | `#2A1B18` | Primary text 13.80:1 |
 | `--skeleton` | `#28313A` | Skeleton bars, 1.41:1 — a placeholder, never content |
 | `--bg-scrim` | `rgba(5,7,9,.55)` | No blur — perf, and blur is the tell of a templated design |
@@ -151,7 +151,7 @@ across 12 dark/prod surfaces and 6 light surfaces.
 > character a sighted user reads to learn the value is absent, so SC 1.4.3
 > applies and it needs 4.5:1. On a selected row it measured **3.71:1** — the
 > one place a user is most likely to be looking. Now 4.63:1 worst case
-> across all twelve dark + prod surfaces.
+> across all twelve dark + protected surfaces.
 >
 > **`--text-placeholder` exists so `--text-disabled` can mean one thing.**
 > A placeholder carries the example format (`broker-1:9092`) and is meant to
@@ -171,7 +171,7 @@ across 12 dark/prod surfaces and 6 light surfaces.
 
 > `--bg-sunken` is only 1.13:1 against the canvas, so `--border-control` is the
 > **only** thing satisfying SC 1.4.11 on an input. It clears 3:1 on all twelve
-> dark + prod surfaces, worst case 3.17 on a selected row. Do not remove it to
+> dark + protected surfaces, worst case 3.17 on a selected row. Do not remove it to
 > make inputs "cleaner".
 >
 > **`--hairline-strong` is never a control boundary.** It is 1.18:1 on a
@@ -196,10 +196,10 @@ across 12 dark/prod surfaces and 6 light surfaces.
 | `--danger-border` | `#A85C50` | 3.34:1 worst (selected dark row); 3.56 raised — the outlined danger button's boundary |
 | `--track-empty` | `#333C46` | The unfilled half of a lag meter |
 | `--ok-tint` / `--warn-tint` / `--danger-tint` | `#101E18` / `#241D0F` / `#1B1315` | |
-| `--rule` | `#242B33` dev · `#8C7036` staging · `#A65246` prod | Staging 3.98:1, prod 3.54:1 canvas / 3.12:1 on a selected prod table row / **3.09:1 on a selected prod sidebar row** — meaningful, so they clear 3:1 |
-| `--env-ink` / `--env-tint` | accent / warn / danger | |
-| `--env-chip-prod-ink` / `--env-chip-prod-fill` | `#FFE4DF` / `#8E3A31` | 6.22:1 — prod is the only *filled* chip |
-| `--env-wire` | transparent · transparent · `#B8453A` | 3.57:1 — the bar is a meaningful indicator |
+| `--rule` | per environment colour — see §3.1 | Slate `#242B33` is 1.30:1 on the canvas and decorative *by design*; every other colour clears 3:1 on all fifteen surfaces |
+| `--env-ink` / `--env-tint` | the chip's **tag** pair — see §3.1 | 6.28–8.52:1 |
+| `--env-badge-ink` / `--env-badge-fill` | the chip's **badge** pair — see §3.1 | 5.71–7.07:1 — a *protected* environment is the only *filled* chip |
+| `--env-wire` | transparent · `#B8453A` when protected | 3.57:1 — the bar is a meaningful indicator |
 
 > **Every operable boundary is opaque and precomputed.** `--danger-border`
 > replaced `rgba(229,120,107,.45)`, which composited to **2.20:1** on the
@@ -215,8 +215,109 @@ across 12 dark/prod surfaces and 6 light surfaces.
 > indicator, it is a coloured smear. `.lag-fill` also carries `min-width: 2px`
 > so a small non-zero lag never rounds down to "caught up".
 
-> **Dev's rule is decorative (1.30:1) by design.** Dev has no warning to give,
-> and the absence of a coloured rule is itself the signal.
+> **Slate's rule is decorative (1.30:1) by design.** Slate is what an
+> environment Kavka has never heard of resolves to, and the absence of a
+> coloured rule is itself the signal: *this machine has nothing to say about
+> this environment.*
+
+### 3.1 Environments are user-defined. The seven colour tokens.
+
+**Environments are not a fixed triple.** An enterprise runs dev, QA, UAT and
+production, and a design that hard-codes three names is a design about somebody
+else's org chart. The user defines them: a **name**, a **colour**, and a
+**protected** flag, stored in `environments.json` beside `profiles.json`.
+
+**The semantics split is the design law here.**
+
+| | carries | reaches |
+|---|---|---|
+| **name + colour** | IDENTITY — *which* cluster this is | the chip, the ledger rule, the picker segment, the sidebar |
+| **protected** | THE GUARDRAIL — *how careful you must be* | the warm substrate, the top wire, type-to-confirm, the window title, `--yes-prod`, `KAVKA_MCP_ALLOW_PROD` |
+
+They are independent. A violet environment can be protected and a red one need
+not be. **The protected treatment is the one warm-danger substrate whatever
+colour the chip is** — identity is the chip, protection is the ground. Two
+grounds would mean two guardrails, and there is exactly one.
+
+In CSS they are two attributes, `data-env-color` and `data-env-protected`,
+because `[data-env="prod"]` is a *name check* and a name is now user data.
+
+#### The tokens, measured
+
+Every ink and every fill is **opaque**, which is what makes one number honest:
+an opaque ink on an opaque fill has the same ratio on every surface underneath,
+so a single figure clears SC 1.4.3 on all fifteen dark, protected and
+protected-row surfaces at once. That is the same reason `--selection` and
+`--danger-border` are precomputed.
+
+| Token | tag ink / tint | AA | badge ink / fill | AA | `--rule` | rule worst of 15 |
+|---|---|---|---|---|---|---|
+| `green` | `#79C98F` / `#0F2116` | 8.46 | `#E7F7EC` / `#2F6B45` | 5.71 | `#4E8560` | **3.76** |
+| `amber` | `#D9A441` / `#241D0F` | 7.42 | `#FFF0D6` / `#7A5613` | 5.90 | `#8C7036` | **3.48** |
+| `red` | `#E5786B` / `#1B1315` | 6.28 | `#FFE4DF` / `#8E3A31` | 6.22 | `#A65246` | **3.04** |
+| `blue` | `#7FB4E6` / `#0E1A24` | 8.03 | `#E3EFFA` / `#2C5680` | 6.54 | `#4B7CA8` | **3.68** |
+| `violet` | `#B99BD4` / `#191426` | 7.44 | `#F0E8F8` / `#5A3F86` | 7.07 | `#7A5FA6` | **3.11** |
+| `cyan` | `#6FC4D6` / `#0C1F24` | 8.52 | `#DFF4F9` / `#1F5E6E` | 6.39 | `#3E8FA1` | **4.38** |
+| `slate` | `#A2AEBB` / `#1A2027` | 7.27 | `#E9EDF1` / `#4A555F` | 6.48 | `#242B33` | 1.14 *(decorative)* |
+
+**The fifteen surfaces** are §9 gate 1's twelve — six neutral (`--bg-rail`,
+`--bg-canvas`, `--bg-raised`, `--bg-sunken`, `--bg-row-hover`,
+`--bg-row-selected`) and six protected (the warm swaps of the same six) — plus
+the three protected sidebar rows (`--danger-tint` idle, `--bg-row-prod-hover`,
+`--bg-row-prod-selected`). Every rule's worst case is on a **selected neutral
+row**, `#152227`, which is the lightest surface a rule ever crosses.
+
+Per-surface sweep for the two tightest rules, since they are the ones a future
+change will break first:
+
+- **red** — rail 3.68 · canvas 3.48 · raised 3.23 · sunken 3.63 · row-hover
+  3.20 · row-selected **3.04** · protected rail 3.66 · protected canvas 3.54 ·
+  protected raised 3.32 · protected sunken 3.68 · protected row-hover 3.27 ·
+  protected row-selected 3.12 · protected sidebar idle 3.40 / hover 3.22 /
+  **selected 3.09**.
+- **violet** — rail 3.77 · canvas 3.57 · raised 3.31 · sunken 3.72 · row-hover
+  3.28 · row-selected **3.11** · protected rail 3.75 · protected canvas 3.63 ·
+  protected raised 3.40 · protected sunken 3.78 · protected row-hover 3.36 ·
+  protected row-selected 3.20 · protected sidebar idle 3.49 / hover 3.30 /
+  selected 3.17.
+
+> **The chip FILLS are held to no floor, and that is deliberate.** They measure
+> 1.93–3.11:1 against the fifteen surfaces. A chip contains the environment's
+> **name** — Law 2 — so the fill is a container, not a signal, and rating it
+> against SC 1.4.11 would be rating the wrong thing. The numbers are recorded
+> so nobody re-derives them believing they are a gate. What *is* a gate is the
+> ink on the fill, and that is the AA column above.
+>
+> **Cyan is bluer than `--accent` on purpose.** Teal means live and only live
+> (§2). The old dev chip was `--accent` on `--accent-tint`, which spent the
+> one colour the app reserves for connection state on an environment tag;
+> `cyan` at `#6FC4D6` is the token to reach for when somebody wants a teal-ish
+> environment, and `--accent` stays what it was.
+
+**Light theme** inverts each pair — a dark hue on a pale wash for the tag,
+white on the same dark hue for the badge. Ink-on-tint / white-on-dark: green
+5.82 / 6.67 · amber 5.27 / 5.92 · red **5.17** / 7.32 · blue 6.65 / 7.75 ·
+violet 5.97 / 7.11 · cyan 6.25 / 7.24 · slate 6.66 / 7.62. Each light rule is
+the same dark hue and clears ≥4.38:1 across all eight light surfaces, worst on
+a selected light protected row. Light still does not ship (§10).
+
+> **Light red's ink-on-tint is 5.17, not the 6.38 this table used to claim.**
+> The shipped pair is `--env-ink: #B3392A` on `--env-tint: #FBECEA` — the
+> `--danger` / `--danger-tint` pair reused, deliberately, so the one red in the
+> light theme is one colour — and 6.38 was the figure for a darker ink that
+> never shipped. Recomputed against the tokens actually in `styles.css`: 5.17.
+> **The colour is not changed, because 5.17 clears the 4.5:1 AA floor by a
+> comfortable margin** and it is the tightest of the seven only because red is
+> the token whose tint is palest. The wrong number was the defect; changing a
+> passing colour to make an old number true would have been the second one.
+
+**An unknown environment is not an error.** A profile naming something the
+registry does not hold — deleted in another window, or imported from a
+colleague's export — renders **slate, unprotected**, with a hint in the
+connection form pointing at the manager. The alternative, "unknown means
+protected", sounds safer and is worse: it would arm type-to-confirm on every
+connection the moment the registry failed to load, which teaches people to type
+past the friction.
 
 ### Payload syntax
 
@@ -456,10 +557,32 @@ Four regions plus a wire:
 - **Fieldsets lose their borders entirely** — a fieldset is a `--t-micro`
   uppercase eyebrow plus 12px of space. Keep `<fieldset>`/`<legend>` semantics
   with `border: 0`.
-- **Segmented control (environment)** — `--control-h` `--bg-sunken` well,
-  `--border-control` edge. Active segment: `--env-tint` fill, `--env-ink` text.
-  **Picking `prod` swaps the substrate live** and turns the rule coral. That is
-  the single best moment in the product to teach the guardrail.
+- **Environment picker** — a **wrapping row of chips**, one per defined
+  environment, `role="radiogroup"` with a roving `tabIndex`, followed by a
+  `Manage environments…` ghost button *outside* the group (a radiogroup with a
+  non-radio child is a broken promise about what the arrows reach). Each chip
+  is `--control-h`, `--r-pill`, `--bg-sunken`, `--border-control`. The chosen
+  one takes `--env-tint` fill / `--env-ink` text — or the badge pair when the
+  environment is protected, so the form previews the sidebar — **plus a `✓`
+  glyph and `--w-medium`**, because Law 2 applies to a picker too.
+  **Picking a *protected* environment swaps the substrate live** and turns the
+  rule its colour. That is the single best moment in the product to teach the
+  guardrail. It was a fixed three-segment control; nine segments in a
+  non-wrapping row is a horizontal scrollbar inside a form.
+- **The environments manager** (`EnvironmentsManager.tsx`) is a `modal-wide`
+  overlay reached from that button. It lists every environment with its chip,
+  the word *protected* or *not protected* (never the colour alone) and how many
+  connections use it; adding takes a name, one of the seven colour swatches —
+  each swatch labelled with its colour's **word**, selected state shown as a
+  near-white inset ring rather than a hue — and a protected checkbox whose hint
+  states in one sentence what flipping it changes, because two of the four
+  things it changes are in other processes (the CLI and the MCP server).
+  **Deleting is refused while a connection still names it**, and the dialog
+  turns that refusal into a reassignment: pick where those connections go,
+  Kavka rewrites them one `profiles_save` at a time, *then* removes the
+  definition. Removing protection — from an environment that has it, or by
+  deleting one — takes the same type-to-confirm as any other destructive
+  action, which is §6 layer 4 applied to the thing that defines §6 layer 4.
 
 > **Never `overflow: hidden` on a shell that wraps focusable children.** The
 > focus ring is an `outline` drawn *outside* the box with `outline-offset: 2px`,
@@ -523,10 +646,15 @@ Phase 6 languages, and ship a `⋯` overflow menu from day one.
 
 ### 5.6 Chips
 
-- **Env** — 18px pill, `--t-micro`/600 uppercase tracked. dev → `--accent` on
-  `--accent-tint` (7.52:1). staging → `--warn` on `--warn-tint` (7.42:1).
-  **prod → `--env-chip-prod-ink` on solid `--env-chip-prod-fill` (6.22:1)** —
-  prod is the only *filled* chip, so it reads as a badge, not a tag.
+- **Env** — 18px pill, `--t-micro`/600 uppercase tracked, carrying the
+  environment's **name as the user typed it** (uppercased in CSS, never
+  translated — it is the same string as the forced-colors wire label and the
+  CLI's refusal). Unprotected → `--env-ink` on `--env-tint`, a **tag**.
+  **Protected → `--env-badge-ink` on solid `--env-badge-fill`**, the only
+  *filled* chip, so it reads as a badge. Ratios per colour in §3.1. The chip
+  carries its own `data-env-color` / `data-env-protected`, which is how a
+  sidebar full of different environments paints correctly underneath one
+  app-level colour: the nearest declaration wins.
 - **Read-only** — tertiary, transparent, `1px --hairline-strong`, `--t-xs`,
   **sentence case**. Permanently in the top bar and the status bar. Uppercase
   micro-caps are reserved for env chips, table column heads, stat labels and
@@ -597,30 +725,39 @@ buttons. `Show details ▾` discloses the raw librdkafka string in a selectable
 mono block. **One banner at a time**; a second replaces it and the header gains
 a `2 issues ▾` counter.
 
-**Prod de-collision (required):** on a prod cluster a danger banner drops its red
-tint for a neutral `--bg-raised` shell with a `--danger` left bar, and the env
-rule dampens while it is visible (`[data-env="prod"][data-alert="danger"]`).
-Otherwise the warm substrate plus a coral banner is an undifferentiated red wash
-and **both** signals die.
+**Protected de-collision (required):** on a protected cluster a danger banner
+drops its red tint for a neutral `--bg-raised` shell with a `--danger` left bar,
+and the env rule dampens while it is visible
+(`[data-env-protected="true"][data-alert="danger"]`). Otherwise the warm
+substrate plus a coral banner is an undifferentiated red wash and **both**
+signals die.
 
-> **The damper moves chroma, not lightness.** The undampened prod rule is
-> already only **3.09:1** on a selected prod row, so there is no darker coral
-> left to dampen *to*: the first implementation used `#6E3A33`, which measured
-> **2.09:1** on the canvas and **1.83:1** on a selected row — prod's most
+> **The damper moves chroma, not lightness.** The undampened red rule is
+> already only **3.09:1** on a selected protected row, so there is no darker
+> coral left to dampen *to*: the first implementation used `#6E3A33`, which
+> measured **2.09:1** on the canvas and **1.83:1** on a selected row — the most
 > load-bearing guardrail (layer 1, the one that needs no banner) switched
 > itself off at exactly the moment an error was on screen. That is the worst
 > possible failure of the two-signal composition this section exists to
 > protect. The damper is now `#9C8079`: the same rule at roughly a third of
 > the chroma (channel spread 35 vs the coral's 96) and *more* luminance
-> contrast, **4.55:1 worst case** (4.61 on a selected prod table row). It
+> contrast, **4.55:1 worst case** (4.61 on a selected protected table row). It
 > reads as muted; it never reads as gone. Light has its own damper
-> (`#8A6F6A`, 4.09:1 on a selected light row, 3.41:1 on a selected light prod
-> sidebar row) or it inherits the dark one.
+> (`#8A6F6A`, 4.09:1 on a selected light row, 3.41:1 on a selected light
+> protected sidebar row) or it inherits the dark one.
+>
+> **One damper serves all seven colours, and it keys on PROTECTION rather than
+> on the colour that collides.** The figures above are measured on the warm
+> protected surfaces, which is the only place a dampened rule ever renders, and
+> a neutral warm grey reads as *muted* behind a coral banner whatever hue it
+> replaced. Seven damped variants would be seven more tokens to sweep for a
+> composition nobody can tell apart — and keying the damper on `red` would
+> re-introduce exactly the name-shaped special case §3.1 removes.
 >
 > `data-alert="danger"` must be set for **any** danger on screen, including an
 > inline banner inside a form — not just the global one. Miss the inline case
-> and prod shows a coral rule behind a coral banner, which is the single
-> composition §9 gate 4 exists to catch.
+> and a protected cluster shows a coral rule behind a coral banner, which is
+> the single composition §9 gate 4 exists to catch.
 
 **Toast** — bottom-right, 24px inset, 320px, `--bg-raised`, `--r-overlay`,
 `--shadow-popover`, and a 4px left rule in the semantic colour (the ledger rule
@@ -636,7 +773,7 @@ toast and the notification carry **identical text**.
 WebView2 cost, and the tell of a templated design). Focus trap; **initial focus
 on Cancel**; `Esc` always cancels; `⏎` confirms only non-destructive modals.
 Destructive modals get a 2px `--danger-fill` rule across the top edge — the same
-wire as the prod bar, so the two guardrails rhyme. The confirm button restates
+wire as the protected-environment bar, so the two guardrails rhyme. The confirm button restates
 the verb: `Delete topic`, never `OK`.
 
 ### 5.9 Command palette
@@ -656,8 +793,10 @@ element with real elevation, and one of only two using `--ease-settle`.
 - **Matching is bilingual.** `bootstrap` finds the field labelled *Bootstrap
   servers*; `lag` finds *Consumer groups*. Plain-language relabelling must never
   hide the Kafka term from search.
-- On prod the palette inherits the warm substrate and destructive commands
-  render their subtitle as `payments-prod · asks for confirmation` in `--danger`.
+- On a protected cluster the palette inherits the warm substrate, the profile
+  row's context line gains the words `protected cluster`, and destructive
+  commands render their subtitle as `payments-prod · asks for confirmation` in
+  `--danger`.
 
 ### 5.10 Payload inspector
 
@@ -693,30 +832,61 @@ chart identified by hue alone fails SC 1.4.1 for deuteranopes.
 
 ---
 
-## 6. Prod guardrails — nine layers, ordered by survivability
+## 6. Protected-environment guardrails — nine layers, ordered by survivability
 
-1. **The ledger rule turns coral** in every table in the app. No banner required;
-   prod is visible wherever data is.
+**Every layer below is gated on the connection's environment being marked
+`protected` (§3.1), never on it being called `prod`.** The flag is the gate;
+the name is user data. An org whose production environment is called
+`PRODUCTION`, `PRD` or `live` gets all nine, and an org that marks UAT
+protected gets them there too.
+
+1. **The ledger rule takes the environment's colour** in every table in the
+   app. No banner required; the cluster is identified wherever data is. (This
+   layer is *identity*, and it applies to every environment — but it is what
+   makes the other eight legible, so it stays first.)
 2. **The 2px `--env-wire`** across the very top of the window. Zero vertical cost,
    permanently peripheral, no text to habituate to. In forced-colors it thickens
-   and gains the literal word `PROD`.
+   and gains **the environment's own name, uppercased** — `PROD`, `PRODUCTION`,
+   `UAT` — via `content: attr(data-env-label)`.
 3. **The bootstrap address is always on screen** — line 2 of the sidebar row and
-   in the status bar. *Most prod accidents are right-action-wrong-cluster.*
+   in the status bar. *Most production accidents are
+   right-action-wrong-cluster.*
 4. **Type-to-confirm on every destructive modal, environment-gated not
-   action-gated.** Prod always asks; dev never does. Friction where the stakes
-   are, nowhere else.
+   action-gated.** A protected environment always asks; an unprotected one
+   never does. Friction where the stakes are, nowhere else.
 5. **Warm substrate.** Nobody will name it; everybody will feel it on switch.
    This is the *bonus*, not the guardrail — layers 1–4 are load-bearing. Escape
-   hatch: `[data-env-intensity="rule-only"]`.
-6. **Prod rows stay tinted in the sidebar** whether selected or not, plus a 2px
-   `--danger` left border.
-7. **Write actions change class in prod** — Produce, Delete, Reset render as
-   danger-outlined even when routine, and the produce form carries an
-   undismissable warning banner.
-8. **Read-only defaults ON** when the environment is set to prod in the
-   connection form, with the reason stated as it happens.
-9. **The window title carries it** — `orders-prod · PROD — Kavka`, so the
-   taskbar, Dock and `Cmd+Tab` warn too.
+   hatch: `[data-env-intensity="rule-only"]`. **One warm-danger substrate for
+   every protected environment, whatever colour its chip is.**
+6. **Protected rows stay tinted in the sidebar** whether selected or not, plus a
+   2px `--danger` left border.
+7. **Write actions change class in a protected environment** — Produce, Delete,
+   Reset render as danger-outlined even when routine, and the produce form
+   carries an undismissable warning banner.
+8. **Read-only defaults ON** when a protected environment is picked in the
+   connection form, with the reason stated as it happens. — *specified, not
+   shipped.*
+9. **The window title carries it** — `orders-prod · PROD — Kavka`, the suffix
+   being the environment's own uppercased name, so the taskbar, Dock and
+   `Cmd+Tab` warn too. — *specified, not shipped.*
+
+> **Layers 8 and 9 are specified and not shipped**, marked the same way the
+> light theme is in §10 and for the same reason: a spec that reads as shipped
+> is worse than one that admits it isn't, because the next person audits
+> against it. Layer 8 needs a rule for the edit that *removes* protection from
+> an environment a connection already sits in — silently un-flipping somebody's
+> deliberate `read_only: false` is a worse failure than not defaulting at all —
+> and layer 9 needs the Tauri window title to follow both the selected profile
+> and the registry, which today have no shared owner in the shell. **Layers 1–7
+> ship, and 1–4 are the load-bearing ones** (§6's own ordering), so the
+> guardrail is not waiting on either of these.
+
+Outside the app the same flag drives the two write gates: the CLI's
+**`--yes-prod`** and the MCP server's **`KAVKA_MCP_ALLOW_PROD`**. Both keep
+their names — they are in scripts, shell history and MCP client configs, and
+renaming a flag to improve a sentence breaks somebody's cron job — but both are
+documented as *"required when the connection's environment is marked
+protected"*, which is what they now actually check.
 
 > **If a future PR proposes removing the wire "because the substrate already does
 > it", that PR is wrong.**
@@ -906,10 +1076,16 @@ the message.**
 > becomes a component.
 >
 > **Two rows are not derivable from a string, so they take context.** "Active
-> group" needs the group's state and member count; "Timeout, prod" needs the
-> profile's environment. Both arrive in the optional second argument —
-> `{ groupState?, memberCount?, environment? }` — which the *caller* passes,
-> which is what keeps the function pure while still letting it answer them.
+> group" needs the group's state and member count; "Timeout, prod" needs to
+> know whether the connection's environment is **protected** — not what it is
+> called. Both arrive in the optional second argument —
+> `{ groupState?, memberCount?, environmentProtected? }` — which the *caller*
+> passes, which is what keeps the function pure while still letting it answer
+> them. `environmentProtected` is a **boolean**, not a name: comparing against
+> the literal `"prod"` stopped being answerable the moment environments became
+> user-definable, and an org whose production environment is called `PRD` got
+> the dev wording at 3am. The caller resolves the name through the registry;
+> `errors.ts` does not, and must not, know a registry exists.
 > Every field is optional and every branch degrades to the string-only answer
 > without it. The context-only inference (a terse failure on a group we happen
 > to know is live) is tested **last**, after every branch that names its own
@@ -950,7 +1126,7 @@ the message.**
 >
 > `Cancel`  **`Delete topic`**
 
-**prod** — adds type-to-confirm and restates the cluster
+**protected** — adds type-to-confirm and restates the cluster
 
 > ### Delete `orders.v2` on `payments-prod`?
 > This removes the topic and every message in it — about 4.2M records. It can't
@@ -1014,11 +1190,19 @@ Anything not on that list — charts, config diff, topology, reassignment —
 1. **Contrast** — assert every `--text-*` (including `--text-placeholder` and
    `--text-absent`, which are **text**, not graphics), every `--syn-*`, and
    `--ok/warn/danger/accent` at ≥4.5:1 against all six dark surfaces, all six
-   prod surfaces and all six light surfaces; and `--border-control`,
-   `--danger-border`, `--rule` (**both** its normal and its
-   `[data-alert="danger"]` value), `--env-wire` and every lag-bar fill —
-   against `--track-empty` as well as the surfaces — at ≥3:1 across all twelve
-   dark/prod surfaces plus the two prod sidebar row surfaces.
+   protected surfaces and all six light surfaces; **every env `--env-ink` on
+   its `--env-tint` and every `--env-badge-ink` on its `--env-badge-fill`, all
+   seven colours, at ≥4.5:1** (surface-independent, because both members of
+   every pair are opaque — that is the reason they are opaque); and
+   `--border-control`, `--danger-border`, **`--rule` for all seven colours**
+   (**both** its normal and its `[data-alert="danger"]` value), `--env-wire`
+   and every lag-bar fill — against `--track-empty` as well as the surfaces —
+   at ≥3:1 across all twelve dark/protected surfaces plus the three protected
+   sidebar row surfaces. `slate`'s rule is the one **documented exemption**:
+   1.14–1.38:1, decorative by design (§3.1).
+   **Chip fills are excluded on purpose** — the chip contains the
+   environment's name, so the fill is a container and not a signal; §3.1
+   records their 1.93–3.11:1 range so nobody mistakes them for a gate.
    **No alpha may appear in any of these tokens**: an `rgba()` border has no
    ratio until you know what is behind it, so it cannot be asserted at all.
    **Current state: zero failures.** Wire it into CI — this is the token set's
@@ -1031,13 +1215,19 @@ Anything not on that list — charts, config diff, topology, reassignment —
    plus `--row-h: 30px` are the most fragile. Budget a `[data-os="win"]` override
    dropping `--w-semi` to 550 if Windows reads heavy. Verify the 2px wire at
    100/125/150/175% Windows scaling.
-4. **Prod + danger together** — the single most likely thing to get wrong in
-   implementation. Screenshot a prod cluster with an error banner up and confirm
-   both signals still read.
-5. **Forced-colors** — Windows high-contrast with the wire and its `PROD` label
-   present, **and one unselected row next to one selected row next to one prod
-   row.** The bug this catches is not "the indicator is missing"; it is "every
-   row has the indicator", which looks fine in a screenshot of a single row.
+4. **Protected + danger together** — the single most likely thing to get wrong
+   in implementation. Screenshot a protected cluster with an error banner up
+   and confirm both signals still read. Do it once with a `red` environment
+   (where the rule and the banner share a hue) and once with a `blue` one
+   (where the damper is doing nothing anyone can see, and must still not have
+   erased the rule).
+5. **Forced-colors** — Windows high-contrast with the wire and its uppercased
+   environment-name label present, **and one unselected row next to one
+   selected row next to one protected row.** The bug this catches is not "the
+   indicator is missing"; it is "every row has the indicator", which looks fine
+   in a screenshot of a single row. Check the manager's swatch grid in the same
+   pass: it is the one place in the app whose *subject* is colour, so its
+   selected state is an outline and each swatch carries its colour's word.
 6. **`index.html`** hard-codes the anti-flash background. It must stay in sync
    with `--bg-canvas`, or the app flashes the old theme on every cold start.
 7. **WCAG 2.2 AA** — the full audit, finding by finding with SC references, is
@@ -1074,44 +1264,67 @@ Anything not on that list — charts, config diff, topology, reassignment —
 
 ## 10. Themes and environments
 
-The environment substrate swaps via `data-env` on the app root
-(`apps/desktop/src/App.tsx`), and — while editing a connection — on the
-`<form>` itself, so **picking `prod` in the environment picker swaps the form's
-substrate live**.
+The environment reaches CSS through **two** attributes, not one — see §3.1 for
+why. They are set on the app root (`apps/desktop/src/App.tsx`), on the
+connection `<form>` while editing, and on the copy wizard's and offset-migrate
+modal's bodies (where they carry the *destination's* environment, not the
+workspace's). So **picking a protected environment in the picker swaps the
+form's substrate live**.
 
 ```jsx
-<div className="app" data-env={env}>            {/* whole app  */}
-<form className="editor" data-env={form.environment}>  {/* live preview */}
+<div className="app" {...envAttrs(envDef)}>              {/* whole app  */}
+<form className="editor" {...envAttrs(formEnv)}>          {/* live preview */}
+<span className="env-chip" {...envAttrs(def)}>{def.name}</span>
 ```
 
+`envAttrs` (`apps/desktop/src/environments.ts`) emits
+`data-env-color="<token>"` always and `data-env-protected="true"` only when the
+flag is set — **never `"false"`** — so the CSS keys on the attribute's presence
+and a DOM screenshot says what it means.
+
+The registry itself is a module-level store with a `useSyncExternalStore`
+snapshot, the same shape `i18n/index.ts` uses and for the same reason: about
+twenty components ask *is this connection's environment protected?*, most of
+them deep views that receive nothing but a `ConnectionProfile`, and there is one
+registry per machine rather than one per subtree. **It starts full, not empty** —
+the initial snapshot is the three defaults, so the first paint has correct
+guardrails even before (or without) the IPC answering. A registry that started
+empty would render prod unprotected for one frame, and the guardrail must never
+be the thing that is late.
+
 `data-alert="danger"` on the app root dampens the env rule while a danger banner
-is up (§5.8, prod de-collision).
+is up (§5.8, protected de-collision).
 
 **Light theme is specced and audited but not shipped.** Every text token clears
 AA on all six light surfaces and `--border-control` clears 3:1 on all six. Do
 **not** expose a user toggle until every component composition has been verified
 in it (Phase 6).
 
-**Forced colors:** Windows high-contrast drops our tints, so the prod guardrail
-must not depend on hue. The wire thickens and gains the literal word `PROD` via
-`content: attr(data-env-label)`.
+**Forced colors:** Windows high-contrast drops our tints, so the guardrail must
+not depend on hue. The wire thickens and gains the environment's own name,
+uppercased, via `content: attr(data-env-label)`. The selector is
+`.app-wire[data-env-label]` — the attribute's *presence*, not its value, because
+it is only ever set on a protected environment and matching `"PROD"` would have
+left a name check in the stylesheet.
 
 > **Never write `* { border-color: CanvasText }` in a forced-colors block.**
 > Forced-colors mode already preserves `transparent` and repaints every other
 > border with a system colour, so the blanket rule does nothing for real
 > borders and **destroys every indicator built on a transparent one**. Kavka's
-> selection, prod row, active tab and banner shell are all "transparent border
+> selection, protected row, active tab and banner shell are all "transparent border
 > → coloured border" — the rule painted their *idle* state in the same colour
 > as their *active* state, so in high contrast every row read as selected and
 > every tab as current.
 >
 > **Restate indicators positively instead**, one system colour per meaning:
-> `Highlight` for selection (row, gutter, active palette row, active tab),
-> `Mark` for prod and for danger severity — matching the wire, so the guardrail
-> reads as one signal — and `CanvasText` for the neutral banner shell. This is
-> also the only way two indicators stacked on one element stay tellable apart:
-> a selected prod row is `Mark`, because the environment matters more than the
-> selection.
+> `Highlight` for selection (row, gutter, active palette row, active tab, and
+> the manager's chosen swatch), `Mark` for a protected environment and for
+> danger severity — matching the wire, so the guardrail reads as one signal —
+> and `CanvasText` for the neutral banner shell and for the protected chip's
+> border, which is what keeps a badge tellable from a tag once the fills are
+> gone. This is also the only way two indicators stacked on one element stay
+> tellable apart: a selected protected row is `Mark`, because the environment
+> matters more than the selection.
 
 ---
 
@@ -1126,10 +1339,50 @@ These are deliberate. Do not "fix" them without reading the reason.
 - **`--env-label` is a React prop (`data-env-label`), not a CSS custom
   property.** Only the forced-colors block ever needed the string, and
   `attr()` on a data attribute is better supported than `content: var()`.
-- **Env tokens are applied via `[data-env]` (attribute selector), not
-  `:root[data-env]`.** Identical specificity, but it also works on the `.app`
-  wrapper and on a nested `<form>`, which is what makes the live substrate
-  preview possible without lifting state.
+- **Env tokens are applied via attribute selectors, not `:root[…]`.**
+  Identical specificity, but they also work on the `.app` wrapper, on a nested
+  `<form>` and on an individual chip, which is what makes the live substrate
+  preview — and a sidebar of mixed environments under one app-level colour —
+  possible without lifting state.
+
+- **`data-env` became `data-env-color` + `data-env-protected`, and that split
+  is the whole feature.** Environments used to be the closed triple
+  `dev | staging | prod`, in the Rust enum, in the TypeScript union, in the
+  chip classes and in `[data-env="prod"]`. Enterprises run four or five, and
+  every one of those places was a name check standing in for a policy. The
+  migration, in full:
+  - **`ConnectionProfile.environment` is a `string`.** Wire-compatible: the old
+    enum serialized to exactly those lowercase strings, so every
+    `profiles.json` on disk parses unchanged and no profile needed rewriting.
+  - **Colour is identity, `protected` is the guardrail** (§3.1). Everything
+    formerly keyed on `environment === "prod"` — substrate, damper,
+    typed confirms, window title, forced-colors wire, `--yes-prod`,
+    `KAVKA_MCP_ALLOW_PROD`, `errors.ts`'s context — re-keys onto the flag.
+    `errors.ts`'s `ctx.environment?: string` became
+    `ctx.environmentProtected?: boolean` for the same reason: an org whose
+    production environment is called `PRD` was getting the dev wording.
+  - **The CLI flag and the MCP variable keep their names.** They are in shell
+    history, scripts and MCP client configs; renaming them to improve a
+    sentence breaks somebody's cron job. Their *docs* now say "required when
+    the connection's environment is marked protected", which is what they
+    check.
+  - **`.env-dev` / `.env-staging` / `.env-prod` are gone**, replaced by the
+    chip's own `data-env-color` / `data-env-protected`. `.profile-row-prod`
+    became `.profile-row-protected`.
+  - **The one visible regression, accepted deliberately: `dev` looks
+    different.** It shipped as `--accent` on `--accent-tint` with a neutral
+    `#242B33` rule; it is now `green` with a green rule. Two reasons. The chip
+    was spending `--accent` — *teal means live, only live* (§2) — on an
+    environment tag, and `cyan` now exists for anyone who wants a teal-ish
+    environment. And "no coloured rule" had to become a *different* statement:
+    it now means `slate`, the token an **unknown** environment resolves to,
+    which is a real state that needs its own appearance. `staging` and `prod`
+    are pixel-identical to what they were.
+  - **A profile can name an environment the registry does not hold** — after a
+    delete in another window, or an import from a colleague. It renders slate
+    and unprotected with a hint, never an error, and the connection form gives
+    it a picker segment of its own so the current value still reads as
+    selected.
 - **`.data-table` uses `border-collapse: separate`.** With `collapse`, WebKit
   drops the border on a `position: sticky` header.
 
@@ -1137,9 +1390,10 @@ These are deliberate. Do not "fix" them without reading the reason.
   `border-color` there erases exactly the indicators it looks like it is
   helping. Indicators are restated positively, one system colour per meaning.
 
-- **The prod danger-damper reduces chroma, not lightness.** See §5.8. There is
-  no darker coral available: the undampened rule is already at 3.12:1 on its
-  worst surface.
+- **The protected danger-damper reduces chroma, not lightness — and there is
+  exactly one of it, for all seven colours.** See §5.8. There is no darker
+  coral available: the undampened red rule is already at 3.04:1 on its worst
+  surface.
 
 - **`--text-placeholder` and `--text-absent` hold the same value.** Two roles,
   one contrast floor. They stay two tokens so a future theme can split them and
@@ -1235,7 +1489,7 @@ These are deliberate. Do not "fix" them without reading the reason.
   `tabIndex` cannot focus what a clip has removed, so the last four views were
   unreachable by keyboard too (SC 1.4.10).
 
-- **Light-theme prod sidebar rows fail AA and ship anyway — because the light
+- **Light-theme protected sidebar rows fail AA and ship anyway — because the light
   theme itself doesn't ship.** On `--bg-row-prod-selected` `#F2D8D4` and
   `--bg-row-prod-hover` `#F7E2DF` (light block), `--text-tertiary`,
   `--text-placeholder`, `--text-absent` and `--border-control` all measure
@@ -1247,19 +1501,31 @@ These are deliberate. Do not "fix" them without reading the reason.
 - **The §7 error table's two context rows: half resolved.** "Timeout, prod"
   and "Active group" are not derivable from a raw broker string alone, and
   both now take the promised second argument —
-  `classifyError(raw, { groupState?, memberCount?, environment? })`, caller
-  context, never component state, so the function stays pure.
+  `classifyError(raw, { groupState?, memberCount?, environmentProtected? })`,
+  caller context, never component state, so the function stays pure.
   **The resolved half is "Active group":** it has a caller. The reset modal is
   the only place that error can arise and it holds the group's state and
   member count, so it passes them and reads `cause === "active-group"` to
   decide whether to offer `force`. Its local `looksLikeActiveGroup` copy of
   the rule is gone.
   **The unresolved half is "Timeout, prod":** the branch exists and switches
-  on `environment`, but **no renderer threads it yet.** `ErrorBanner` takes a
-  raw string and nothing else, and the profile is not in scope at most of its
-  call sites. Until it is, a prod timeout still reads with the dev wording.
-  Thread the profile through the banner in the phase that gives the banner an
-  owner; do not do it by reaching into a store from `errors.ts`.
+  on `environmentProtected`, and the four call sites that *do* hold a profile —
+  the produce panel, the reset modal, the copy wizard and the offset-migrate
+  modal — now resolve it through the registry and pass the boolean. But
+  **`ErrorBanner` still takes a raw string and nothing else**, and the profile
+  is not in scope at most of *its* call sites, so a timeout surfaced through
+  the banner still reads with the unprotected wording. Thread the profile
+  through the banner in the phase that gives the banner an owner; do not do it
+  by reaching into the environment store from `errors.ts` — that module's
+  purity is the reason its whole table is testable without a broker.
+
+- **Light-theme protected sidebar rows: the two `--bg-row-prod-*` token names
+  kept their `prod` spelling.** They are now applied by
+  `.profile-row-protected`, so the names lie slightly. Renaming them touches
+  four rules, two of them in the forced-colors block, for zero behaviour — and
+  the audit trail in this file and in `docs/A11Y-AUDIT.md` refers to them by
+  name. Rename them in the light-theme phase, together with the four values
+  above that already fail there.
 
 - **The payload inspector ships four tabs, not §5.10's five.** `Value · Key ·
   Headers · Raw` — **Hex is staged for Phase 2**, and is deliberately absent

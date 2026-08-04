@@ -6,13 +6,25 @@
 //! exactly one answer to "may this write happen", and it can be driven through
 //! the whole matrix in a millisecond without a broker.
 
-use kavka_core::profiles::{ConnectionProfile, Environment};
+use kavka_core::environments::EffectiveEnvironment;
+use kavka_core::profiles::ConnectionProfile;
 
 /// Must be `1` in the environment **when the server starts** for any write tool
 /// to run.
 pub const ALLOW_WRITES_ENV: &str = "KAVKA_MCP_ALLOW_WRITES";
 
-/// Must additionally be `1` for a write against a profile tagged `prod`.
+/// Must additionally be `1` for a write against a profile whose environment is
+/// **marked protected** in the Kavka app.
+///
+/// Environments are user-defined ([`kavka_core::environments`]) — an
+/// enterprise runs `dev`, `QA`, `UAT` and `Production` — so what this covers
+/// is the box somebody ticked, not the word `prod`. A protected environment
+/// called `Production` needs this variable exactly as `prod` did; a `prod`
+/// somebody deliberately unprotected does not.
+///
+/// **The variable is still spelled `KAVKA_MCP_ALLOW_PROD`.** It lives in MCP
+/// client config files that are checked into repositories, and renaming it
+/// would silently disable writes for every one of them to improve a word.
 pub const ALLOW_PROD_ENV: &str = "KAVKA_MCP_ALLOW_PROD";
 
 /// What the process was started with.
@@ -25,6 +37,9 @@ pub const ALLOW_PROD_ENV: &str = "KAVKA_MCP_ALLOW_PROD";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WritePolicy {
     pub writes_enabled: bool,
+    /// Whether [`ALLOW_PROD_ENV`] was set — i.e. whether writes to *protected*
+    /// environments are permitted. Named for the variable, which is named for
+    /// the environment that was protected when there were only three.
     pub prod_allowed: bool,
 }
 
@@ -107,6 +122,12 @@ fn enabled(value: Option<&str>) -> bool {
 /// Decides whether `tool` may write to `profile`, and explains a refusal in one
 /// sentence a model can act on.
 ///
+/// `environment` is the profile's environment already resolved against this
+/// machine's definitions
+/// ([`kavka_core::environments::EnvironmentStore::resolve`]). It is passed
+/// rather than looked up so this stays one pure function with no disk under
+/// it, and so the whole matrix runs in a millisecond.
+///
 /// **The order is the policy.** `read_only` is checked first because it is the
 /// only one no environment variable can lift: naming `KAVKA_MCP_ALLOW_WRITES`
 /// to a caller whose real obstacle is the profile's own flag would send them
@@ -116,6 +137,7 @@ fn enabled(value: Option<&str>) -> bool {
 pub fn authorize_write(
     policy: WritePolicy,
     profile: &ConnectionProfile,
+    environment: &EffectiveEnvironment,
     tool: &str,
 ) -> Result<(), String> {
     if profile.read_only {
@@ -135,13 +157,14 @@ pub fn authorize_write(
              startup."
         ));
     }
-    if profile.environment == Environment::Prod && !policy.prod_allowed {
+    if environment.protected && !policy.prod_allowed {
         return Err(format!(
-            "{tool} refused: {name:?} is tagged as a production connection, and this server was \
-             started without {ALLOW_PROD_ENV}=1. {ALLOW_WRITES_ENV}=1 alone does not cover prod. \
-             Set {ALLOW_PROD_ENV}=1 as well and restart the server if writing to production is \
-             genuinely what you want.",
+            "{tool} refused: {name:?} is in {env:?}, an environment marked protected in the Kavka \
+             app, and this server was started without {ALLOW_PROD_ENV}=1. {ALLOW_WRITES_ENV}=1 \
+             alone does not cover protected environments. Set {ALLOW_PROD_ENV}=1 as well and \
+             restart the server if writing to {env} is genuinely what you want.",
             name = profile.name,
+            env = environment.name,
         ));
     }
     Ok(())
@@ -150,22 +173,29 @@ pub fn authorize_write(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kavka_core::environments::{defaults, resolve, EnvironmentDef};
     use serde_json::json;
 
     /// Built from JSON rather than as a struct literal: `ConnectionProfile`
     /// gains an optional field most phases, every one of them
     /// `#[serde(default)]`, and a gate test has no business breaking because
     /// somebody added a Connect cluster or a WASM decoder to the profile.
-    fn profile(environment: Environment, read_only: bool) -> ConnectionProfile {
+    fn profile(environment: &str, read_only: bool) -> ConnectionProfile {
         serde_json::from_value(json!({
             "id": "p1",
             "name": "orders",
-            "environment": serde_json::to_value(environment).expect("an environment"),
+            "environment": environment,
             "bootstrap_servers": ["localhost:9092"],
             "auth": { "kind": "plaintext" },
             "read_only": read_only,
         }))
         .expect("a ConnectionProfile")
+    }
+
+    /// The environment as a machine with the shipped definitions resolves it —
+    /// which is every machine that has not opened the environment manager.
+    fn shipped(name: &str) -> EffectiveEnvironment {
+        resolve(&defaults(), name)
     }
 
     fn policy(writes: bool, prod: bool) -> WritePolicy {
@@ -182,45 +212,114 @@ mod tests {
     fn the_gating_matrix() {
         // (writes_enabled, prod_allowed, environment, read_only, allowed)
         let cases = [
-            (false, false, Environment::Dev, false, false),
-            (false, false, Environment::Dev, true, false),
-            (false, false, Environment::Prod, false, false),
-            (false, false, Environment::Prod, true, false),
-            (false, true, Environment::Dev, false, false),
-            (false, true, Environment::Dev, true, false),
-            (false, true, Environment::Prod, false, false),
-            (false, true, Environment::Prod, true, false),
-            (true, false, Environment::Dev, false, true),
-            (true, false, Environment::Dev, true, false),
-            (true, false, Environment::Staging, false, true),
-            (true, false, Environment::Prod, false, false),
-            (true, false, Environment::Prod, true, false),
-            (true, true, Environment::Dev, false, true),
-            (true, true, Environment::Prod, false, true),
+            (false, false, "dev", false, false),
+            (false, false, "dev", true, false),
+            (false, false, "prod", false, false),
+            (false, false, "prod", true, false),
+            (false, true, "dev", false, false),
+            (false, true, "dev", true, false),
+            (false, true, "prod", false, false),
+            (false, true, "prod", true, false),
+            (true, false, "dev", false, true),
+            (true, false, "dev", true, false),
+            (true, false, "staging", false, true),
+            (true, false, "prod", false, false),
+            (true, false, "prod", true, false),
+            (true, true, "dev", false, true),
+            (true, true, "prod", false, true),
             // read-only wins even with every variable set. This is the cell the
             // whole ordering exists for.
-            (true, true, Environment::Prod, true, false),
+            (true, true, "prod", true, false),
         ];
         for (writes, prod, environment, read_only, allowed) in cases {
             let outcome = authorize_write(
                 policy(writes, prod),
                 &profile(environment, read_only),
+                &shipped(environment),
                 "kavka_produce",
             );
             assert_eq!(
                 outcome.is_ok(),
                 allowed,
-                "writes={writes} prod={prod} env={environment:?} read_only={read_only} -> \
+                "writes={writes} prod={prod} env={environment} read_only={read_only} -> \
                  {outcome:?}"
             );
         }
+    }
+
+    /// **The migration, asserted.** An enterprise's `Production` — a name this
+    /// build has never heard of, in a colour that is not red — needs
+    /// `KAVKA_MCP_ALLOW_PROD=1` exactly as `prod` did, because the box that
+    /// decides is `protected`. And `prod` itself stops needing it the moment
+    /// somebody unticks that box.
+    #[test]
+    fn a_protected_custom_environment_gates_exactly_like_prod_did() {
+        let defs = vec![
+            EnvironmentDef::new("Production", "violet", true),
+            EnvironmentDef::new("UAT", "blue", false),
+            EnvironmentDef::new("prod", "red", false),
+        ];
+        for (environment, needs_the_variable) in
+            [("Production", true), ("UAT", false), ("prod", false)]
+        {
+            let effective = resolve(&defs, environment);
+            let profile = profile(environment, false);
+            assert_eq!(
+                authorize_write(policy(true, false), &profile, &effective, "kavka_produce")
+                    .is_err(),
+                needs_the_variable,
+                "{environment} with writes but not prod"
+            );
+            assert!(
+                authorize_write(policy(true, true), &profile, &effective, "kavka_produce").is_ok(),
+                "{environment} with both variables"
+            );
+        }
+
+        // The refusal names the environment the user actually invented, so a
+        // model can repeat it back to the person who has to set the variable.
+        let refusal = authorize_write(
+            policy(true, false),
+            &profile("Production", false),
+            &resolve(&defs, "Production"),
+            "kavka_produce",
+        )
+        .unwrap_err();
+        assert!(refusal.contains("Production"), "{refusal}");
+        assert!(refusal.contains(ALLOW_PROD_ENV), "{refusal}");
+    }
+
+    /// An environment nothing on this machine defines carries no protection —
+    /// see the reasoning on [`kavka_core::environments`].
+    /// `KAVKA_MCP_ALLOW_WRITES` still governs it, so this is not a hole in the
+    /// write gate, only in the protected-environment gate.
+    #[test]
+    fn an_undefined_environment_does_not_need_the_prod_variable() {
+        let effective = shipped("QA");
+        assert!(!effective.known);
+        assert!(authorize_write(
+            policy(true, false),
+            &profile("QA", false),
+            &effective,
+            "kavka_produce"
+        )
+        .is_ok());
+        // …and is still refused with writes off.
+        assert!(authorize_write(
+            policy(false, true),
+            &profile("QA", false),
+            &effective,
+            "kavka_produce"
+        )
+        .is_err());
     }
 
     #[test]
     fn a_disabled_server_names_the_writes_variable() {
         let refusal = authorize_write(
             policy(false, false),
-            &profile(Environment::Dev, false),
+            &profile("dev", false),
+            &shipped("dev"),
             "kavka_produce",
         )
         .unwrap_err();
@@ -232,10 +331,11 @@ mod tests {
     }
 
     #[test]
-    fn a_prod_profile_names_the_prod_variable_and_says_writes_alone_is_not_enough() {
+    fn a_protected_profile_names_the_prod_variable_and_says_writes_alone_is_not_enough() {
         let refusal = authorize_write(
             policy(true, false),
-            &profile(Environment::Prod, false),
+            &profile("prod", false),
+            &shipped("prod"),
             "kavka_reset_offsets",
         )
         .unwrap_err();
@@ -248,7 +348,8 @@ mod tests {
     fn a_read_only_profile_is_refused_and_told_no_variable_lifts_it() {
         let refusal = authorize_write(
             policy(true, true),
-            &profile(Environment::Prod, true),
+            &profile("prod", true),
+            &shipped("prod"),
             "kavka_produce",
         )
         .unwrap_err();
@@ -262,10 +363,11 @@ mod tests {
     }
 
     #[test]
-    fn staging_needs_no_prod_variable() {
+    fn an_unprotected_environment_needs_no_prod_variable() {
         assert!(authorize_write(
             policy(true, false),
-            &profile(Environment::Staging, false),
+            &profile("staging", false),
+            &shipped("staging"),
             "kavka_produce"
         )
         .is_ok());

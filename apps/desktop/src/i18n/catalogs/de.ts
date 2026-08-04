@@ -95,7 +95,7 @@ const de: Catalog = {
   "palette.connectTo": "Mit {name} verbinden",
   "palette.state.connected": "verbunden",
   "palette.state.connecting": "wird verbunden…",
-  "palette.prodCluster": "Prod-Cluster",
+  "palette.protectedCluster": "geschütztes Cluster",
   "palette.profile.kw":
     "connect open switch cluster broker bootstrap verbinden wechseln öffnen",
   "palette.add.context": "Ein Name, ein Broker und die Art der Anmeldung",
@@ -183,6 +183,11 @@ const de: Catalog = {
   "transfer.report.replaced": "{count, plural, other {# ersetzt}}",
   "transfer.report.skipped":
     "{count, plural, other {# übersprungen — schon auf diesem Rechner}}",
+  "transfer.report.envAdded":
+    "{count, plural, one {# Umgebung hinzugefügt} other {# Umgebungen hinzugefügt}}",
+  "transfer.report.envSkipped":
+    "{count, plural, one {# Umgebung bereits definiert} other {# Umgebungen bereits definiert}}",
+  "transfer.report.envOnly.title": "Keine neuen Verbindungen — nur Umgebungen",
   "transfer.report.unchanged.title":
     "{count, plural, one {Nichts geändert — # Verbindung war schon hier} other {Nichts geändert — # Verbindungen waren schon hier}}",
   "transfer.report.unchanged.detail":
@@ -202,10 +207,13 @@ const de: Catalog = {
   "editor.name.hint":
     "Was immer Sie in der Seitenleiste wiedererkennen. Nur Kavka sieht es.",
   "editor.env.label": "Umgebung",
-  "editor.env.hint.prod":
-    "Prod färbt die Ledger-Linie in jeder Tabelle korallenrot, markiert dieses Cluster in der Seitenleiste und legt einen Warnbalken über den oberen Fensterrand. Schalten Sie unten den Schreibschutz ein, sofern Sie nicht wirklich schreiben müssen.",
+  "editor.env.hint.protected":
+    "Diese Umgebung ist als geschützt markiert: Die Ledger-Linie trägt ihre Farbe in jeder Tabelle, die Seitenleiste markiert dieses Cluster, ein Warnbalken liegt über dem oberen Fensterrand, und vor jeder zerstörenden Aktion müssen Sie den Namen eintippen. Schalten Sie unten den Schreibschutz ein, sofern Sie nicht wirklich schreiben müssen.",
   "editor.env.hint.other":
     "Kavka färbt jede Ansicht nach Umgebung, damit Sie kein Cluster mit einem anderen verwechseln.",
+  "editor.env.manage": "Umgebungen verwalten…",
+  "editor.env.hint.unknown":
+    "Auf diesem Rechner ist {name} nirgends definiert, deshalb zeigt Kavka die Umgebung neutral grau an und wendet keine Schutzmechanismen an. Legen Sie sie unter „Umgebungen verwalten“ an, um ihr eine Farbe zu geben und zu entscheiden, ob sie geschützt ist.",
   "editor.bootstrap.label": "Bootstrap-Server",
   "editor.bootstrap.hint":
     "Ein beliebiger einzelner Broker in Ihrem Cluster — den Rest findet Kavka von dort aus. Einer pro Zeile, oder durch Komma getrennt. Sie betreiben das Dev-Cluster aus diesem Repository? Dann nehmen Sie {local}.",
@@ -380,6 +388,59 @@ const de: Catalog = {
     "Ergänzen Sie die Client-ID, die Ihr Identitätsanbieter für diese Anwendung ausgestellt hat.",
   "editor.err.clientSecret":
     "Dieses Anmeldeverfahren braucht das Secret, das zu dieser Client-ID gehört.",
+
+
+  // ── Umgebungen ──────────────────────────────────────────────────────────
+  "env.color.green": "Grün",
+  "env.color.amber": "Bernstein",
+  "env.color.red": "Rot",
+  "env.color.blue": "Blau",
+  "env.color.violet": "Violett",
+  "env.color.cyan": "Türkis",
+  "env.color.slate": "Schiefer",
+
+  "env.mgr.title": "Umgebungen",
+  "env.mgr.intro":
+    "Benennen Sie die Umgebungen, die Ihre Organisation tatsächlich betreibt. Die Farbe unterscheidet sie auf einen Blick; „geschützt“ ist der Schutzmechanismus.",
+  "env.mgr.failed": "Das hat nicht geklappt",
+  "env.mgr.working": "Kavka arbeitet daran",
+  "env.mgr.add": "Umgebung hinzufügen",
+  "env.mgr.edit": "Bearbeiten",
+
+  "env.mgr.row.protected": "geschützt",
+  "env.mgr.row.unprotected": "nicht geschützt",
+  "env.mgr.row.used":
+    "{count, plural, =0 {keine Verbindungen} one {# Verbindung} other {# Verbindungen}}",
+
+  "env.mgr.name.label": "Name",
+  "env.mgr.name.hint":
+    "Wie auch immer Ihr Team sie nennt — dev, QA, UAT, Produktion. Wird genau so angezeigt, wie Sie sie eintippen, und nie übersetzt.",
+  "env.mgr.name.taken": "Eine Umgebung mit diesem Namen gibt es bereits.",
+  "env.mgr.name.required": "Geben Sie der Umgebung zuerst einen Namen",
+
+  "env.mgr.color.label": "Farbe",
+  "env.mgr.color.hint":
+    "Nur zur Identität. Die Farbe färbt die Ledger-Linie und den Chip; sie entscheidet nie darüber, was Kavka Ihnen erlaubt.",
+
+  "env.mgr.protected.label": "Diese Umgebung als geschützt behandeln",
+  "env.mgr.protected.hint":
+    "Kavka wechselt zum Warn-Untergrund, verlangt vor jeder zerstörenden Aktion das Eintippen des Topic- oder Gruppennamens, markiert das Fenster und verweigert Schreibvorgänge über die Kommandozeile und über KI-Assistenten, sofern es ihnen nicht ausdrücklich anders gesagt wurde.",
+  "env.mgr.unprotect.prompt": "Tippen Sie {name}, um den Schutz zu entfernen",
+  "env.mgr.unprotect.hint":
+    "Jede Verbindung in {name} verliert ihre Schutzmechanismen: keine eingetippten Bestätigungen mehr, und Kommandozeile und KI-Assistenten verweigern Schreibvorgänge nicht länger.",
+
+  "env.mgr.delete.title": "{name} entfernen?",
+  "env.mgr.delete.unused":
+    "Keine Verbindung nutzt {name}, sonst ändert sich nichts.",
+  "env.mgr.delete.used":
+    "{count, plural, one {# Verbindung nutzt} other {# Verbindungen nutzen}} {name}. Wählen Sie, wohin sie gehen — Kavka verschiebt sie vor dem Entfernen.",
+  "env.mgr.delete.moveTo": "Diese Verbindungen verschieben nach",
+  "env.mgr.delete.moveHint": "Diese Verbindungen werden verschoben: {names}.",
+  "env.mgr.delete.confirm": "Umgebung entfernen",
+  "env.mgr.delete.needTarget":
+    "Wählen Sie eine Umgebung, in die diese Verbindungen verschoben werden.",
+  "env.mgr.delete.last":
+    "Das ist die einzige verbliebene Umgebung — legen Sie zuerst eine weitere an",
 
   "unit.seconds": "{count, plural, one {# Sekunde} other {# Sekunden}}",
   "unit.minutes": "{count, plural, one {# Minute} other {# Minuten}}",

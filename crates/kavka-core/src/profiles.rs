@@ -2,6 +2,7 @@
 //! [`SecretRef`] into the OS keychain, so exported profiles are secret-free by
 //! construction (never add a String secret field to these types).
 
+use crate::environments::{EnvironmentDef, EnvironmentStore};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -11,7 +12,27 @@ use std::path::PathBuf;
 pub struct ConnectionProfile {
     pub id: String,
     pub name: String,
-    pub environment: Environment,
+    /// Which environment this connection belongs to, by name.
+    ///
+    /// A **free string**, resolved against
+    /// [`crate::environments::EnvironmentStore`] — because an enterprise runs
+    /// more than three of these (`dev`, `QA`, `UAT`, `Production`) and a
+    /// three-variant enum made that unrepresentable.
+    ///
+    /// **This is wire-compatible with the enum it replaced**, which is why the
+    /// field has no `#[serde(default)]` and needs none: the enum was
+    /// `#[serde(rename_all = "lowercase")]`, so every `profiles.json` ever
+    /// written holds `"dev"`, `"staging"` or `"prod"` — already exactly this
+    /// string. A Phase-0 file parses byte-for-byte unchanged (there is a test
+    /// pinning that literal document), and a machine with no
+    /// `environments.json` resolves those three names against
+    /// [`crate::environments::defaults`], which are the same three colours and
+    /// the same protected `prod`.
+    ///
+    /// Nothing compares this to a literal. The guardrails read
+    /// [`crate::environments::EffectiveEnvironment::protected`]; a name
+    /// nothing defines renders neutral rather than failing.
+    pub environment: String,
     pub bootstrap_servers: Vec<String>,
     pub auth: AuthConfig,
     /// Mutating operations are rejected in core when set (docs/ARCHITECTURE.md D5).
@@ -256,14 +277,6 @@ pub struct MetricsEndpointConfig {
     pub password: Option<SecretRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Environment {
-    Dev,
-    Staging,
-    Prod,
-}
-
 /// Reference to a secret stored in the OS keychain (macOS Keychain /
 /// Windows Credential Manager) via the `keyring` crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,9 +331,23 @@ pub enum ScramMechanism {
 /// shape can be migrated (or rejected) instead of silently half-parsed.
 /// Generic over the payload so exports can borrow and imports can own.
 #[derive(Debug, Serialize, Deserialize)]
-struct Envelope<P> {
+struct Envelope<P, E> {
     kavka_profiles: u32,
     profiles: P,
+    /// The environment definitions the exported profiles are tagged with.
+    ///
+    /// **Additive and optional at the SAME version**, deliberately: an export
+    /// written before this field existed is a valid version-1 document and has
+    /// to keep importing, and an export written now has to keep importing into
+    /// a build that predates the field (serde ignores unknown keys). Bumping
+    /// [`EXPORT_VERSION`] for a field whose absence has a correct reading —
+    /// "this export says nothing about environments" — would have broken both
+    /// directions to describe nothing.
+    ///
+    /// Omitted rather than written empty, so an export of profiles whose
+    /// environments are all undefined is shaped exactly like a Phase-0 one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environments: Option<E>,
 }
 
 const VERSION_FIELD: &str = "kavka_profiles";
@@ -328,14 +355,32 @@ const VERSION_FIELD: &str = "kavka_profiles";
 /// Envelope version this build writes and reads.
 pub const EXPORT_VERSION: u32 = 1;
 
+/// What one export document carries.
+#[derive(Debug, Default)]
+pub struct Import {
+    pub profiles: Vec<ConnectionProfile>,
+    /// Empty when the export predates the field, or when it defined none.
+    pub environments: Vec<EnvironmentDef>,
+}
+
 /// Serializes profiles into the shareable export envelope. The result is
 /// secret-free by construction — profiles carry [`SecretRef`]s, never values
 /// (docs/ARCHITECTURE.md D5) — and the debug assertion below fails loudly if
 /// anyone ever adds a String secret field to the profile types.
-pub fn export_json(profiles: &[ConnectionProfile]) -> String {
+///
+/// `environments` is the machine's full definition list; **only the ones the
+/// exported profiles actually reference travel**. An export is a description
+/// of these connections, and shipping somebody the other nine environments
+/// somebody's colleague invented is noise they then have to delete.
+pub fn export_json(profiles: &[ConnectionProfile], environments: &[EnvironmentDef]) -> String {
+    let referenced: Vec<&EnvironmentDef> = environments
+        .iter()
+        .filter(|def| profiles.iter().any(|profile| def.is(&profile.environment)))
+        .collect();
     let json = serde_json::to_string_pretty(&Envelope {
         kavka_profiles: EXPORT_VERSION,
         profiles,
+        environments: (!referenced.is_empty()).then_some(referenced),
     })
     .expect("connection profiles are infallibly serializable");
     debug_assert_eq!(
@@ -351,7 +396,11 @@ pub fn export_json(profiles: &[ConnectionProfile]) -> String {
 /// Parses an export envelope produced by [`export_json`]. Rejects malformed
 /// JSON, documents that aren't Kavka exports, and versions this build can't
 /// read — each with a message that says what to do about it.
-pub fn import_json(raw: &str) -> Result<Vec<ConnectionProfile>> {
+///
+/// An export with no `environments` key is not an error and not a migration:
+/// it is a document that says nothing about environments, so its profiles land
+/// tagged with names this machine resolves for itself.
+pub fn import_json(raw: &str) -> Result<Import> {
     let doc: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| Error::Other(format!("not valid JSON: {e}")))?;
 
@@ -381,9 +430,35 @@ pub fn import_json(raw: &str) -> Result<Vec<ConnectionProfile>> {
         }));
     }
 
-    let envelope: Envelope<Vec<ConnectionProfile>> = serde_json::from_value(doc)
-        .map_err(|e| Error::Other(format!("malformed profile export: {e}")))?;
-    Ok(envelope.profiles)
+    let envelope: Envelope<Vec<ConnectionProfile>, Vec<EnvironmentDef>> =
+        serde_json::from_value(doc)
+            .map_err(|e| Error::Other(format!("malformed profile export: {e}")))?;
+    Ok(Import {
+        profiles: envelope.profiles,
+        environments: envelope.environments.unwrap_or_default(),
+    })
+}
+
+/// Applies one parsed export to both stores: the environment definitions
+/// first, then the profiles.
+///
+/// **The order is the point.** A profile whose environment is merged in
+/// afterwards would exist, however briefly, tagged with a name nothing on this
+/// machine defines — and a concurrent read (the other window's sidebar, an
+/// `environments_list` the UI already had in flight) would render it neutral
+/// and unprotected. Definitions first means a connection is never visible
+/// without its guardrail.
+pub fn apply_import(
+    profiles: &ProfileStore,
+    environments: &EnvironmentStore,
+    import: Import,
+    strategy: ImportStrategy,
+) -> Result<ImportReport> {
+    let environment_report = environments.import(import.environments)?;
+    let mut report = profiles.import(import.profiles, strategy)?;
+    report.environments_imported = environment_report.imported;
+    report.environments_skipped = environment_report.skipped;
+    Ok(report)
 }
 
 /// What to do when an imported profile's id already exists in the store.
@@ -412,11 +487,24 @@ impl std::str::FromStr for ImportStrategy {
 
 /// Outcome of [`ProfileStore::import`]. `imported` counts profiles whose id was
 /// new; existing ids land in `skipped` or `replaced` per the strategy.
+///
+/// The two `environments_*` counts are filled in by [`apply_import`] and stay
+/// zero for a bare [`ProfileStore::import`]. They are reported separately from
+/// the profile counts rather than summed into them because the user asked
+/// about connections and got environments as well — silently inflating
+/// "imported 3" to "imported 5" would make the sentence wrong.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportReport {
     pub imported: usize,
     pub skipped: usize,
     pub replaced: usize,
+    /// Environment definitions that were not already on this machine.
+    #[serde(default)]
+    pub environments_imported: usize,
+    /// Environment definitions this machine already had, by name — kept as
+    /// they were. See [`crate::environments::EnvironmentImportReport`].
+    #[serde(default)]
+    pub environments_skipped: usize,
 }
 
 /// Field names that may only ever hold a [`SecretRef`] (or nothing). Returns
@@ -589,11 +677,29 @@ mod tests {
         }
     }
 
+    /// The environment store sharing this scratch dir with the profile store —
+    /// which is the arrangement on a real machine, both files side by side.
+    fn environments_of(dir: &TempDir) -> EnvironmentStore {
+        EnvironmentStore::new(dir.0.clone())
+    }
+
+    /// An export from a machine with the shipped definitions. Every fixture
+    /// profile is tagged `prod`, so this is what a real export of them carries.
+    fn exported(profiles: &[ConnectionProfile]) -> String {
+        export_json(profiles, &crate::environments::defaults())
+    }
+
+    /// The profiles out of an export document — what almost every test here is
+    /// actually asserting about. The environment half has its own tests below.
+    fn imported(raw: &str) -> Result<Vec<ConnectionProfile>> {
+        import_json(raw).map(|import| import.profiles)
+    }
+
     fn profile(id: &str, name: &str) -> ConnectionProfile {
         ConnectionProfile {
             id: id.into(),
             name: name.into(),
-            environment: Environment::Prod,
+            environment: "prod".into(),
             bootstrap_servers: vec!["broker-1:9093".into(), "broker-2:9093".into()],
             auth: AuthConfig::SaslScram {
                 mechanism: ScramMechanism::Sha512,
@@ -701,8 +807,8 @@ mod tests {
     #[test]
     fn export_import_roundtrip_preserves_profiles() {
         let original = every_auth_variant();
-        let json = export_json(&original);
-        let back = import_json(&json).expect("roundtrip");
+        let json = exported(&original);
+        let back = imported(&json).expect("roundtrip");
 
         assert_eq!(back.len(), original.len());
         // Compared through JSON: the profile types are deliberately not PartialEq.
@@ -714,8 +820,7 @@ mod tests {
 
     #[test]
     fn export_writes_the_versioned_envelope() {
-        let doc: serde_json::Value =
-            serde_json::from_str(&export_json(&[profile("a", "A")])).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&exported(&[profile("a", "A")])).unwrap();
         assert_eq!(doc[VERSION_FIELD], serde_json::json!(EXPORT_VERSION));
         assert_eq!(doc["profiles"].as_array().unwrap().len(), 1);
         assert_eq!(doc["profiles"][0]["id"], "a");
@@ -723,7 +828,7 @@ mod tests {
 
     #[test]
     fn export_never_contains_secret_values() {
-        let json = export_json(&every_auth_variant());
+        let json = exported(&every_auth_variant());
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         // Every secret-shaped field holds a SecretRef (or nothing), never a value.
@@ -761,14 +866,14 @@ mod tests {
                 "read_only": false
             }]
         }"#;
-        let profiles = import_json(legacy).expect("a Phase 0 profile still parses");
+        let profiles = imported(legacy).expect("a Phase 0 profile still parses");
         assert_eq!(profiles.len(), 1);
         assert!(profiles[0].schema_registry.is_none());
     }
 
     #[test]
     fn a_schema_registry_password_travels_as_a_reference() {
-        let json = export_json(&[profile("a", "A")]);
+        let json = exported(&[profile("a", "A")]);
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         let registry = &doc["profiles"][0]["schema_registry"];
 
@@ -789,7 +894,7 @@ mod tests {
     #[test]
     fn connect_clusters_survive_an_export_import_roundtrip() {
         let original = profile("a", "A");
-        let back = import_json(&export_json(&[original])).expect("roundtrip");
+        let back = imported(&exported(&[original])).expect("roundtrip");
         let clusters = &back[0].connect_clusters;
 
         assert_eq!(clusters.len(), 2);
@@ -825,7 +930,7 @@ mod tests {
                 "schema_registry": {"url": "https://registry.example"}
             }]
         }"#;
-        let profiles = import_json(legacy).expect("a Phase 1 profile still parses");
+        let profiles = imported(legacy).expect("a Phase 1 profile still parses");
         assert_eq!(profiles.len(), 1);
         assert!(profiles[0].connect_clusters.is_empty());
         assert!(profiles[0].connect_secret_entries().is_empty());
@@ -833,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_connect_password_travels_as_a_reference() {
-        let json = export_json(&[profile("a", "A")]);
+        let json = exported(&[profile("a", "A")]);
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         let clusters = &doc["profiles"][0]["connect_clusters"];
 
@@ -877,7 +982,7 @@ mod tests {
                 "connect_clusters": [{"name": "sources", "url": "http://connect:8083"}]
             }]
         }"#;
-        let profiles = import_json(legacy).expect("a Phase 3 profile still parses");
+        let profiles = imported(legacy).expect("a Phase 3 profile still parses");
         assert_eq!(profiles.len(), 1);
         assert!(profiles[0].metrics_endpoint.is_none());
         // Both Phase 4 additions default, not just the one the contract named:
@@ -897,7 +1002,7 @@ mod tests {
     fn a_sampler_interval_survives_export_and_import() {
         let mut profile = profile("p1", "Orders");
         profile.sampler_interval_ms = Some(45_000);
-        let round_tripped = import_json(&export_json(&[profile])).expect("its own export parses");
+        let round_tripped = imported(&exported(&[profile])).expect("its own export parses");
         assert_eq!(round_tripped[0].sampler_interval_ms, Some(45_000));
     }
 
@@ -918,7 +1023,7 @@ mod tests {
                 "metrics_endpoint": {"url": "http://broker-1:9404/metrics"}
             }]
         }"#;
-        let profiles = import_json(legacy).expect("an anonymous exporter parses");
+        let profiles = imported(legacy).expect("an anonymous exporter parses");
         let endpoint = profiles[0].metrics_endpoint.as_ref().expect("endpoint");
         assert_eq!(endpoint.url, "http://broker-1:9404/metrics");
         assert!(endpoint.username.is_none());
@@ -927,7 +1032,7 @@ mod tests {
 
     #[test]
     fn a_metrics_password_travels_as_a_reference() {
-        let json = export_json(&[profile("a", "A")]);
+        let json = exported(&[profile("a", "A")]);
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         let endpoint = &doc["profiles"][0]["metrics_endpoint"];
 
@@ -1029,7 +1134,7 @@ mod tests {
                 "sampler_interval_ms": 30000
             }]
         }"#;
-        let profiles = import_json(legacy).expect("a Phase 4 profile still parses");
+        let profiles = imported(legacy).expect("a Phase 4 profile still parses");
         assert_eq!(profiles.len(), 1);
         assert!(profiles[0].wasm_serdes.is_empty());
         // The rest of the profile is untouched by the addition.
@@ -1048,7 +1153,7 @@ mod tests {
             path: "/opt/kavka/acme.wasm".into(),
             applies_to_topics: vec!["acme.*".into(), "orders.v?".into()],
         }];
-        let back = import_json(&export_json(&[original])).expect("roundtrip");
+        let back = imported(&exported(&[original])).expect("roundtrip");
 
         assert_eq!(back[0].wasm_serdes.len(), 1);
         assert_eq!(back[0].wasm_serdes[0].name, "acme-protobuf");
@@ -1059,7 +1164,7 @@ mod tests {
         );
 
         let doc: serde_json::Value =
-            serde_json::from_str(&export_json(&back)).expect("its own export parses");
+            serde_json::from_str(&exported(&back)).expect("its own export parses");
         assert_eq!(leaked_secret_field(&doc), None);
     }
 
@@ -1135,12 +1240,12 @@ mod tests {
 
     #[test]
     fn import_rejects_unknown_versions() {
-        let newer = import_json(r#"{"kavka_profiles": 99, "profiles": []}"#).unwrap_err();
+        let newer = imported(r#"{"kavka_profiles": 99, "profiles": []}"#).unwrap_err();
         assert!(
             newer.to_string().contains("update Kavka"),
             "unhelpful: {newer}"
         );
-        let older = import_json(r#"{"kavka_profiles": 0, "profiles": []}"#).unwrap_err();
+        let older = imported(r#"{"kavka_profiles": 0, "profiles": []}"#).unwrap_err();
         assert!(
             older.to_string().contains("no longer supported"),
             "unhelpful: {older}"
@@ -1162,7 +1267,7 @@ mod tests {
                 "malformed profile export",
             ),
         ] {
-            let err = import_json(raw).unwrap_err().to_string();
+            let err = imported(raw).unwrap_err().to_string();
             assert!(err.contains(expected), "{raw} -> {err}");
         }
     }
@@ -1186,6 +1291,7 @@ mod tests {
                 imported: 1,
                 skipped: 1,
                 replaced: 0,
+                ..ImportReport::default()
             }
         );
         let all = store.list().unwrap();
@@ -1213,6 +1319,7 @@ mod tests {
                 imported: 1,
                 skipped: 0,
                 replaced: 1,
+                ..ImportReport::default()
             }
         );
         let all = store.list().unwrap();
@@ -1226,7 +1333,7 @@ mod tests {
         let store = dir.store();
         let report = store
             .import(
-                import_json(&export_json(&every_auth_variant())).unwrap(),
+                imported(&exported(&every_auth_variant())).unwrap(),
                 ImportStrategy::Skip,
             )
             .unwrap();
@@ -1249,5 +1356,255 @@ mod tests {
             err.contains("\"skip\"") && err.contains("\"replace\""),
             "{err}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The environment migration: `environment` was a three-variant enum
+    // -----------------------------------------------------------------------
+
+    /// **The compatibility test the whole migration rests on.**
+    ///
+    /// This is a `profiles.json` as Phase 0 wrote it — a bare array, no
+    /// envelope, none of the five later fields, and `"environment": "prod"`
+    /// written by `#[serde(rename_all = "lowercase")]` on the enum. The field
+    /// is a `String` now and this document has to keep parsing **unchanged**,
+    /// because it is read on every launch and the failure mode is not "the new
+    /// feature is missing", it is "every connection is gone".
+    ///
+    /// It is a byte string rather than a serialized fixture on purpose: a
+    /// fixture built from today's types would be re-derived by any future
+    /// change and would assert nothing.
+    #[test]
+    fn a_phase_0_profiles_json_still_loads_with_the_environment_as_a_string() {
+        const PHASE_0: &str = r#"[
+  {
+    "id": "01H8XZ0000000000000000",
+    "name": "orders-prod",
+    "environment": "prod",
+    "bootstrap_servers": [
+      "kafka-1.internal:9093",
+      "kafka-2.internal:9093"
+    ],
+    "auth": {
+      "kind": "sasl_scram",
+      "mechanism": "SCRAM-SHA-512",
+      "username": "kavka-app",
+      "password": {
+        "entry": "01H8XZ0000000000000000/password"
+      },
+      "tls": true
+    },
+    "read_only": true
+  },
+  {
+    "id": "01H8XZ1111111111111111",
+    "name": "laptop",
+    "environment": "dev",
+    "bootstrap_servers": [
+      "localhost:9092"
+    ],
+    "auth": {
+      "kind": "plaintext"
+    },
+    "read_only": false
+  },
+  {
+    "id": "01H8XZ2222222222222222",
+    "name": "staging",
+    "environment": "staging",
+    "bootstrap_servers": [
+      "kafka-stg:9092"
+    ],
+    "auth": {
+      "kind": "plaintext"
+    },
+    "read_only": false
+  }
+]"#;
+
+        let dir = TempDir::new();
+        fs::create_dir_all(&dir.0).unwrap();
+        fs::write(dir.0.join("profiles.json"), PHASE_0).unwrap();
+        let profiles = dir.store().list().expect("a Phase 0 profiles.json parses");
+
+        assert_eq!(profiles.len(), 3);
+        assert_eq!(profiles[0].environment, "prod");
+        assert_eq!(profiles[1].environment, "dev");
+        assert_eq!(profiles[2].environment, "staging");
+        // Everything else about the document is untouched by the change.
+        assert!(profiles[0].read_only);
+        assert!(profiles[0].schema_registry.is_none());
+        assert!(profiles[0].wasm_serdes.is_empty());
+
+        // And with no environments.json — which is exactly the state such a
+        // machine is in — the three names resolve to what they always meant:
+        // the same colours, and prod still protected.
+        let environments = environments_of(&dir);
+        let prod = environments.resolve(&profiles[0].environment).unwrap();
+        assert!(prod.known && prod.protected && prod.color == "red");
+        for unprotected in [&profiles[1], &profiles[2]] {
+            let effective = environments.resolve(&unprotected.environment).unwrap();
+            assert!(effective.known, "{effective:?}");
+            assert!(!effective.protected, "{effective:?}");
+        }
+
+        // Re-serializing produces the same three strings the enum did, so a
+        // file written by this build is readable by the build before it.
+        let written = serde_json::to_value(&profiles).unwrap();
+        assert_eq!(written[0]["environment"], "prod");
+        assert_eq!(written[1]["environment"], "dev");
+    }
+
+    /// An environment nothing defines is a connection that still works.
+    #[test]
+    fn a_profile_on_an_undefined_environment_loads_and_renders_neutral() {
+        let dir = TempDir::new();
+        let store = dir.store();
+        let mut profile = profile("p1", "Orders");
+        profile.environment = "UAT".into();
+        store.upsert(profile).unwrap();
+
+        let loaded = store.list().unwrap();
+        assert_eq!(loaded[0].environment, "UAT");
+        let effective = environments_of(&dir)
+            .resolve(&loaded[0].environment)
+            .unwrap();
+        assert!(!effective.known);
+        assert!(!effective.protected);
+        assert_eq!(effective.color, crate::environments::NEUTRAL_COLOR);
+        assert!(effective.hint().is_some());
+    }
+
+    /// The export gains the definitions its profiles are tagged with — and
+    /// only those.
+    #[test]
+    fn an_export_carries_the_environments_its_profiles_reference() {
+        let mut dev = profile("a", "Laptop");
+        dev.environment = "dev".into();
+        let mut unknown = profile("b", "Pilot");
+        unknown.environment = "UAT".into();
+
+        let json = export_json(&[dev, unknown], &crate::environments::defaults());
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let defs = doc["environments"].as_array().expect("the new key");
+
+        assert_eq!(defs.len(), 1, "only the referenced one travels: {defs:?}");
+        assert_eq!(defs[0]["name"], "dev");
+        assert_eq!(defs[0]["color"], "green");
+        assert_eq!(defs[0]["protected"], false);
+        // Still version 1: the field is additive and optional (see Envelope).
+        assert_eq!(doc[VERSION_FIELD], serde_json::json!(EXPORT_VERSION));
+
+        // An export whose profiles reference nothing defined omits the key
+        // entirely, so it is shaped exactly like a Phase-0 export.
+        let mut orphan = profile("c", "Pilot");
+        orphan.environment = "UAT".into();
+        let bare: serde_json::Value =
+            serde_json::from_str(&export_json(&[orphan], &crate::environments::defaults()))
+                .unwrap();
+        assert!(bare.get("environments").is_none(), "{bare}");
+    }
+
+    /// Both directions of the additive field: an export written before it
+    /// existed imports fine, and one written now still parses as a version-1
+    /// document.
+    #[test]
+    fn an_export_without_the_environments_key_imports_fine() {
+        let legacy = r#"{
+            "kavka_profiles": 1,
+            "profiles": [{
+                "id": "old",
+                "name": "Legacy",
+                "environment": "prod",
+                "bootstrap_servers": ["kafka-1:9093"],
+                "auth": {"kind": "plaintext"},
+                "read_only": false
+            }]
+        }"#;
+        let import = import_json(legacy).expect("a Phase 6 export still parses");
+        assert_eq!(import.profiles.len(), 1);
+        assert!(
+            import.environments.is_empty(),
+            "absence says nothing about environments; it is not a migration"
+        );
+    }
+
+    #[test]
+    fn environments_survive_an_export_import_roundtrip() {
+        let mut uat = profile("a", "Pilot");
+        uat.environment = "UAT".into();
+        let defs = vec![
+            EnvironmentDef::new("UAT", "violet", true),
+            EnvironmentDef::new("dev", "green", false),
+        ];
+
+        let import = import_json(&export_json(&[uat], &defs)).expect("roundtrip");
+        assert_eq!(import.profiles[0].environment, "UAT");
+        assert_eq!(
+            import.environments,
+            vec![EnvironmentDef::new("UAT", "violet", true)]
+        );
+        // Protection travels with it — a violet protected environment is still
+        // protected on the other machine.
+        assert!(import.environments[0].protected);
+    }
+
+    /// The IPC-level import: definitions first, profiles second, counted
+    /// separately.
+    #[test]
+    fn apply_import_merges_both_stores_and_reports_both_counts() {
+        let dir = TempDir::new();
+        let store = dir.store();
+        let environments = environments_of(&dir);
+        store.upsert(profile("a", "stored A")).unwrap();
+
+        let mut incoming = profile("b", "imported B");
+        incoming.environment = "UAT".into();
+        let document = export_json(
+            &[profile("a", "imported A"), incoming],
+            &[
+                EnvironmentDef::new("UAT", "violet", true),
+                // Same name as a shipped default, arriving unprotected. It has
+                // to be skipped, not applied.
+                EnvironmentDef::new("prod", "blue", false),
+            ],
+        );
+
+        let report = apply_import(
+            &store,
+            &environments,
+            import_json(&document).unwrap(),
+            ImportStrategy::Skip,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            ImportReport {
+                imported: 1,
+                skipped: 1,
+                replaced: 0,
+                environments_imported: 1,
+                environments_skipped: 1,
+            }
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+        assert!(environments.resolve("UAT").unwrap().protected);
+        let prod = environments.resolve("prod").unwrap();
+        assert!(prod.protected, "an import must never disarm a guardrail");
+        assert_eq!(prod.color, "red");
+    }
+
+    /// A bare profile import touches no definitions, so its two environment
+    /// counts stay zero rather than reporting work nobody did.
+    #[test]
+    fn a_profile_only_import_reports_no_environment_counts() {
+        let dir = TempDir::new();
+        let report = dir
+            .store()
+            .import(vec![profile("a", "A")], ImportStrategy::Skip)
+            .unwrap();
+        assert_eq!(report.environments_imported, 0);
+        assert_eq!(report.environments_skipped, 0);
     }
 }

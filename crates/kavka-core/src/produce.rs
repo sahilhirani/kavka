@@ -1658,7 +1658,7 @@ mod encoding {
 mod tests {
     use super::*;
     use crate::consume::{fetch_messages, FetchSpec, SeekSpec};
-    use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+    use crate::profiles::{AuthConfig, ConnectionProfile};
     use crate::serdes::{Encoding, MessageRecord};
     use crate::sr::canned::CannedRegistry;
 
@@ -1685,7 +1685,7 @@ mod tests {
         ClusterConnection::connect(ConnectionProfile {
             id: "it-produce".into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![bootstrap()],
             auth: AuthConfig::Plaintext,
             read_only,

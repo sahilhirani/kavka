@@ -16,6 +16,7 @@ import {
   type ProduceValueSpec,
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import { approxCount, groupDigits } from "./format";
 import { Term } from "./Glossary";
@@ -291,7 +292,7 @@ export default function ProducePanel({
   const [confirming, setConfirming] = useState(false);
   const firstRef = useRef<HTMLInputElement | null>(null);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
   const hasRegistry =
     profile.schema_registry !== null && profile.schema_registry !== undefined;
@@ -434,7 +435,7 @@ export default function ProducePanel({
     } catch (err) {
       const raw = errorMessage(err);
       const { cause, title, detail } = classifyError(raw, {
-        environment: profile.environment,
+        environmentProtected: isProtected,
       });
       // The read-only refusal is §7's own toast row: role="alert", no
       // auto-dismiss, and it says plainly that nothing was written.
@@ -443,7 +444,7 @@ export default function ProducePanel({
     } finally {
       setBusy(false);
     }
-  }, [buildRecord, profile.id, profile.environment, topic, push, onViewRecord, onClose]);
+  }, [buildRecord, profile.id, isProtected, topic, push, onViewRecord, onClose]);
 
   const startBulk = useCallback(() => {
     const spec = validateBulk();
@@ -549,7 +550,7 @@ export default function ProducePanel({
         if (cancelled) return;
         const raw = errorMessage(err);
         const { cause, title, detail } = classifyError(raw, {
-          environment: profile.environment,
+          environmentProtected: isProtected,
         });
         if (cause === "read-only") push({ kind: "danger", title, detail });
         else setFailure(raw);
@@ -581,7 +582,7 @@ export default function ProducePanel({
       }
       bulkId.current = null;
     };
-  }, [bulkRun, profile.id, profile.environment, topic, push]);
+  }, [bulkRun, profile.id, isProtected, topic, push]);
 
   const bulkRunning = bulkRun !== null;
 
@@ -626,9 +627,9 @@ export default function ProducePanel({
 
   const act = useCallback(() => {
     // Prod always asks; dev never does. Friction where the stakes are.
-    if (isProd) setConfirming(true);
+    if (isProtected) setConfirming(true);
     else submit();
-  }, [isProd, submit]);
+  }, [isProtected, submit]);
 
   /**
    * The confirmation REPLACES the panel rather than stacking on it.
@@ -692,7 +693,7 @@ export default function ProducePanel({
   return (
     <Overlay
       surfaceClass={`modal modal-wide produce-modal${
-        isProd ? " modal-destructive" : ""
+        isProtected ? " modal-destructive" : ""
       }`}
       labelledBy="produce-title"
       initialFocus={firstRef}
@@ -704,7 +705,7 @@ export default function ProducePanel({
 
       {/* §6 layer 7: on prod the produce form carries an undismissable
           warning. No Dismiss button, on purpose. */}
-      {isProd && (
+      {isProtected && (
         <div className="banner banner-danger" role="alert">
           <span className="banner-glyph" aria-hidden="true">
             !
@@ -1235,7 +1236,7 @@ export default function ProducePanel({
           // when it is routine. Off prod it is the surface's one primary.
           <button
             type="button"
-            className={`btn ${isProd ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
             disabled={readOnly || busy}
             aria-busy={busy || undefined}
             title={sendReason}

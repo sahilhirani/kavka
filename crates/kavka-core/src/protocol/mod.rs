@@ -495,13 +495,12 @@ pub fn share_group_detail(cluster: &ClusterConnection, group_id: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profiles::Environment;
 
     fn profile(auth: AuthConfig, bootstrap: Vec<String>) -> ConnectionProfile {
         ConnectionProfile {
             id: "unit".into(),
             name: "unit".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: bootstrap,
             auth,
             read_only: false,

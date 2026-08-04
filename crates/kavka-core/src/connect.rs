@@ -1447,11 +1447,11 @@ mod tests {
     /// were ever consulted — so a passing read-only assertion proves the gate
     /// ran before the client was built.
     fn connection(read_only: bool) -> ClusterConnection {
-        use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+        use crate::profiles::{AuthConfig, ConnectionProfile};
         ClusterConnection::connect(ConnectionProfile {
             id: "it-connect".into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![bootstrap()],
             auth: AuthConfig::Plaintext,
             read_only,

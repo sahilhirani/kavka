@@ -18,7 +18,7 @@
 
 use kavka_core::connection::ClusterConnection;
 use kavka_core::consume::SeekSpec;
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use kavka_core::search::{SearchQuery, SearchSession, SearchSpec, MAX_BUFFERED};
 use kavka_core::serdes::MessageRecord;
 use std::collections::BTreeSet;
@@ -40,7 +40,7 @@ fn local_connection() -> ClusterConnection {
     ClusterConnection::connect(ConnectionProfile {
         id: "it-search".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

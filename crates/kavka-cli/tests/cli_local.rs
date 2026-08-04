@@ -25,6 +25,7 @@
 //! that quietly adds a record to another test's fixture is a failure somewhere
 //! else next week.
 
+use kavka_core::environments::{EnvironmentDef, EnvironmentStore};
 use kavka_core::masking::{MaskRule, MaskStore, MaskTarget};
 use kavka_core::profiles::{ConnectionProfile, ProfileStore};
 use serde_json::{json, Value};
@@ -86,6 +87,22 @@ impl Fixture {
             store.upsert(profile).expect("writing the fixture profiles");
         }
         Self(dir)
+    }
+
+    /// This machine's environment definitions, through the app's own store —
+    /// so the `environments.json` this program reads is the file the app
+    /// writes, discovered the same way `profiles.json` is.
+    ///
+    /// A fixture that does NOT call this has no such file, which is the state
+    /// every machine upgrading into this build is in: the shipped `dev`,
+    /// `staging` and `prod` apply, and `prod` is protected.
+    fn environments(&self, defs: &[EnvironmentDef]) {
+        let store = EnvironmentStore::new(self.0.clone());
+        for def in defs {
+            store
+                .save(def.clone())
+                .expect("writing the fixture environments");
+        }
     }
 
     /// One enabled masking rule, through the app's own store — so the
@@ -834,4 +851,104 @@ fn a_single_connection_needs_no_profile_flag() {
     assert_eq!(run.code, 0, "{}", run.err);
     assert!(run.err.contains("the only connection"), "{}", run.err);
     assert!(run.out.contains("orders"), "{}", run.out);
+}
+
+/// **The custom-environment guardrail, through the real config discovery.**
+///
+/// An enterprise runs more than three environments, so this fixture's
+/// connections are on `Production` and `UAT` — names this build has never heard
+/// of — and the definitions come from an `environments.json` written by
+/// kavka-core's own store into the same directory as `profiles.json`. The
+/// binary has to find it the way it finds the connections, or the CLI and the
+/// app disagree about which clusters are dangerous.
+///
+/// No broker: the gate runs before anything is opened, which is the whole point
+/// of checking it first.
+#[test]
+fn a_protected_custom_environment_gates_like_prod_did() {
+    let fixture = Fixture::with(&[("ent-prod", "Production", false), ("ent-uat", "UAT", false)]);
+    fixture.environments(&[
+        // Violet, not red: colour is identity, `protected` is the guardrail.
+        EnvironmentDef::new("Production", "violet", true),
+        EnvironmentDef::new("UAT", "blue", false),
+    ]);
+
+    // Protected: refused with exit 3, and the refusal names the environment its
+    // owner invented rather than a word Kavka chose.
+    let refusal = fixture
+        .run(&[
+            "-p",
+            "ent-prod",
+            "produce",
+            "dead-letter",
+            "--value",
+            "must-not-be-sent",
+        ])
+        .refused(3);
+    assert!(refusal.contains("--yes-prod"), "{refusal}");
+    assert!(refusal.contains("Production"), "{refusal}");
+    assert!(refusal.contains("nothing was sent"), "{refusal}");
+
+    // Unprotected, same file, same run: no flag needed. It gets as far as the
+    // broker, which is what "the gate said yes" looks like from out here — and
+    // the refusal above proves the gate is what stopped the other one.
+    let uat = fixture.run(&[
+        "-p",
+        "ent-uat",
+        "produce",
+        "dead-letter",
+        "--value",
+        "gate-said-yes",
+    ]);
+    assert_ne!(
+        uat.code, 3,
+        "an unprotected environment must not gate: {}",
+        uat.err
+    );
+
+    // The listing reports the flag beside the name, because the name stopped
+    // answering "is this production".
+    let listed = fixture.run(&["-o", "json", "profiles", "list"]).document();
+    let rows = listed["profiles"].as_array().expect("profiles");
+    let by_id = |id: &str| {
+        rows.iter()
+            .find(|row| row["id"] == json!(id))
+            .expect("the profile")
+            .clone()
+    };
+    assert_eq!(by_id("ent-prod")["environment"], json!("Production"));
+    assert_eq!(by_id("ent-prod")["environment_protected"], json!(true));
+    assert_eq!(by_id("ent-prod")["environment_color"], json!("violet"));
+    assert_eq!(by_id("ent-uat")["environment_protected"], json!(false));
+}
+
+/// A connection tagged with an environment nothing defines still works: it is
+/// neutral, unprotected, and says so once on stderr. Losing a cluster because a
+/// label went missing is not an option.
+#[test]
+fn an_undefined_environment_is_a_hint_not_a_refusal() {
+    let fixture = Fixture::with(&[("orphan", "QA", false)]);
+    // No environments.json at all, so `QA` matches none of the shipped three.
+    let listed = fixture.run(&["-o", "json", "profiles", "list"]).document();
+    let row = &listed["profiles"][0];
+    assert_eq!(row["environment"], json!("QA"));
+    assert_eq!(row["environment_known"], json!(false));
+    assert_eq!(row["environment_protected"], json!(false));
+    assert_eq!(row["environment_color"], json!("slate"));
+
+    // …and the write gate does not invent a guardrail for it.
+    let run = fixture.run(&[
+        "-p",
+        "orphan",
+        "produce",
+        "dead-letter",
+        "--value",
+        "gate-said-yes",
+    ]);
+    assert_ne!(
+        run.code, 3,
+        "an undefined environment must not gate: {}",
+        run.err
+    );
+    assert!(run.err.contains("Manage environments"), "{}", run.err);
 }

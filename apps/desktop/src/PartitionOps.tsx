@@ -14,6 +14,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import Overlay from "./Overlay";
 import { ErrorBanner } from "./ProfileEditor";
@@ -223,7 +224,7 @@ export function ReassignModal({
   const [busy, setBusy] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
 
   const toggle = useCallback((partition: number, brokerId: number) => {
     setTargets((prev) => {
@@ -265,7 +266,7 @@ export function ReassignModal({
     [changed, targets, topic],
   );
 
-  const matches = !isProd || typed === topic;
+  const matches = !isProtected || typed === topic;
   const blocked =
     changed.length === 0
       ? "Nothing has changed yet — pick different brokers for at least one partition."
@@ -305,7 +306,7 @@ export function ReassignModal({
           {partitions.length === 1
             ? `Move partition ${partitions[0].partition} of ${topic}`
             : `Move replicas for ${topic}`}
-          {isProd ? ` on ${profile.name}` : ""}
+          {isProtected ? ` on ${profile.name}` : ""}
         </h2>
 
         {/* The loudest prose in the modal, the same device the offset reset
@@ -313,7 +314,7 @@ export function ReassignModal({
             controls that cause it. */}
         <p className="reset-preview">{IMPACT}</p>
 
-        {isProd && (
+        {isProtected && (
           <div className="banner banner-warn" role="note">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -431,7 +432,7 @@ export function ReassignModal({
           })}
         </div>
 
-        {isProd && (
+        {isProtected && (
           <div className="field confirm-type">
             <label className="field-label" htmlFor="reassign-type">
               Type <code>{topic}</code> to confirm you are moving this on{" "}
@@ -480,7 +481,7 @@ export function ReassignModal({
               cluster has only accepted a plan when this resolves. */}
           <button
             type="button"
-            className={`btn ${isProd ? "btn-danger-confirm" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"}`}
             disabled={blocked !== undefined}
             aria-busy={busy || undefined}
             title={
@@ -586,7 +587,7 @@ export function ReassignMonitor({
   const concludedRef = useRef(false);
 
   const readOnly = profile.read_only;
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
 
   useDangerSignal(error !== null, onDanger);
 
@@ -934,7 +935,7 @@ export function ReassignMonitor({
               new brokers have copied so far is thrown away — starting the same
               move again starts the copying from the beginning, not from where
               it got to.
-              {isProd && (
+              {isProtected && (
                 <> {profile.name} is a production cluster, so this is live.</>
               )}
             </>
@@ -942,7 +943,7 @@ export function ReassignMonitor({
           confirmLabel={
             cancelling.length === 1 ? "Stop this move" : "Stop every move"
           }
-          typeToConfirm={isProd ? topic : null}
+          typeToConfirm={isProtected ? topic : null}
           busy={busy}
           busyLabel="Kavka is asking the cluster to stop"
           onCancel={() => setCancelling(null)}

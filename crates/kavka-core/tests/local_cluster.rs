@@ -5,13 +5,13 @@
 #![cfg(feature = "kafka")]
 
 use kavka_core::connection::ClusterConnection;
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 
 fn local_profile(read_only: bool) -> ConnectionProfile {
     ConnectionProfile {
         id: "it-local".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

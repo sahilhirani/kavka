@@ -9,6 +9,12 @@ import {
   type ConnState,
   type ConnStatus,
 } from "./api";
+import {
+  envAttrs,
+  envWireLabel,
+  loadEnvironments,
+  useEnvironment,
+} from "./environments";
 import { maskingChipLabel, maskingChipTitle, useMasking } from "./masking";
 import Sidebar from "./Sidebar";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
@@ -125,9 +131,16 @@ export default function App() {
     }
   }, []);
 
-  // Initial load: profiles + core version.
+  // Initial load: profiles + core version + the environment registry.
+  //
+  // The registry is loaded here rather than at module scope so nothing in the
+  // bundle depends on the command being registered, and its failure is silent
+  // by design: `environments.ts` keeps the three defaults, which is exactly
+  // what the backend writes when `environments.json` is absent. A banner about
+  // it would be a banner about a file the user has never heard of.
   useEffect(() => {
     void reloadProfiles();
+    void loadEnvironments();
     coreVersion()
       .then(setVersion)
       .catch(() => setVersion("unknown"));
@@ -362,6 +375,7 @@ export default function App() {
         onDeleted={handleDeleted}
         onCancelNew={stopCreating}
         onError={showError}
+        onProfilesChanged={() => void reloadProfiles()}
       />
     );
   } else if (selected && conn.status === "connected" && conn.overview) {
@@ -389,6 +403,7 @@ export default function App() {
         onDeleted={handleDeleted}
         onCancelNew={stopCreating}
         onError={showError}
+        onProfilesChanged={() => void reloadProfiles()}
       />
     );
   } else if (loadFailed && profiles.length === 0) {
@@ -469,9 +484,15 @@ export default function App() {
     );
   }
 
-  // Prod guardrail layer 1 + 5: the environment of the selected cluster
-  // colours the ledger rule — and the substrate — everywhere below here.
-  const env = selected?.environment ?? "dev";
+  // Guardrail layer 1 + 5: the environment of the selected cluster colours the
+  // ledger rule — and, when it is protected, the substrate — everywhere below
+  // here.
+  //
+  // The empty string with nothing selected is deliberate: it resolves to the
+  // slate stand-in, which is the neutral rule and no substrate — the same thing
+  // "dev" used to produce, without privileging a name the user may have
+  // renamed or deleted.
+  const envDef = useEnvironment(selected?.environment ?? "");
   const bootstrap = selected?.bootstrap_servers.join(", ") ?? "";
 
   // The two contextual rows. Bilingual keywords like every other action
@@ -501,43 +522,50 @@ export default function App() {
         id: "topic-produce",
         glyph: "↑",
         label: t("app.cmd.produce", { topic: topicActions.topic }),
-        context:
-          selected.environment === "prod"
-            ? t("app.cmd.produce.confirmContext", { cluster: selected.name })
-            : selected.name,
+        context: envDef.protected
+          ? t("app.cmd.produce.confirmContext", { cluster: selected.name })
+          : selected.name,
         keywords: t("app.cmd.produce.kw"),
         env: selected.environment,
-        danger: selected.environment === "prod",
+        danger: envDef.protected,
         disabledReason: topicActions.produceBlocked,
         run: topicActions.produce,
       },
     ];
     // `t` is memoized on the locale, so this rebuilds when the language
     // changes and on no other render — see the identity rule in i18n/index.ts.
-  }, [topicActions, selected, t]);
+    // `envDef` is listed because protection is a property of the REGISTRY, not
+    // of the profile: renaming an environment to protected has to re-mark the
+    // palette's produce row without the selection changing.
+  }, [topicActions, selected, envDef, t]);
 
   return (
     <div
       className="app"
-      data-env={env}
-      // Prod de-collision (§5.8): the env rule dampens while ANY danger is on
-      // screen — the global banner, the inline connect failure in the editor,
-      // and a banner inside a dialog. Miss one and a prod cluster shows a
-      // coral rule behind a coral banner, which is the one composition the
-      // guardrail must not produce.
+      {...envAttrs(envDef)}
+      // Protected de-collision (§5.8): the env rule dampens while ANY danger is
+      // on screen — the global banner, the inline connect failure in the
+      // editor, and a banner inside a dialog. Miss one and a protected cluster
+      // shows a coral rule behind a coral banner, which is the one composition
+      // the guardrail must not produce.
       data-alert={
         error !== null || conn.error || transferDanger || viewDanger
           ? "danger"
           : undefined
       }
     >
-      {/* Prod guardrail layer 2: a 2px wire under the native title bar.
-          Transparent outside prod. Do not remove it because the substrate
-          "already says prod" — the substrate is the bonus, this is load-bearing. */}
+      {/* Guardrail layer 2: a 2px wire under the native title bar. Transparent
+          outside a protected environment. Do not remove it because the
+          substrate "already says it" — the substrate is the bonus, this is
+          load-bearing.
+
+          In forced colors the wire thickens and prints the environment's own
+          name, uppercased — `PROD`, `PRODUCTION`, `UAT`, whatever the user
+          called it. Untranslated, for the same reason the chip is. */}
       <div
         className="app-wire"
         aria-hidden="true"
-        data-env-label={env === "prod" ? "PROD" : undefined}
+        data-env-label={envWireLabel(envDef)}
       />
 
       <div className="app-shell">
@@ -663,7 +691,14 @@ export default function App() {
       {transfer !== null && (
         <ImportExportDialog
           initialTab={transfer}
-          onImported={() => void reloadProfiles()}
+          // The envelope carries environment definitions as well as
+          // connections (skip-existing by name), so the registry has to be
+          // re-read too — otherwise an imported prod connection renders slate
+          // until the next launch.
+          onImported={() => {
+            void reloadProfiles();
+            void loadEnvironments();
+          }}
           onDangerChange={setTransferDanger}
           onClose={closeTransfer}
         />

@@ -25,6 +25,7 @@
 //! it), and a test that quietly adds a record to another test's fixture is a
 //! failure somewhere else next week.
 
+use kavka_core::environments::{EnvironmentDef, EnvironmentStore};
 use kavka_core::masking::{MaskRule, MaskStore, MaskTarget};
 use kavka_core::profiles::{ConnectionProfile, ProfileStore};
 use serde_json::{json, Value};
@@ -50,6 +51,14 @@ struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
+        Self::with(&[
+            (WRITABLE, "dev", false),
+            (READ_ONLY, "dev", true),
+            (PROD, "prod", false),
+        ])
+    }
+
+    fn with(profiles: &[(&str, &str, bool)]) -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
             "kavka-mcp-it-{}-{}",
@@ -62,11 +71,7 @@ impl Fixture {
         let store = ProfileStore::new(dir.clone());
         let bootstrap =
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into());
-        for (id, environment, read_only) in [
-            (WRITABLE, "dev", false),
-            (READ_ONLY, "dev", true),
-            (PROD, "prod", false),
-        ] {
+        for (id, environment, read_only) in profiles {
             // Built from JSON rather than as a struct literal: the profile type
             // grows optional fields between phases, and this fixture cares
             // about exactly three of them.
@@ -86,6 +91,22 @@ impl Fixture {
 
     fn dir(&self) -> &Path {
         &self.0
+    }
+
+    /// This machine's environment definitions, through the app's own store —
+    /// so the `environments.json` this server reads is the file the app
+    /// writes, discovered the same way `profiles.json` is.
+    ///
+    /// A fixture that does NOT call this has no such file, which is the state
+    /// every machine upgrading into this build is in: the shipped `dev`,
+    /// `staging` and `prod` apply, and `prod` is protected.
+    fn environments(&self, defs: &[EnvironmentDef]) {
+        let store = EnvironmentStore::new(self.0.clone());
+        for def in defs {
+            store
+                .save(def.clone())
+                .expect("writing the fixture environments");
+        }
     }
 
     /// Writes one enabled masking rule for a profile, through the app's own
@@ -866,4 +887,93 @@ fn an_empty_config_directory_answers_with_no_connections() {
 
     drop(mcp);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **The custom-environment guardrail, through the real config discovery.**
+///
+/// An enterprise runs more than three environments, so this fixture's
+/// connections are on `Production` and `UAT` — names this build has never heard
+/// of — and the definitions come from an `environments.json` written by
+/// kavka-core's own store into the same directory as `profiles.json`. The
+/// server has to find it the way it finds the connections, or the MCP surface
+/// and the app disagree about which clusters an agent may write to.
+///
+/// `KAVKA_MCP_ALLOW_WRITES=1` without `KAVKA_MCP_ALLOW_PROD=1` is the
+/// configuration the whole assertion turns on: `Production` must refuse and
+/// `UAT` must not, and nothing about the words decides it.
+///
+/// The third connection is the state importing a colleague's export leaves you
+/// in: it names `Legacy`, which this machine defines nothing for. That is not a
+/// failure — it resolves neutral and unprotected — but it is not the same
+/// answer as `UAT`'s unprotected, and the listing has to let a model tell them
+/// apart.
+///
+/// No broker: the gate runs before any connection is attempted, which is the
+/// whole point of checking it first.
+#[test]
+fn a_protected_custom_environment_needs_the_prod_variable() {
+    let fixture = Fixture::with(&[
+        ("ent-prod", "Production", false),
+        ("ent-uat", "UAT", false),
+        ("ent-legacy", "Legacy", false),
+    ]);
+    fixture.environments(&[
+        // Violet, not red: colour is identity, `protected` is the guardrail.
+        EnvironmentDef::new("Production", "violet", true),
+        EnvironmentDef::new("UAT", "blue", false),
+    ]);
+    let mut mcp = Mcp::start(fixture.dir(), &[("KAVKA_MCP_ALLOW_WRITES", "1")]);
+    mcp.handshake();
+
+    let listed = mcp.call("kavka_list_profiles", json!({}));
+    let by_id = |id: &str| -> Value {
+        listed["profiles"]
+            .as_array()
+            .expect("profiles")
+            .iter()
+            .find(|profile| profile["id"] == id)
+            .cloned()
+            .expect("the fixture profile")
+    };
+    // The listing carries the flag beside the name, because the name stopped
+    // answering "is this production" — this is the field a model reads.
+    assert_eq!(by_id("ent-prod")["environment"], json!("Production"));
+    assert_eq!(by_id("ent-prod")["environment_protected"], json!(true));
+    assert_eq!(by_id("ent-prod")["writes_allowed"], json!(false));
+    assert_eq!(by_id("ent-uat")["environment_protected"], json!(false));
+    assert_eq!(by_id("ent-uat")["writes_allowed"], json!(true));
+
+    // Both defined environments say so, and neither carries a hint: there is
+    // nothing to tell the model about an environment its owner defined.
+    assert_eq!(by_id("ent-prod")["environment_known"], json!(true));
+    assert_eq!(by_id("ent-uat")["environment_known"], json!(true));
+    assert_eq!(by_id("ent-uat")["environment_hint"], json!(null));
+
+    // `Legacy` is the third answer, and it is NOT "UAT again". Unprotected
+    // because nothing defines it, not because somebody decided it was safe —
+    // so the flag that separates the two is on the row, with the sentence that
+    // says what to do about it.
+    let legacy = by_id("ent-legacy");
+    assert_eq!(legacy["environment"], json!("Legacy"));
+    assert_eq!(legacy["environment_known"], json!(false));
+    assert_eq!(legacy["environment_protected"], json!(false));
+    let hint = legacy["environment_hint"]
+        .as_str()
+        .expect("an unknown environment carries its hint");
+    assert!(hint.contains("Legacy"), "{hint}");
+    // Writes are allowed — the gate reads `protected`, and nothing marked it.
+    assert_eq!(legacy["writes_allowed"], json!(true));
+
+    // And the refusal happens at call time too, naming the environment its
+    // owner invented and the variable that lifts it.
+    let refusal = mcp.refusal(
+        "kavka_produce",
+        json!({
+            "profile": "ent-prod",
+            "topic": "dead-letter",
+            "record": { "value": { "kind": "text", "text": "never" } },
+        }),
+    );
+    assert!(refusal.contains("Production"), "{refusal}");
+    assert!(refusal.contains("KAVKA_MCP_ALLOW_PROD"), "{refusal}");
 }

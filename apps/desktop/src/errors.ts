@@ -17,10 +17,11 @@
  * testable and starts being a component.
  *
  * TWO ROWS OF THE §7 TABLE ARE NOT DERIVABLE FROM A STRING. "Active group"
- * needs the group's state and member count; "Timeout, prod" needs the
- * profile's environment. Both arrive as `ctx` — an explicit second argument
- * the caller passes, never state this module reaches for — which is what
- * keeps it pure while still letting it answer them.
+ * needs the group's state and member count; "Timeout, prod" needs to know
+ * whether the connection's environment is PROTECTED — not what it is called.
+ * Both arrive as `ctx` — an explicit second argument the caller passes, never
+ * state this module reaches for — which is what keeps it pure while still
+ * letting it answer them.
  */
 
 /**
@@ -35,8 +36,17 @@ export interface ErrorContext {
   groupState?: string;
   /** How many members that group has right now. */
   memberCount?: number;
-  /** The profile's environment — `dev` | `staging` | `prod`. */
-  environment?: string;
+  /**
+   * Whether the connection's environment is marked protected.
+   *
+   * A BOOLEAN, NOT A NAME. This was `environment?: string` compared against the
+   * literal `"prod"`, which stopped being answerable the moment environments
+   * became user-definable — a company whose production environment is called
+   * `PRD` got the dev wording at 3am. The caller resolves the name through the
+   * environment registry and passes the answer, which also keeps this module
+   * pure: it does not, and must not, know that a registry exists.
+   */
+  environmentProtected?: boolean;
 }
 
 /**
@@ -134,7 +144,7 @@ export function classifyError(raw: string, ctx?: ErrorContext): ClassifiedError 
   const where = at ?? "that broker";
   const groupIsLive =
     ctx?.groupState !== undefined && ctx.groupState.toLowerCase() !== "empty";
-  const onProd = ctx?.environment === "prod";
+  const onProd = ctx?.environmentProtected === true;
 
   // ── Kavka's own IPC, before anything librdkafka says ──────────────────
   if (has(text, "unknown profile", "no such profile", "profile not found")) {

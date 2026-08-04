@@ -9,6 +9,7 @@ import {
   type OffsetResetSpec,
   type ResetTarget,
 } from "./api";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import { approxCount, fromDatetimeLocal, toDatetimeLocal } from "./format";
 import { Term } from "./Glossary";
@@ -27,7 +28,7 @@ import Overlay from "./Overlay";
  *
  * Two guards, in this order:
  *  - Type-to-confirm when the move is big (>10 000 messages) or the cluster is
- *    prod. Friction where the stakes are.
+ *    a protected environment. Friction where the stakes are.
  *  - `force` NEVER appears up front. The core refuses a reset on a live group,
  *    and the checkbox only exists after the broker has actually said no — with
  *    the risk restated in one sentence beside it.
@@ -226,25 +227,27 @@ export default function ResetOffsetsModal({
   }, [inScope, kind, offsetValue, shiftValue, marks, marksFailed]);
 
   const moved = preview.reprocess + preview.skip;
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const needsTyping =
-    isProd || (preview.computable && moved > TYPE_CONFIRM_THRESHOLD);
+    isProtected || (preview.computable && moved > TYPE_CONFIRM_THRESHOLD);
   const typedOk = !needsTyping || typed === detail.group_id;
 
   const groupIsLive = detail.state.toLowerCase() !== "empty";
 
   /**
    * What the §7 error library cannot derive from a broker string on its own:
-   * the group's state and member count, and which cluster this is. Passed as
-   * the classifier's second argument so `errors.ts` stays pure.
+   * the group's state and member count, and whether this connection's
+   * environment is PROTECTED. Passed as the classifier's second argument so
+   * `errors.ts` stays pure — and resolved to a boolean here, because the
+   * error library must not know that an environment registry exists.
    */
   const errorContext = useMemo(
     () => ({
       groupState: detail.state,
       memberCount: detail.members.length,
-      environment: profile.environment,
+      environmentProtected: isProtected,
     }),
-    [detail.state, detail.members.length, profile.environment],
+    [detail.state, detail.members.length, isProtected],
   );
 
   // ── Submit ─────────────────────────────────────────────────────────────
@@ -575,7 +578,7 @@ export default function ResetOffsetsModal({
               onChange={(e) => setTyped(e.target.value)}
             />
             <span className="field-hint">
-              {isProd
+              {isProtected
                 ? `${profile.name} is a production cluster, so Kavka asks every time.`
                 : `This moves about ${approxCount(moved)} messages, which is more than Kavka will do on a single click.`}
             </span>

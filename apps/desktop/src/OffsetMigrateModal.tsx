@@ -11,6 +11,7 @@ import {
   type GroupOffset,
   type OffsetMigrationRow,
 } from "./api";
+import { envAttrs, envWireLabel, useEnvironment } from "./environments";
 import { classifyError } from "./errors";
 import { formatStamp, groupDigits } from "./format";
 import { Term } from "./Glossary";
@@ -47,7 +48,7 @@ import { EnvChip } from "./Sidebar";
  *    and stated BEFORE the apply rather than relayed as a broker refusal
  *    afterwards — a live group is a thing you go and stop, not a thing you
  *    retry.
- *  - Type-to-confirm when the destination is prod (§6 layer 4) or when the
+ *  - Type-to-confirm when the destination is PROTECTED (§6 layer 4) or when the
  *    destination group already has committed offsets, because then this is an
  *    overwrite of a position something else chose.
  */
@@ -122,7 +123,8 @@ export default function OffsetMigrateModal({
     [profiles, destId],
   );
   const destEnv = dest?.environment ?? profile.environment;
-  const destIsProd = destEnv === "prod";
+  const destDef = useEnvironment(destEnv);
+  const destIsProtected = destDef.protected;
   const destReadOnly = dest?.read_only ?? false;
 
   // Any change to either end invalidates a plan and the group's state: both
@@ -239,7 +241,7 @@ export default function OffsetMigrateModal({
   }, [actionable.length, byTimestamp, byEarliest, byLatest]);
 
   const needsTyping =
-    destIsProd || (check.state === "empty" && check.committed > 0);
+    destIsProtected || (check.state === "empty" && check.committed > 0);
   const typedOk = !needsTyping || typed === destGroup.trim();
   const blockedByLiveGroup = check.state === "live";
 
@@ -266,7 +268,7 @@ export default function OffsetMigrateModal({
     failure === null
       ? null
       : classifyError(failure, {
-          environment: destEnv,
+          environmentProtected: destIsProtected,
           groupState: check.state === "live" ? check.kafkaState : undefined,
           memberCount: check.state === "live" ? check.members : undefined,
         });
@@ -283,7 +285,7 @@ export default function OffsetMigrateModal({
 
   return (
     <Overlay
-      surfaceClass={`modal modal-wide${destIsProd ? " modal-destructive" : ""}`}
+      surfaceClass={`modal modal-wide${destIsProtected ? " modal-destructive" : ""}`}
       labelledBy="om-title"
       initialFocus={cancelRef}
       onClose={onClose}
@@ -293,8 +295,8 @@ export default function OffsetMigrateModal({
           workspace behind it is showing the safe half. */}
       <div
         className="modal-panel"
-        data-env={destEnv}
-        data-env-label={destIsProd ? "PROD" : undefined}
+        {...envAttrs(destDef)}
+        data-env-label={envWireLabel(destDef)}
       >
         <h2 className="modal-title" id="om-title">
           Migrate {detail.group_id}'s offsets
@@ -307,7 +309,7 @@ export default function OffsetMigrateModal({
           — and says, per partition, how it got the answer.
         </p>
 
-        {destIsProd && (
+        {destIsProtected && (
           <div className="banner banner-danger" role="alert">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -496,7 +498,7 @@ export default function OffsetMigrateModal({
               onChange={(e) => setTyped(e.target.value)}
             />
             <span className="field-hint">
-              {destIsProd
+              {destIsProtected
                 ? `${dest?.name} is a production cluster, so Kavka asks every time.`
                 : `${destGroup} already has committed offsets on the destination, so this overwrites a position something else chose.`}
             </span>
@@ -602,7 +604,7 @@ export default function OffsetMigrateModal({
           {applied === null && (
             <button
               type="button"
-              className={`btn ${destIsProd ? "btn-danger-confirm" : "btn-primary"}`}
+              className={`btn ${destIsProtected ? "btn-danger-confirm" : "btn-primary"}`}
               disabled={
                 busy ||
                 destReadOnly ||

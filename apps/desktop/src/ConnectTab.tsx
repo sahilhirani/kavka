@@ -17,6 +17,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
@@ -265,7 +266,7 @@ export default function ConnectTab({
 
   useDangerSignal(error !== null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
 
   const fetchConnectors = useCallback(
@@ -370,13 +371,13 @@ export default function ConnectTab({
   /** Prod asks before every write; dev only asks before the irreversible ones. */
   const ask = useCallback(
     (action: PendingAction) => {
-      if (action.kind === "task" && !isProd) {
+      if (action.kind === "task" && !isProtected) {
         void runAction(action);
         return;
       }
       setPending(action);
     },
-    [isProd, runAction],
+    [isProtected, runAction],
   );
 
   // ── No Connect on this connection ──────────────────────────────────────
@@ -508,7 +509,7 @@ export default function ConnectTab({
             <div className="panel-tools">
               <button
                 type="button"
-                className={`btn ${isProd ? "btn-danger" : ""}`}
+                className={`btn ${isProtected ? "btn-danger" : ""}`}
                 disabled={readOnly || current === null}
                 title={
                   readOnly
@@ -527,7 +528,7 @@ export default function ConnectTab({
               </button>
               <button
                 type="button"
-                className={`btn ${isProd ? "btn-danger" : ""}`}
+                className={`btn ${isProtected ? "btn-danger" : ""}`}
                 disabled={readOnly || current === null}
                 title={
                   readOnly ? READ_ONLY_WHY : "Restart the connector and every task"
@@ -645,7 +646,7 @@ export default function ConnectTab({
                         <td className="col-affordance">
                           <button
                             type="button"
-                            className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+                            className={`btn btn-row ${isProtected ? "btn-danger" : ""}`}
                             disabled={readOnly || busy}
                             title={
                               readOnly
@@ -715,7 +716,7 @@ export default function ConnectTab({
             action={pending}
             clusterName={activeName ?? ""}
             profileName={profile.name}
-            isProd={isProd}
+            isProtected={isProtected}
             taskCount={counts.total}
             busy={busy}
             onCancel={() => setPending(null)}
@@ -748,7 +749,7 @@ export default function ConnectTab({
             {clusterPicker}
             <button
               type="button"
-              className={`btn ${isProd ? "btn-danger" : ""}`}
+              className={`btn ${isProtected ? "btn-danger" : ""}`}
               disabled={readOnly}
               title={readOnly ? READ_ONLY_WHY : "Write a new connector config"}
               onClick={() => setEditing({ name: null })}
@@ -889,7 +890,7 @@ export default function ConnectTab({
           action={pending}
           clusterName={activeName ?? ""}
           profileName={profile.name}
-          isProd={isProd}
+          isProtected={isProtected}
           taskCount={0}
           busy={busy}
           onCancel={() => setPending(null)}
@@ -911,7 +912,7 @@ function ActionConfirm({
   action,
   clusterName,
   profileName,
-  isProd,
+  isProtected,
   taskCount,
   busy,
   onCancel,
@@ -920,13 +921,13 @@ function ActionConfirm({
   action: PendingAction;
   clusterName: string;
   profileName: string;
-  isProd: boolean;
+  isProtected: boolean;
   taskCount: number;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const onCluster = isProd ? ` on ${profileName}` : "";
+  const onCluster = isProtected ? ` on ${profileName}` : "";
   const spec: Record<
     PendingAction["kind"],
     { title: string; body: React.ReactNode; label: string; typed: boolean }
@@ -942,7 +943,7 @@ function ActionConfirm({
         </>
       ),
       label: "Pause connector",
-      typed: isProd,
+      typed: isProtected,
     },
     resume: {
       title: `Resume ${action.name}?`,
@@ -966,7 +967,7 @@ function ActionConfirm({
         </>
       ),
       label: "Restart connector",
-      typed: isProd,
+      typed: isProtected,
     },
     task: {
       title: `Restart task ${action.task} of ${action.name}${onCluster}?`,
@@ -978,10 +979,10 @@ function ActionConfirm({
         </>
       ),
       label: "Restart task",
-      typed: isProd,
+      typed: isProtected,
     },
     delete: {
-      title: isProd
+      title: isProtected
         ? `Delete ${action.name} on ${profileName}?`
         : `Delete ${action.name}?`,
       body: (
@@ -993,7 +994,7 @@ function ActionConfirm({
         </>
       ),
       label: "Delete connector",
-      typed: isProd,
+      typed: isProtected,
     },
   };
   const it = spec[action.kind];
@@ -1254,7 +1255,7 @@ function ConnectorEditor({
     onApplied,
   ]);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const clean = validation !== null && validation.error_count === 0 && !stale;
   const fieldErrors = (validation?.configs ?? []).filter(
     (c) => c.errors.length > 0,
@@ -1299,7 +1300,7 @@ function ConnectorEditor({
             </button>
             <button
               type="button"
-              className={`btn ${isProd || !clean ? "btn-danger" : "btn-primary"}`}
+              className={`btn ${isProtected || !clean ? "btn-danger" : "btn-primary"}`}
               disabled={applying || loading}
               aria-busy={applying || undefined}
               title={
@@ -1307,12 +1308,12 @@ function ConnectorEditor({
                   ? "Kavka is writing the config"
                   : loading
                     ? "Kavka is still reading the connector's config"
-                    : clean && !isProd
+                    : clean && !isProtected
                       ? "Write this config to the workers"
                       : "Kavka will ask you to confirm first"
               }
               onClick={() => {
-                if (clean && !isProd) void apply();
+                if (clean && !isProtected) void apply();
                 else setConfirming(true);
               }}
             >
@@ -1530,7 +1531,7 @@ function ConnectorEditor({
                   valid config — which is why this is a warning and not a wall.
                 </>
               )}
-              {isProd && (
+              {isProtected && (
                 <>
                   {" "}
                   {profile.name} is a production cluster, so this changes a
@@ -1540,7 +1541,7 @@ function ConnectorEditor({
             </>
           }
           confirmLabel={creating ? "Create connector" : "Apply config"}
-          typeToConfirm={isProd ? connectorName.trim() : null}
+          typeToConfirm={isProtected ? connectorName.trim() : null}
           busy={applying}
           busyLabel="Kavka is writing the config"
           onCancel={() => setConfirming(false)}

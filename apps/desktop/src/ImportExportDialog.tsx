@@ -69,7 +69,13 @@ function reportLines(
   r: ImportReport,
 ): { title: string; detail: string } {
   const changed = r.imported + r.replaced;
-  if (changed === 0 && r.skipped === 0) {
+  // Absent, not zero, on an envelope written before exports carried
+  // environments — so `?? 0` here is "the file had none to merge", which is
+  // not the same statement as "it had some and none were new". Both read the
+  // same in the sentence below because both mean "nothing to report".
+  const envAdded = r.environments_imported ?? 0;
+  const envSkipped = r.environments_skipped ?? 0;
+  if (changed === 0 && r.skipped === 0 && envAdded === 0 && envSkipped === 0) {
     return {
       title: t("transfer.report.empty.title"),
       detail: t("transfer.report.empty.detail"),
@@ -80,7 +86,24 @@ function reportLines(
   if (r.replaced)
     bits.push(t("transfer.report.replaced", { count: r.replaced }));
   if (r.skipped) bits.push(t("transfer.report.skipped", { count: r.skipped }));
+  // The environments the envelope carried, reported separately because they
+  // are a different kind of thing and merge under a different rule:
+  // skip-existing by case-insensitive name, so a colleague's file can never
+  // re-colour — or unprotect — an environment this machine already relies on.
+  if (envAdded) bits.push(t("transfer.report.envAdded", { count: envAdded }));
+  if (envSkipped)
+    bits.push(t("transfer.report.envSkipped", { count: envSkipped }));
   const joined = bits.join(" · ");
+  // An envelope can carry environments and no new connections — the normal
+  // shape when a colleague re-sends a file you have already imported. Saying
+  // "Nothing changed — 0 connections were already here" would be both wrong
+  // and confusing, so that case gets its own line.
+  if (changed === 0 && r.skipped === 0) {
+    return {
+      title: t("transfer.report.envOnly.title"),
+      detail: joined,
+    };
+  }
   return {
     title:
       changed === 0

@@ -11,7 +11,87 @@ import { save } from "@tauri-apps/plugin-dialog";
 // converts to snake_case Rust parameters for us.
 // ---------------------------------------------------------------------------
 
-export type Environment = "dev" | "staging" | "prod";
+/**
+ * An environment is whatever the user says it is.
+ *
+ * WIRE-COMPATIBLE WIDENING. This was `"dev" | "staging" | "prod"`, and the Rust
+ * enum it mirrored serialized to exactly those lowercase strings — so every
+ * `profiles.json` on disk already holds a plain string in this field and parses
+ * unchanged. Enterprises run dev, QA, UAT and production; the fixed triple was
+ * a guess about somebody else's org chart.
+ *
+ * The registry that gives a name its colour and its protection lives in
+ * `environments.ts`. A profile naming an environment the registry has never
+ * heard of is NOT an error — it renders neutral (slate, unprotected) with a
+ * hint pointing at the manager. See `resolveEnvironment`.
+ */
+export type Environment = string;
+
+/**
+ * The seven identity colours an environment may carry.
+ *
+ * A closed set on purpose. Every token ships with a measured ink/fill pair and
+ * a ledger-rule value that clears the DESIGN.md §9 gate on all fifteen dark and
+ * protected surfaces; a free-form hex picker would put an unaudited colour on
+ * the one signal the whole guardrail is built on. `slate` is the quiet one —
+ * it is also what an unknown environment resolves to.
+ */
+export type EnvColor =
+  | "green"
+  | "amber"
+  | "red"
+  | "blue"
+  | "violet"
+  | "cyan"
+  | "slate";
+
+/** Picker order. Also the order the manager lists swatches in. */
+export const ENV_COLORS: readonly EnvColor[] = [
+  "green",
+  "amber",
+  "red",
+  "blue",
+  "violet",
+  "cyan",
+  "slate",
+] as const;
+
+/**
+ * One user-defined environment.
+ *
+ * THE SEMANTICS SPLIT, stated once: `name` and `color` are IDENTITY — the chip,
+ * the ledger rule, the sidebar accent, the thing that stops you confusing UAT
+ * with QA. `protected` is the GUARDRAIL — the warm substrate, the type-to-
+ * confirm, the top wire, the CLI and MCP write gates. They are independent: a
+ * violet environment can be protected and a red one need not be. The protected
+ * treatment is the one warm-danger substrate whatever colour the chip is,
+ * because identity is the chip and protection is the ground.
+ *
+ * Names are unique case-insensitively and displayed exactly as typed.
+ */
+export interface EnvironmentDef {
+  name: string;
+  color: EnvColor;
+  /**
+   * Everything Kavka used to key on `environment === "prod"`. Flipping this on
+   * an environment arms the guardrail for every connection that names it.
+   */
+  protected: boolean;
+}
+
+/**
+ * What a first run gets, and what a migration writes when `environments.json`
+ * is absent — which is every machine that has ever run an older Kavka.
+ *
+ * These three names are the three the old enum could hold, with the protection
+ * flag reproducing the old behaviour exactly: prod protected, the other two
+ * not. An upgrade therefore changes no guardrail on any existing connection.
+ */
+export const DEFAULT_ENVIRONMENTS: readonly EnvironmentDef[] = [
+  { name: "dev", color: "green", protected: false },
+  { name: "staging", color: "amber", protected: false },
+  { name: "prod", color: "red", protected: true },
+] as const;
 
 export interface SecretRef {
   entry: string;
@@ -158,6 +238,25 @@ export interface ImportReport {
   imported: number;
   skipped: number;
   replaced: number;
+  /**
+   * Environment definitions the envelope carried that the registry had never
+   * heard of, and that were therefore added.
+   *
+   * Optional because the export envelope's `environments` array is an ADDITIVE
+   * field at the same version 1: an export written by an older Kavka has no
+   * such key, the importer reports nothing about it, and both numbers are
+   * absent rather than zero. Treat missing as "the envelope had no
+   * environments to merge", which is not the same statement as "it had some
+   * and none were new".
+   */
+  environments_imported?: number;
+  /**
+   * Definitions whose name the registry already held, matched
+   * case-insensitively. SKIP-EXISTING: the local definition wins, so importing
+   * somebody else's file can never silently re-colour — or unprotect — an
+   * environment this machine already relies on.
+   */
+  environments_skipped?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +521,37 @@ export function profilesImport(
   strategy: ImportStrategy,
 ): Promise<ImportReport> {
   return invoke<ImportReport>("profiles_import", { json, strategy });
+}
+
+// ---------------------------------------------------------------------------
+// Environments — the user-defined registry behind every env chip and guardrail
+//
+// Stored in `environments.json` beside `profiles.json`, under the same
+// versioned envelope, atomic write and write lock as `alerts.json`. The UI
+// never reads that file; it reads these three commands and keeps the answer in
+// the `environments.ts` store.
+// ---------------------------------------------------------------------------
+
+/** Every environment the user has defined, in the order they are shown. */
+export function environmentsList(): Promise<EnvironmentDef[]> {
+  return invoke<EnvironmentDef[]>("environments_list");
+}
+
+/** Create or update, upserting by case-insensitive name. */
+export function environmentsSave(def: EnvironmentDef): Promise<void> {
+  return invoke<void>("environments_save", { def });
+}
+
+/**
+ * Delete by case-insensitive name.
+ *
+ * REFUSED while any profile still names it, with the offending connections
+ * listed in the message — an environment cannot be deleted out from under the
+ * guardrail it arms. Reassign first; the manager's delete flow does exactly
+ * that, one `profiles_save` per connection, before calling this.
+ */
+export function environmentsDelete(name: string): Promise<void> {
+  return invoke<void>("environments_delete", { name });
 }
 
 export function secretSet(entry: string, value: string): Promise<void> {

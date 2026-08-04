@@ -13,6 +13,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { countChanges, diffLines, toLines, tooBigToDiff, type DiffRow } from "./diff";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
@@ -147,7 +148,7 @@ export default function SchemasPanel({
 
   useDangerSignal(error !== null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
   const hasRegistry = (profile.schema_registry?.url ?? "").length > 0;
 
@@ -612,7 +613,7 @@ export default function SchemasPanel({
           <div className="seekbar-field seekbar-actions">
             <button
               type="button"
-              className={`btn ${isProd ? "btn-danger" : ""}`}
+              className={`btn ${isProtected ? "btn-danger" : ""}`}
               disabled={
                 readOnly ||
                 levelDraft.length === 0 ||
@@ -787,7 +788,7 @@ export default function SchemasPanel({
             <button
               type="button"
               className={`btn ${
-                isProd || !compatible ? "btn-danger" : "btn-primary"
+                isProtected || !compatible ? "btn-danger" : "btn-primary"
               }`}
               disabled={readOnly || draft.trim().length === 0 || registering}
               title={
@@ -797,12 +798,12 @@ export default function SchemasPanel({
                     ? "Kavka is sending the schema to the registry"
                     : draft.trim().length === 0
                       ? "There is no schema to register yet"
-                      : compatible && !isProd
+                      : compatible && !isProtected
                       ? "Write this schema to the registry"
                       : "Kavka will ask you to confirm first"
               }
               onClick={() => {
-                if (compatible && !isProd) void register();
+                if (compatible && !isProtected) void register();
                 else setConfirming(true);
               }}
             >
@@ -906,7 +907,7 @@ export default function SchemasPanel({
         <ConfirmModal
           tone="plain"
           title={
-            isProd
+            isProtected
               ? `Register a schema for ${subject} on ${profile.name}?`
               : `Register this schema for ${subject}?`
           }
@@ -943,7 +944,7 @@ export default function SchemasPanel({
             </>
           }
           confirmLabel="Register schema"
-          typeToConfirm={isProd ? subject : null}
+          typeToConfirm={isProtected ? subject : null}
           busy={registering}
           busyLabel="Kavka is sending the schema to the registry"
           onCancel={() => setConfirming(false)}
@@ -953,7 +954,7 @@ export default function SchemasPanel({
 
       {levelPending !== null && (
         <ConfirmModal
-          tone={isProd ? "destructive" : "plain"}
+          tone={isProtected ? "destructive" : "plain"}
           title={`Set ${subject} to ${levelPending}?`}
           body={
             <>
@@ -980,7 +981,7 @@ export default function SchemasPanel({
             </>
           }
           confirmLabel="Change level"
-          typeToConfirm={isProd ? subject : null}
+          typeToConfirm={isProtected ? subject : null}
           busy={levelBusy}
           busyLabel="Kavka is talking to the registry"
           onCancel={() => setLevelPending(null)}

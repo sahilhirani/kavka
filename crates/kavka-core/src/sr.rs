@@ -2259,11 +2259,11 @@ mod tests {
         read_only: bool,
         schema_registry: Option<SchemaRegistryConfig>,
     ) -> ClusterConnection {
-        use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+        use crate::profiles::{AuthConfig, ConnectionProfile};
         ClusterConnection::connect(ConnectionProfile {
             id: "it-sr".into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![
                 std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
             ],

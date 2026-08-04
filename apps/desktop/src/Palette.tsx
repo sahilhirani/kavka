@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ConnectionProfile, ConnState, Environment } from "./api";
+import { resolveEnvironment, useEnvironments } from "./environments";
 import { EnvChip } from "./Sidebar";
 import { SUPPORT_URL } from "./AboutDialog";
 import Overlay from "./Overlay";
@@ -56,9 +57,12 @@ export interface PaletteAction {
   context?: string;
   /** Kafka vocabulary that must match even though it isn't in the label. */
   keywords?: string;
-  /** Renders the environment chip, so prod is legible before you press ⏎. */
+  /**
+   * Renders the environment chip, so a protected cluster is legible before
+   * you press ⏎. The profile's environment NAME; the palette resolves it.
+   */
   env?: Environment;
-  /** Prod styling: the context line goes coral (§5.9). */
+  /** Protected styling: the context line goes coral (§5.9). */
   danger?: boolean;
   /** Set = the row is greyed and says why. Never a dead control. */
   disabledReason?: string;
@@ -119,6 +123,10 @@ export default function Palette({
   // Same failure as the About dialog: if the browser can't be handed the URL,
   // the address goes on screen rather than nothing happening.
   const [unopened, setUnopened] = useState<string | null>(null);
+  // One snapshot for the whole list: a hook cannot be called inside the
+  // profile loop below, and every row in one paint must agree about what is
+  // protected.
+  const envDefs = useEnvironments();
 
   const actions = useMemo<PaletteAction[]>(() => {
     // What is on screen goes first: with no query the palette shows
@@ -135,7 +143,11 @@ export default function Palette({
       const bits = [address];
       if (status === "connected") bits.push(t("palette.state.connected"));
       else if (status === "connecting") bits.push(t("palette.state.connecting"));
-      if (p.environment === "prod") bits.push(t("palette.prodCluster"));
+      const envDef = resolveEnvironment(p.environment, envDefs);
+      // Guardrail layer 3 in the palette: the row says the word before you
+      // press ⏎. Keyed on protection, so a `PRD` or `production` cluster is
+      // called out exactly as `prod` was.
+      if (envDef.protected) bits.push(t("palette.protectedCluster"));
       list.push({
         id: `profile:${p.id}`,
         glyph: "→",
@@ -154,7 +166,7 @@ export default function Palette({
         // still be able to type them.
         keywords: `${t("palette.profile.kw")} ${p.environment} ${address}`,
         env: p.environment,
-        danger: p.environment === "prod",
+        danger: envDef.protected,
         run: () =>
           status === "disconnected" ? commands.connect(p) : commands.goTo(p.id),
       });
@@ -190,7 +202,8 @@ export default function Palette({
       context: target ? target.name : undefined,
       keywords: t("palette.disconnect.kw"),
       env: target?.environment,
-      danger: target?.environment === "prod",
+      danger:
+        target !== null && resolveEnvironment(target.environment, envDefs).protected,
       disabledReason:
         target !== null
           ? undefined
@@ -258,7 +271,7 @@ export default function Palette({
     return list;
     // `t` is in here on purpose: it is memoized on the locale, so this list
     // rebuilds the moment the language changes and never on any other render.
-  }, [profiles, connections, selectedId, commands, contextual, onClose, t]);
+  }, [profiles, connections, selectedId, commands, contextual, onClose, envDefs, t]);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();

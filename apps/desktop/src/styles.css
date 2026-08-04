@@ -93,16 +93,35 @@
      meter's extent was invisible, so "proportional" meant nothing.       */
   --track-empty: #333C46;
 
-  /* ── ENVIRONMENT — the ledger rule carries the signal ─────────────── */
-  --rule:      #242B33;        /* dev: decorative (1.30:1) BY DESIGN — dev
-                                  has no warning to give, and the absence
-                                  of a coloured rule is itself the signal. */
-  --env-ink:   var(--accent);
-  --env-tint:  var(--accent-tint);
+  /* ── ENVIRONMENT — the ledger rule carries the signal ─────────────────
+     Environments are USER-DEFINED. Two attributes carry them into CSS and
+     they mean different things:
+
+       [data-env-color]      IDENTITY. Seven closed tokens. Colours the
+                             ledger rule, the chip and the picker segment.
+       [data-env-protected]  THE GUARDRAIL. Present or absent, never
+                             "false". Swaps the warm substrate, lights the
+                             top wire, fills the chip, and dampens the rule
+                             behind a danger banner.
+
+     `data-env` used to carry both in one token, which is exactly what made
+     the set closed: `[data-env="prod"]` is a NAME check, and a name is now
+     user data. Every default below is `slate` — the token an environment
+     Kavka has never heard of resolves to.
+
+     The four chip tokens per colour are declared in the [data-env-color]
+     blocks further down; these are the slate fallback, so a chip with no
+     colour attribute still paints something legible.                      */
+  --rule:      #242B33;        /* slate: decorative (1.30:1) BY DESIGN —
+                                  slate has no warning to give, and the
+                                  absence of a coloured rule is itself the
+                                  signal: it means Kavka does not know this
+                                  environment.                             */
+  --env-ink:   #A2AEBB;        /*  7.27:1 on --env-tint                    */
+  --env-tint:  #1A2027;
+  --env-badge-ink:  #E9EDF1;   /*  6.48:1 on --env-badge-fill              */
+  --env-badge-fill: #4A555F;
   --env-wire:  transparent;    /* 2px bar under the native title bar      */
-  /* Prod is the only FILLED env chip, so it reads as a badge, not a tag. */
-  --env-chip-prod-ink:  #FFE4DF;   /* 6.22:1 on the fill below           */
-  --env-chip-prod-fill: #8E3A31;
 
   /* ── DATA SERIES — one lightness band, so no series shouts ────────── */
   --series-1: #4FC3B0;  --series-2: #6FA8DC;  --series-3: #B99BD4;
@@ -196,19 +215,108 @@
 [data-density="compact"] { --row-h: 24px; --t-base: 12px; --gutter-w: 64px; }
 [data-density="relaxed"] { --row-h: 34px; --row-h-head: 32px; }
 
-/* ══ STAGING — neutral substrate, amber rule ══════════════════════════ */
-[data-env="staging"] {
-  --rule:      #8C7036;    /* 3.98:1 — meaningful, so it clears 3:1      */
-  --env-ink:   var(--warn);
-  --env-tint:  var(--warn-tint);
+/* ══ ENVIRONMENT IDENTITY — seven colours, one shape ══════════════════
+   Each block declares exactly five tokens and nothing else, because
+   identity must not move the ground: the tag pair (--env-ink on
+   --env-tint), the badge pair (--env-badge-ink on --env-badge-fill), and
+   the ledger rule.
+
+   RATIOS ARE MEASURED, and both members of every pair are OPAQUE — which
+   is what makes a single number honest: an opaque ink on an opaque fill
+   has the same ratio on every surface underneath, so these clear SC 1.4.3
+   on all fifteen dark, protected and protected-row surfaces at once.
+   §9 gate 1 applies to the rule as a graphic (≥3:1) and it is swept
+   across all fifteen; the worst figure is quoted per token.
+
+   The chip FILLS are not indicators and are held to no floor: the chip
+   contains the environment's NAME (Law 2), so the fill is a container,
+   not a signal. They measure 1.93–3.11:1 against the surface set, quoted
+   here so nobody re-derives them believing they are a gate.              */
+
+[data-env-color="green"] {
+  --env-ink:   #79C98F;    /*  8.46:1 on --env-tint                      */
+  --env-tint:  #0F2116;
+  --env-badge-ink:  #E7F7EC;   /*  5.71:1 on the fill below              */
+  --env-badge-fill: #2F6B45;   /*  2.57–3.11 vs surfaces (container)     */
+  --rule:      #4E8560;    /* 3.76 worst (selected neutral row) · 4.31
+                              canvas · 3.86 selected protected row       */
 }
 
-/* ══ PROD — warm substrate, coral rule, top wire ══════════════════════
+[data-env-color="amber"] {
+  --env-ink:   #D9A441;    /*  7.42:1 — the same amber --warn carries    */
+  --env-tint:  #241D0F;
+  --env-badge-ink:  #FFF0D6;   /*  5.90:1                                */
+  --env-badge-fill: #7A5613;   /*  2.46–2.98 vs surfaces (container)     */
+  --rule:      #8C7036;    /* 3.48 worst · 3.98 canvas — unchanged from
+                              the value staging shipped with             */
+}
+
+[data-env-color="red"] {
+  --env-ink:   #E5786B;    /*  6.28:1 — the same coral --danger carries  */
+  --env-tint:  #1B1315;
+  --env-badge-ink:  #FFE4DF;   /*  6.22:1 — the badge prod shipped with  */
+  --env-badge-fill: #8E3A31;   /*  2.17–2.63 vs surfaces (container)     */
+  --rule:      #A65246;    /* 3.04 worst (selected neutral row) · 3.48
+                              canvas · 3.09 on a selected PROTECTED
+                              sidebar row, which is the binding figure of
+                              the whole sweep: there is no darker coral
+                              that still clears 3:1, which is why the
+                              danger damper below moves chroma, not
+                              lightness.                                 */
+}
+
+[data-env-color="blue"] {
+  --env-ink:   #7FB4E6;    /*  8.03:1                                    */
+  --env-tint:  #0E1A24;
+  --env-badge-ink:  #E3EFFA;   /*  6.54:1                                */
+  --env-badge-fill: #2C5680;   /*  2.13–2.59 vs surfaces (container)     */
+  --rule:      #4B7CA8;    /* 3.68 worst · 4.22 canvas                   */
+}
+
+[data-env-color="violet"] {
+  --env-ink:   #B99BD4;    /*  7.44:1                                    */
+  --env-tint:  #191426;
+  --env-badge-ink:  #F0E8F8;   /*  7.07:1                                */
+  --env-badge-fill: #5A3F86;   /*  1.93–2.34 vs surfaces (container)     */
+  --rule:      #7A5FA6;    /* 3.11 worst · 3.57 canvas                   */
+}
+
+[data-env-color="cyan"] {
+  --env-ink:   #6FC4D6;    /*  8.52:1 — bluer than --accent on purpose:
+                              teal means LIVE and only live (§2)         */
+  --env-tint:  #0C1F24;
+  --env-badge-ink:  #DFF4F9;   /*  6.39:1                                */
+  --env-badge-fill: #1F5E6E;   /*  2.24–2.71 vs surfaces (container)     */
+  --rule:      #3E8FA1;    /* 4.38 worst · 5.02 canvas                   */
+}
+
+[data-env-color="slate"] {
+  --env-ink:   #A2AEBB;    /*  7.27:1                                    */
+  --env-tint:  #1A2027;
+  --env-badge-ink:  #E9EDF1;   /*  6.48:1                                */
+  --env-badge-fill: #4A555F;   /*  2.14–2.59 vs surfaces (container)     */
+  --rule:      #242B33;    /* 1.14–1.38 — DECORATIVE BY DESIGN. Slate is
+                              what an unknown environment resolves to,
+                              and "no coloured rule" is the signal that
+                              Kavka has nothing to say about this one.   */
+}
+
+/* ══ PROTECTED — warm substrate, top wire ═════════════════════════════
+   THE ONE WARM-DANGER TREATMENT, whatever colour the chip is. Identity is
+   the chip; protection is the ground. Keyed on the flag, not on a name,
+   so an org whose production environment is called `PRD` gets the same
+   nine layers `prod` used to get.
+
    Verified on the warm canvas: primary 15.82 · secondary 8.41 ·
    tertiary 5.60 · mono 12.62 · danger 6.53 · accent 8.82 · ok 8.41 ·
-   warn 8.44 · border-control 3.70. Across all six prod surfaces the
-   syntax tokens span 4.64 (punct on a selected row) to 11.81.          */
-[data-env="prod"] {
+   warn 8.44 · border-control 3.70. Across all six protected surfaces the
+   syntax tokens span 4.64 (punct on a selected row) to 11.81. Unchanged
+   from the values prod shipped with — this block moved, it did not
+   change.
+
+   It declares NO identity token, so a protected environment keeps its own
+   colour: the block above and this one never fight.                      */
+[data-env-protected="true"] {
   --bg-rail:          #0D0B0A;
   --bg-canvas:        #12100F;
   --bg-raised:        #1B1715;
@@ -218,15 +326,6 @@
   --hairline:         #241B19;
   --hairline-strong:  #332724;
   --skeleton:         #332924;   /* 1.34:1 on the warm canvas            */
-  --rule:      #A65246;    /* 3.54 canvas · 3.68 sunken · 3.32 raised ·
-                              3.27 row-hover · 3.12 row-selected · 3.09
-                              on a selected prod SIDEBAR row, which is
-                              the binding figure of the fourteen §9
-                              sweeps: there is no DARKER coral that still
-                              clears 3:1, which is why the danger-banner
-                              damper below moves chroma, not lightness.  */
-  --env-ink:   var(--danger);
-  --env-tint:  var(--danger-tint);
   --env-wire:  #B8453A;    /* 3.57:1 — the bar is a MEANINGFUL indicator,
                               so it must clear 3:1. (--danger-fill would
                               have been 2.99 here.)                      */
@@ -509,15 +608,18 @@ code {
   border-left-color: var(--accent);
 }
 
-/* Prod guardrail layer 6 — prod rows stay tinted whether selected or not. */
-.profile-row-prod {
+/* Guardrail layer 6: a PROTECTED row stays tinted whether it is selected
+   or not, plus a 2px --danger left border. Warm-danger regardless of the
+   environment's own colour — the ground says "protected", the chip beside
+   it says which one. */
+.profile-row-protected {
   border-left-color: var(--danger);
   background: var(--danger-tint);
 }
 
-.profile-row-prod:hover { background: var(--bg-row-prod-hover); }
+.profile-row-protected:hover { background: var(--bg-row-prod-hover); }
 
-.profile-row-prod.profile-row-selected {
+.profile-row-protected.profile-row-selected {
   background: var(--bg-row-prod-selected);
   border-left-color: var(--danger);
 }
@@ -1126,6 +1228,11 @@ code {
    CHIPS · kbd
    ══════════════════════════════════════════════════════════════════════ */
 
+/* The chip carries the environment's NAME as the user typed it. Uppercased
+   here rather than in the DOM, so the word stays readable to anyone reading
+   the markup or pasting it into a bug report.
+
+   Unprotected is a TAG: colour is identity and nothing else. */
 .env-chip {
   flex-shrink: 0;
   display: inline-flex;
@@ -1133,19 +1240,24 @@ code {
   height: 18px;
   padding: 0 var(--s-3);
   border-radius: var(--r-pill);
+  color: var(--env-ink);
+  background: var(--env-tint);
   font-size: var(--t-micro);
   font-weight: var(--w-semi);
   letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
 }
 
-.env-dev     { color: var(--accent); background: var(--accent-tint); }
-.env-staging { color: var(--warn);   background: var(--warn-tint); }
-
-/* Prod is the only FILLED chip, so it reads as a badge, not a tag. */
-.env-prod {
-  color: var(--env-chip-prod-ink);
-  background: var(--env-chip-prod-fill);
+/* PROTECTED environments are the only FILLED chips, so they read as a
+   badge and not a tag — the treatment prod had, re-keyed onto the flag.
+   The chip carries its own [data-env-color] / [data-env-protected], which
+   is why a sidebar full of different environments paints correctly under
+   one app-level colour: the nearest declaration wins. The substrate tokens
+   the protected block also sets are inert here — a chip paints from the
+   four --env-* tokens and nothing else. */
+.env-chip[data-env-protected="true"] {
+  color: var(--env-badge-ink);
+  background: var(--env-badge-fill);
 }
 
 /* Sentence case: "read-only" is a phrase Kavka says to you, not a system
@@ -1398,54 +1510,138 @@ select option:disabled { color: var(--text-disabled); }
   cursor: pointer;
 }
 
-/* Segmented control. Picking prod swaps the substrate of everything it
-   governs, live — the single best moment in the product to teach the
-   guardrail. */
-/* NO overflow:hidden. It was here to clip the segments' square corners to
-   the well's radius, and it clipped the focus ring off the first and last
-   segment with it — the ring is drawn OUTSIDE the box (outline-offset 2px),
-   so any ancestor clip eats it. The segments carry the radius themselves
-   instead. Same reasoning applies anywhere a rounded shell wraps focusable
-   children (see .palette). */
+/* The environment picker. It WAS a fixed three-segment control; it is a
+   wrapping row of chips now, because the members are whatever the user
+   defined and a segmented control with nine segments is a horizontal
+   scrollbar in a form. Picking a PROTECTED environment swaps the substrate
+   of everything the form governs, live — still the single best moment in
+   the product to teach the guardrail.
+
+   NO overflow:hidden anywhere in here. The focus ring is drawn OUTSIDE the
+   box (outline-offset 2px), so any ancestor clip eats it. Same reasoning
+   applies anywhere a rounded shell wraps focusable children (see
+   .palette). */
+.env-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-5);
+}
+
 .env-picker {
-  display: inline-flex;
-  width: fit-content;
-  height: var(--control-h);
-  border: 1px solid var(--border-control);
-  border-radius: var(--r-control);
-  background: var(--bg-sunken);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
 }
 
 .env-option {
-  min-width: 72px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
   min-height: var(--hit-min);
-  padding: 0 var(--s-6);
-  border: none;
-  border-right: 1px solid var(--border-control);
-  background: transparent;
+  height: var(--control-h);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  background: var(--bg-sunken);
   color: var(--text-secondary);
   font-size: var(--t-sm);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease);
 }
 
-.env-option:first-child {
-  border-top-left-radius: var(--r-control);
-  border-bottom-left-radius: var(--r-control);
-}
-
-.env-option:last-child {
-  border-right: none;
-  border-top-right-radius: var(--r-control);
-  border-bottom-right-radius: var(--r-control);
-}
-
 .env-option:hover { background: var(--bg-row-hover); }
+
+/* Law 2: the chosen segment is not chosen BY COLOUR. It carries a glyph
+   and a heavier weight as well, and `aria-checked` says it out loud. */
+.env-option-check { font-weight: var(--w-bold); }
+
+/* The label ends in an ellipsis and must not wrap into two lines beside a
+   picker that already wraps. */
+.env-manage-btn { white-space: nowrap; }
 
 .env-option-active,
 .env-option-active:hover {
   background: var(--env-tint);
   color: var(--env-ink);
+  font-weight: var(--w-medium);
+}
+
+/* The active segment of a PROTECTED environment is filled, exactly like
+   its chip — so the form previews what the sidebar will show. */
+.env-option-active[data-env-protected="true"],
+.env-option-active[data-env-protected="true"]:hover {
+  background: var(--env-badge-fill);
+  color: var(--env-badge-ink);
+}
+
+/* ── The environments manager ──────────────────────────────────────────
+   A dialog, not a page: it is reached from the connection form and its
+   whole job is to answer "what environments are there" before you pick
+   one. Everything here is the modal vocabulary already in this sheet. */
+
+.env-list {
+  margin: var(--s-6) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+}
+
+.env-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  min-height: var(--hit-min);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.env-list-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.env-list-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--s-4);
+}
+
+.env-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A swatch renders as the chip WOULD render — tag when the draft is
+   unprotected, filled badge when it is — so the grid is a live preview of
+   the decision rather than a palette of abstract colours. */
+.env-swatch {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--hit-min);
+  height: var(--control-h);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  background: var(--env-tint);
+  color: var(--env-ink);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.env-swatch[data-env-protected="true"] {
+  background: var(--env-badge-fill);
+  color: var(--env-badge-ink);
+}
+
+/* Selection is a near-white ring (15.55:1), not a hue: a swatch grid whose
+   chosen member is identified by colour is unusable in exactly the grid
+   where colour is the subject. */
+.env-swatch-active {
+  box-shadow: inset 0 0 0 2px var(--text-primary);
   font-weight: var(--w-medium);
 }
 
@@ -1589,11 +1785,11 @@ select option:disabled { color: var(--text-disabled); }
   border-left-color: var(--accent-quiet);
 }
 
-/* Prod de-collision: on a prod cluster a danger banner drops its red tint
-   for a neutral shell with a --danger left bar. Otherwise the warm
-   substrate plus a coral banner is an undifferentiated red wash and BOTH
-   signals die. */
-[data-env="prod"] .banner-danger {
+/* Protected de-collision: on a protected cluster a danger banner drops its
+   red tint for a neutral shell with a --danger left bar. Otherwise the
+   warm substrate plus a coral banner is an undifferentiated red wash and
+   BOTH signals die. */
+[data-env-protected="true"] .banner-danger {
   background: var(--bg-raised);
   border-top-color: var(--hairline-strong);
   border-bottom-color: var(--hairline-strong);
@@ -1603,19 +1799,27 @@ select option:disabled { color: var(--text-disabled); }
 /* ...and the env rule dampens while a danger banner is up, so the banner is
    the only red thing on screen.
 
-   THE DAMPER MOVES CHROMA, NOT LIGHTNESS. The undampened prod rule is
-   already only 3.09:1 on a selected prod row, so there is no darker coral
-   left: the previous #6E3A33 measured 1.83:1 there and 2.09:1 on the
-   canvas, i.e. prod's most load-bearing guardrail switched itself off
-   exactly when an error was on screen. #9C8079 is the same rule at a
-   third of the chroma (spread 35 vs the coral's 96) and MORE luminance
-   contrast, not less: 5.22 canvas · 5.43 sunken · 4.90 raised · 4.83
-   row-hover · 4.61 row-selected · 4.55 on a selected prod sidebar row,
-   which is its worst. It reads as "muted", never as "gone".            */
-/* Also matches prod-scoped descendants (e.g. the profile editor form sets its
-   own data-env, which would otherwise re-declare --rule over the damper). */
-[data-env="prod"][data-alert="danger"],
-[data-alert="danger"] [data-env="prod"] { --rule: #9C8079; }
+   THE DAMPER MOVES CHROMA, NOT LIGHTNESS. The undampened red rule is
+   already only 3.09:1 on a selected protected row, so there is no darker
+   coral left: the previous #6E3A33 measured 1.83:1 there and 2.09:1 on the
+   canvas, i.e. the most load-bearing guardrail switched itself off exactly
+   when an error was on screen. #9C8079 is the same rule at a third of the
+   chroma (spread 35 vs the coral's 96) and MORE luminance contrast, not
+   less: 5.22 canvas · 5.43 sunken · 4.90 raised · 4.83 row-hover · 4.61
+   row-selected · 4.55 on a selected protected sidebar row, which is its
+   worst. It reads as "muted", never as "gone".
+
+   ONE DAMPER FOR EVERY IDENTITY COLOUR, and it keys on PROTECTION rather
+   than on the colour that collides. That is deliberate: the figures above
+   are measured on the warm protected surfaces, which is where a dampened
+   rule ever renders, and a neutral warm grey reads as "muted" behind a
+   coral banner whatever hue it replaced. Seven damped variants would be
+   seven more tokens to sweep for one composition nobody can tell apart. */
+/* Also matches protected-scoped descendants (the profile editor form sets
+   its own attributes, which would otherwise re-declare --rule over the
+   damper). */
+[data-env-protected="true"][data-alert="danger"],
+[data-alert="danger"] [data-env-protected="true"] { --rule: #9C8079; }
 
 .banner-glyph {
   flex-shrink: 0;
@@ -2078,7 +2282,12 @@ select option:disabled { color: var(--text-disabled); }
    ══════════════════════════════════════════════════════════════════════ */
 
 @media (forced-colors: active) {
-  .app-wire[data-env-label="PROD"] {
+  /* Any label at all, not the literal "PROD": the attribute is only ever
+     set on a PROTECTED environment (see `envWireLabel`), and the word it
+     prints is that environment's own name, uppercased — `PROD`,
+     `PRODUCTION`, `UAT`. Matching the value would have been a name check
+     in a stylesheet, which is the exact bug this migration removes. */
+  .app-wire[data-env-label] {
     height: auto;
     min-height: 4px;
     background: Mark;
@@ -2089,7 +2298,7 @@ select option:disabled { color: var(--text-disabled); }
     letter-spacing: var(--track-eyebrow);
   }
 
-  .app-wire[data-env-label="PROD"]::after { content: attr(data-env-label); }
+  .app-wire[data-env-label]::after { content: attr(data-env-label); }
 
   /* There is deliberately NO `* { border-color: CanvasText }` here.
      Forced-colors mode already preserves `transparent` and repaints every
@@ -2109,12 +2318,12 @@ select option:disabled { color: var(--text-disabled); }
   .palette-row-active { outline: 2px solid Highlight; outline-offset: -2px; }
   .tab-active { border-bottom-color: Highlight; }
 
-  /* Prod — Mark, the same colour the wire above uses, so the guardrail
-     reads as one signal. Wins over Highlight when a prod row is selected,
-     because the environment matters more than the selection. */
-  .profile-row-prod,
-  .profile-row-prod:hover,
-  .profile-row-prod.profile-row-selected { border-left-color: Mark; }
+  /* Protected — Mark, the same colour the wire above uses, so the guardrail
+     reads as one signal. Wins over Highlight when a protected row is
+     selected, because the environment matters more than the selection. */
+  .profile-row-protected,
+  .profile-row-protected:hover,
+  .profile-row-protected.profile-row-selected { border-left-color: Mark; }
 
   /* Severity — a banner is a condition you are in, so its shell must not
      vanish into the canvas. */
@@ -2130,8 +2339,17 @@ select option:disabled { color: var(--text-disabled); }
   /* The latched toggle is a switch: it has to read as ON across the room. */
   .btn-latched { outline: 2px solid Highlight; outline-offset: -3px; }
 
-  .env-prod,
+  /* Forced colors flattens every fill, so the badge and the tag would be
+     the same shape. The border restores the "this one is filled" reading
+     for the chips that carry the guardrail. */
+  .env-chip[data-env-protected="true"],
   .btn-danger-confirm { border: 1px solid CanvasText; }
+
+  /* The manager's swatches are colour by definition, and colour is what
+     forced-colors takes away. The selected one keeps its outline so the
+     radio group still says which is chosen — the WORD inside each swatch
+     is what carries the identity here, exactly as Law 2 requires. */
+  .env-swatch-active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2168,7 +2386,8 @@ select option:disabled { color: var(--text-disabled); }
   --ok-tint: #E9F5EF;  --warn-tint: #FAF1DE;  --danger-tint: #FBECEA;
   --track-empty: #C9D0D6;     /* fills clear 3.44–3.81:1 against it       */
   --rule: #D3D9DF;
-  --env-chip-prod-ink: #FFFFFF;  --env-chip-prod-fill: #9E2E22;
+  --env-ink: #4A555F;  --env-tint: #EDF0F3;   /* 6.66:1                   */
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  /* 7.62:1        */
   --syn-key: #3F5266;  --syn-string: #136B45;  --syn-number: #7A4E06;
   --syn-atom: #5B3FC4; --syn-punct: #5C6875;   --syn-match: #E3EEF6;
   --shadow-popover: 0 6px 20px -6px rgba(16, 21, 25, 0.18),
@@ -2177,12 +2396,57 @@ select option:disabled { color: var(--text-disabled); }
                     0 0 0 1px var(--hairline-strong);
 }
 
-[data-theme="light"] [data-env="staging"] { --rule: #8A5A08; }
-[data-theme="light"] [data-env="prod"]    { --rule: #8E3A31; --env-wire: #9E2E22; }
+/* The seven identity tokens in light. Each dark ink is far too light on a
+   white surface, so light inverts the pair: a dark hue on a pale wash for
+   the tag, white on the same dark hue for the badge. Two values per token
+   instead of four, which is also why they fit on one line each.
+
+   Ink-on-tint / white-on-dark, measured: green 5.82 / 6.67 · amber 5.27 /
+   5.92 · red 5.17 / 7.32 · blue 6.65 / 7.75 · violet 5.97 / 7.11 ·
+   cyan 6.25 / 7.24 · slate 6.66 / 7.62. Red is the tightest ink-on-tint of
+   the seven — #B3392A on #FBECEA, the --danger pair reused so the light
+   theme has one red — and still clears AA. The rule is the same dark hue and
+   clears ≥4.38:1 on all eight light surfaces, worst on a selected light
+   protected row — comfortably past the 3:1 graphics floor, because a light
+   theme has luminance to spare where the dark one does not. */
+[data-theme="light"] [data-env-color="green"] {
+  --env-ink: #0F6A3C;  --env-tint: #E4F3EA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F6A3C;  --rule: #0F6A3C;
+}
+[data-theme="light"] [data-env-color="amber"] {
+  --env-ink: #8A5A08;  --env-tint: #FAF1DE;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #8A5A08;  --rule: #8A5A08;
+}
+[data-theme="light"] [data-env-color="red"] {
+  --env-ink: #B3392A;  --env-tint: #FBECEA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #9E2E22;  --rule: #8E3A31;
+}
+[data-theme="light"] [data-env-color="blue"] {
+  --env-ink: #15558C;  --env-tint: #E5EFF8;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #15558C;  --rule: #15558C;
+}
+[data-theme="light"] [data-env-color="violet"] {
+  --env-ink: #5B3FC4;  --env-tint: #EDE9FA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #5B3FC4;  --rule: #5B3FC4;
+}
+[data-theme="light"] [data-env-color="cyan"] {
+  --env-ink: #0F5F72;  --env-tint: #E2F1F5;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F5F72;  --rule: #0F5F72;
+}
+/* Slate keeps the light theme's own neutral rule: "no colour" is the
+   signal, exactly as in dark. */
+[data-theme="light"] [data-env-color="slate"] {
+  --env-ink: #4A555F;  --env-tint: #EDF0F3;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  --rule: #D3D9DF;
+}
+
+[data-theme="light"] [data-env-protected="true"] { --env-wire: #9E2E22; }
 /* Light needs its own damper, or it inherits the dark one. Same rule:
    chroma down, contrast kept (4.09:1 worst, on a selected row). */
-[data-theme="light"] [data-env="prod"][data-alert="danger"],
-[data-theme="light"] [data-alert="danger"] [data-env="prod"] { --rule: #8A6F6A; }
+[data-theme="light"] [data-env-protected="true"][data-alert="danger"],
+[data-theme="light"] [data-alert="danger"] [data-env-protected="true"] {
+  --rule: #8A6F6A;
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    COMMAND PALETTE — rows, and the two dialogs that hang off it

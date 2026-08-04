@@ -101,7 +101,7 @@ const ja: Catalog = {
   "palette.connectTo": "{name} に接続",
   "palette.state.connected": "接続済み",
   "palette.state.connecting": "接続中…",
-  "palette.prodCluster": "本番クラスター",
+  "palette.protectedCluster": "保護されたクラスター",
   "palette.profile.kw":
     "connect open switch cluster broker bootstrap 接続 開く 切り替え",
   "palette.add.context": "名前、ブローカー 1 つ、そしてサインインの方法",
@@ -187,6 +187,9 @@ const ja: Catalog = {
   "transfer.report.replaced": "{count, plural, other {#件を置き換え}}",
   "transfer.report.skipped":
     "{count, plural, other {#件をスキップ — すでにこのマシンにあります}}",
+  "transfer.report.envAdded": "{count, plural, other {# 件の環境を追加}}",
+  "transfer.report.envSkipped": "{count, plural, other {# 件の環境は定義済み}}",
+  "transfer.report.envOnly.title": "新しい接続はありません — 環境のみ",
   "transfer.report.unchanged.title":
     "{count, plural, other {変更はありません — #件の接続はすでにここにありました}}",
   "transfer.report.unchanged.detail":
@@ -205,10 +208,13 @@ const ja: Catalog = {
   "editor.name.hint":
     "サイドバーで見分けられる名前なら何でも構いません。見えるのは Kavka だけです。",
   "editor.env.label": "環境",
-  "editor.env.hint.prod":
-    "本番を選ぶと、すべての表で台帳の罫線がコーラル色になり、サイドバーでこのクラスターが目印付きになり、ウィンドウ上部に警告バーが表示されます。実際に書き込む必要がなければ、下の読み取り専用をオンにしてください。",
+  "editor.env.hint.protected":
+    "この環境は保護対象として設定されています。すべての表で台帳の罫線がこの色になり、サイドバーでこのクラスターが目印付きになり、ウィンドウ上部に警告バーが表示され、破壊的な操作のたびに名前の入力を求められます。実際に書き込む必要がなければ、下の読み取り専用をオンにしてください。",
   "editor.env.hint.other":
     "Kavka はすべての画面を環境ごとに色分けするので、クラスターを取り違えることがありません。",
+  "editor.env.manage": "環境を管理…",
+  "editor.env.hint.unknown":
+    "このマシンには {name} の定義がないため、Kavka は中立的なグレーで表示し、ガードレールを適用しません。「環境を管理」で追加すると、色を割り当て、保護するかどうかを決められます。",
   "editor.bootstrap.label": "ブートストラップサーバー",
   "editor.bootstrap.hint":
     "クラスター内のどれか 1 つのブローカー — 残りは Kavka がそこから見つけます。1 行に 1 つ、またはカンマ区切りで。このリポジトリの開発用クラスターを動かしていますか？ その場合は {local} を使ってください。",
@@ -380,6 +386,54 @@ const ja: Catalog = {
     "ID プロバイダーがこのアプリケーション用に発行したクライアント ID を追加してください。",
   "editor.err.clientSecret":
     "このサインイン方法には、そのクライアント ID に対応するシークレットが必要です。",
+
+
+  // ── 環境 ────────────────────────────────────────────────────────────────
+  "env.color.green": "グリーン",
+  "env.color.amber": "アンバー",
+  "env.color.red": "レッド",
+  "env.color.blue": "ブルー",
+  "env.color.violet": "バイオレット",
+  "env.color.cyan": "シアン",
+  "env.color.slate": "スレート",
+
+  "env.mgr.title": "環境",
+  "env.mgr.intro": "組織が実際に運用している環境に名前を付けてください。色はひと目で見分けるためのもので、保護がガードレールです。",
+  "env.mgr.failed": "処理できませんでした",
+  "env.mgr.working": "Kavka が処理中です",
+  "env.mgr.add": "環境を追加",
+  "env.mgr.edit": "編集",
+
+  "env.mgr.row.protected": "保護あり",
+  "env.mgr.row.unprotected": "保護なし",
+  "env.mgr.row.used": "{count, plural, =0 {接続なし} other {# 件の接続}}",
+
+  "env.mgr.name.label": "名前",
+  "env.mgr.name.hint":
+    "チームでの呼び方をそのまま — dev、QA、UAT、production など。入力したとおりに表示され、翻訳されることはありません。",
+  "env.mgr.name.taken": "この名前の環境はすでにあります。",
+  "env.mgr.name.required": "先に環境の名前を入力してください",
+
+  "env.mgr.color.label": "色",
+  "env.mgr.color.hint":
+    "識別のためだけのものです。色は台帳の罫線とチップに反映されますが、Kavka で何ができるかを決めることはありません。",
+
+  "env.mgr.protected.label": "この環境を保護対象として扱う",
+  "env.mgr.protected.hint":
+    "Kavka は警告用の下地に切り替え、破壊的な操作の前にトピック名やグループ名の入力を求め、ウィンドウに目印を付け、明示的に許可されていない限りコマンドラインや AI アシスタントからの書き込みを拒否します。",
+  "env.mgr.unprotect.prompt": "保護を解除するには {name} と入力してください",
+  "env.mgr.unprotect.hint":
+    "{name} のすべての接続からガードレールがなくなります。入力による確認はなくなり、コマンドラインや AI アシスタントも書き込みを拒否しなくなります。",
+
+  "env.mgr.delete.title": "{name} を削除しますか？",
+  "env.mgr.delete.unused": "{name} を使っている接続はないため、他に変わるものはありません。",
+  "env.mgr.delete.used":
+    "{count, plural, other {# 件の接続}}が {name} を使っています。移動先を選んでください — Kavka は削除する前に移動します。",
+  "env.mgr.delete.moveTo": "これらの接続の移動先",
+  "env.mgr.delete.moveHint": "移動する接続: {names}。",
+  "env.mgr.delete.confirm": "環境を削除",
+  "env.mgr.delete.needTarget": "これらの接続の移動先となる環境を選んでください。",
+  "env.mgr.delete.last": "残っている環境はこれだけです — 先に別の環境を追加してください",
 
   "unit.seconds": "{count, plural, other {#秒}}",
   "unit.minutes": "{count, plural, other {#分}}",

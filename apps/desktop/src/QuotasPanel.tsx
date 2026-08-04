@@ -11,6 +11,7 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
 import { formatBytes, groupDigits } from "./format";
 import Overlay from "./Overlay";
@@ -150,7 +151,7 @@ function entitySentence(parts: QuotaEntityPart[]): string {
     .join(", and ");
 }
 
-/** What the user types in a prod confirmation for this entity. */
+/** What the user types in a protected-environment confirmation for this entity. */
 function confirmWord(parts: QuotaEntityPart[]): string {
   return parts[0]?.name ?? DEFAULT_WORD;
 }
@@ -195,7 +196,7 @@ export default function QuotasPanel({
   const note = failed && error !== null ? noQuotasNote(error) : null;
   useDangerSignal(error !== null && note === null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
 
   const fetchQuotas = useCallback(async () => {
@@ -310,7 +311,7 @@ export default function QuotasPanel({
                 routine (§6 layer 7). */}
             <button
               type="button"
-              className={`btn ${isProd ? "btn-danger" : ""}`}
+              className={`btn ${isProtected ? "btn-danger" : ""}`}
               disabled={readOnly || failed}
               title={
                 readOnly
@@ -363,7 +364,7 @@ export default function QuotasPanel({
                     key={entityKey(entity.entity)}
                     entity={entity}
                     readOnly={readOnly}
-                    isProd={isProd}
+                    isProtected={isProtected}
                     onEdit={() => setEditor({ kind: "edit", entity })}
                     onRemove={() => setRemoving(entity)}
                   />
@@ -396,7 +397,7 @@ export default function QuotasPanel({
       {removing !== null && (
         <ConfirmModal
           title={
-            isProd
+            isProtected
               ? `Remove every quota on ${confirmWord(removing.entity)} on ${profile.name}?`
               : `Remove every quota on ${confirmWord(removing.entity)}?`
           }
@@ -414,9 +415,10 @@ export default function QuotasPanel({
             </>
           }
           confirmLabel="Remove quotas"
-          // Environment-gated, not action-gated: prod always asks, dev never
+          // Environment-gated, not action-gated: a protected environment
+          // always asks, an unprotected one never
           // does (§6 layer 4).
-          typeToConfirm={isProd ? confirmWord(removing.entity) : null}
+          typeToConfirm={isProtected ? confirmWord(removing.entity) : null}
           busy={busy}
           busyLabel="Kavka is removing the quotas"
           onCancel={() => setRemoving(null)}
@@ -471,13 +473,13 @@ function EmptyQuotas({
 function EntityBlock({
   entity,
   readOnly,
-  isProd,
+  isProtected,
   onEdit,
   onRemove,
 }: {
   entity: QuotaEntity;
   readOnly: boolean;
-  isProd: boolean;
+  isProtected: boolean;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -511,7 +513,7 @@ function EntityBlock({
         <div className="quota-entity-actions">
           <button
             type="button"
-            className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+            className={`btn btn-row ${isProtected ? "btn-danger" : ""}`}
             disabled={readOnly}
             title={
               readOnly
@@ -601,7 +603,7 @@ function QuotaEditor({
   onSaved: (said: string, count: number) => void;
 }) {
   const editing = target.kind === "edit" ? target.entity : null;
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
 
   const [entityType, setEntityType] = useState<QuotaEntityType>("user");
   const [name, setName] = useState("");
@@ -686,7 +688,7 @@ function QuotaEditor({
 
   const said = entitySentence(entityParts);
   const word = confirmWord(entityParts);
-  const matches = !isProd || typed === word;
+  const matches = !isProtected || typed === word;
 
   const validate = useCallback((): { field: FieldKey; message: string } | null => {
     if (editing === null) {
@@ -823,7 +825,7 @@ function QuotaEditor({
                 .join(", and ")}.`}
         </p>
 
-        {isProd && (
+        {isProtected && (
           <div className="banner banner-warn" role="note">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -1046,7 +1048,7 @@ function QuotaEditor({
           );
         })}
 
-        {isProd && (
+        {isProtected && (
           <div className="field confirm-type">
             <label className="field-label" htmlFor="quota-confirm">
               Type <code>{word}</code> to confirm you are changing this on{" "}
@@ -1093,7 +1095,7 @@ function QuotaEditor({
           </button>
           <button
             type="submit"
-            className={`btn ${isProd ? "btn-danger-confirm" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"}`}
             disabled={busy || !matches}
             aria-busy={busy || undefined}
             title={blocked}

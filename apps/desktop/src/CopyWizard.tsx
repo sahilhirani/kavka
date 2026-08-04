@@ -16,6 +16,7 @@ import {
   type PartitionDetail,
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
+import { envAttrs, envWireLabel, useEnvironment } from "./environments";
 import { classifyError } from "./errors";
 import { approxCount, groupDigits } from "./format";
 import Overlay from "./Overlay";
@@ -39,12 +40,13 @@ import type { ToastSpec } from "./Toast";
  * component reads the DESTINATION profile for all four load-bearing layers:
  *
  *  - Layer 1 + 5: the wizard's body carries `data-env` of the DESTINATION, so
- *    picking a prod destination turns the rule coral and warms the substrate
+ *    picking a PROTECTED destination takes its colour and warms the substrate
  *    inside the modal the instant it is chosen — the same moment the
  *    environment picker teaches the guardrail in the connection form (§5.3).
  *  - Layer 4: type-to-confirm is gated on the destination's environment, not
- *    the source's. Copying dev → prod always asks; prod → dev never does.
- *  - Layer 7: the start control renders danger-outlined for a prod
+ *    the source's. Copying into a protected environment always asks; copying
+ *    out of one into an unprotected one never does.
+ *  - Layer 7: the start control renders danger-outlined for a protected
  *    destination, and the panel carries an undismissable warning.
  *  - Layer 8: a read-only DESTINATION disables the start with the same
  *    sentence the rest of the app uses. The core refuses it anyway —
@@ -279,7 +281,10 @@ export default function CopyWizard({
     [profiles, destId],
   );
   const destEnv = dest?.environment ?? profile.environment;
-  const destIsProd = destEnv === "prod";
+  // The DESTINATION's definition, not the workspace's: everything below
+  // keys on where the records are going.
+  const destDef = useEnvironment(destEnv);
+  const destIsProtected = destDef.protected;
   const destReadOnly = dest?.read_only ?? false;
   /**
    * The same cluster, by ADDRESS rather than by profile id — two saved
@@ -549,7 +554,7 @@ export default function CopyWizard({
         if (cancelled) return;
         const raw = errorMessage(err);
         const { cause, title, detail } = classifyError(raw, {
-          environment: destEnv,
+          environmentProtected: destIsProtected,
         });
         if (cause === "read-only") push({ kind: "danger", title, detail });
         else setFailure(raw);
@@ -647,19 +652,20 @@ export default function CopyWizard({
   return (
     <Overlay
       surfaceClass={`modal modal-wide copy-modal${
-        destIsProd ? " modal-destructive" : ""
+        destIsProtected ? " modal-destructive" : ""
       }`}
       labelledBy="copy-title"
       initialFocus={firstRef}
       onClose={onClose}
     >
       {/* The DESTINATION's environment, not the workspace's: the ledger rule
-          inside this modal is coral the moment a prod destination is picked
-          (§6 layer 1), which is the guardrail this screen most needs. */}
+          inside this modal takes the destination's colour the moment one is
+          picked, and its warm substrate the moment that destination is
+          PROTECTED (§6 layer 1) — the guardrail this screen most needs. */}
       <div
         className="copy-body"
-        data-env={destEnv}
-        data-env-label={destIsProd ? "PROD" : undefined}
+        {...envAttrs(destDef)}
+        data-env-label={envWireLabel(destDef)}
       >
         <h2 className="modal-title" id="copy-title">
           Copy messages from {topic}
@@ -688,7 +694,7 @@ export default function CopyWizard({
         </ol>
 
         {/* §6 layer 7, aimed at the destination. Undismissable, on purpose. */}
-        {destIsProd && (
+        {destIsProtected && (
           <div className="banner banner-danger" role="alert">
             <span className="banner-glyph" aria-hidden="true">
               !
@@ -740,8 +746,8 @@ export default function CopyWizard({
                     ? "The same cluster — this is a replay into another topic, which is the same operation."
                     : `${dest?.bootstrap_servers.join(", ") ?? ""} — the address the records will be written to.`}
               </span>
-              {/* The env chip beside the picker: prod is the only filled chip,
-                  so a prod destination reads as a badge from across the room. */}
+              {/* The env chip beside the picker: a protected destination is the
+                  only FILLED chip, so it reads as a badge from across the room. */}
               {dest !== null && (
                 <span className="copy-dest-id">
                   <EnvChip env={dest.environment} />
@@ -1150,7 +1156,7 @@ export default function CopyWizard({
               // destination even when routine.
               <button
                 type="button"
-                className={`btn ${destIsProd ? "btn-danger" : "btn-primary"}`}
+                className={`btn ${destIsProtected ? "btn-danger" : "btn-primary"}`}
                 disabled={destReadOnly || dry === null || dryBusy}
                 title={
                   startBlocked ??
@@ -1159,7 +1165,7 @@ export default function CopyWizard({
                     : undefined)
                 }
                 onClick={() => {
-                  if (destIsProd) setConfirming(true);
+                  if (destIsProtected) setConfirming(true);
                   else startCopy();
                 }}
               >

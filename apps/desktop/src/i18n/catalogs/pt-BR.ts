@@ -101,7 +101,7 @@ const ptBR: Catalog = {
   "palette.connectTo": "Conectar em {name}",
   "palette.state.connected": "conectado",
   "palette.state.connecting": "conectando…",
-  "palette.prodCluster": "cluster de produção",
+  "palette.protectedCluster": "cluster protegido",
   "palette.profile.kw":
     "connect open switch cluster broker bootstrap conectar abrir trocar",
   "palette.add.context": "Um nome, um broker e como se autenticar",
@@ -187,6 +187,11 @@ const ptBR: Catalog = {
   "transfer.report.replaced": "{count, plural, other {# substituídas}}",
   "transfer.report.skipped":
     "{count, plural, other {# ignoradas — já estavam nesta máquina}}",
+  "transfer.report.envAdded":
+    "{count, plural, one {# ambiente adicionado} other {# ambientes adicionados}}",
+  "transfer.report.envSkipped":
+    "{count, plural, one {# ambiente já definido} other {# ambientes já definidos}}",
+  "transfer.report.envOnly.title": "Nenhuma conexão nova — apenas ambientes",
   "transfer.report.unchanged.title":
     "{count, plural, one {Nada mudou — # conexão já estava aqui} other {Nada mudou — # conexões já estavam aqui}}",
   "transfer.report.unchanged.detail":
@@ -206,10 +211,13 @@ const ptBR: Catalog = {
   "editor.name.hint":
     "O que você reconhecer na barra lateral. Só o Kavka vê isso.",
   "editor.env.label": "Ambiente",
-  "editor.env.hint.prod":
-    "Produção deixa a régua do razão em coral em todas as tabelas, marca este cluster na barra lateral e coloca uma faixa de aviso no topo da janela. Ative o modo somente leitura abaixo, a menos que você realmente precise escrever.",
+  "editor.env.hint.protected":
+    "Este ambiente está marcado como protegido: a régua do razão leva a cor dele em todas as tabelas, a barra lateral marca este cluster, uma faixa de aviso ocupa o topo da janela e cada ação destrutiva pede que você digite o nome antes. Ative o modo somente leitura abaixo, a menos que você realmente precise escrever.",
   "editor.env.hint.other":
     "O Kavka colore cada tela por ambiente, para você não confundir um cluster com outro.",
+  "editor.env.manage": "Gerenciar ambientes…",
+  "editor.env.hint.unknown":
+    "Nada nesta máquina define {name}, então o Kavka mostra em cinza neutro e não aplica nenhuma proteção. Adicione em «Gerenciar ambientes» para dar uma cor a ele e decidir se é protegido.",
   "editor.bootstrap.label": "Servidores bootstrap",
   "editor.bootstrap.hint":
     "Qualquer broker do seu cluster — o Kavka acha os demais a partir dele. Um por linha, ou separados por vírgula. Está rodando o cluster de desenvolvimento deste repositório? Use {local}.",
@@ -383,6 +391,58 @@ const ptBR: Catalog = {
     "Adicione o id de cliente que seu provedor de identidade emitiu para este aplicativo.",
   "editor.err.clientSecret":
     "Este método de autenticação precisa do segredo que acompanha esse id de cliente.",
+
+
+  // ── Ambientes ───────────────────────────────────────────────────────────
+  "env.color.green": "verde",
+  "env.color.amber": "âmbar",
+  "env.color.red": "vermelho",
+  "env.color.blue": "azul",
+  "env.color.violet": "violeta",
+  "env.color.cyan": "ciano",
+  "env.color.slate": "ardósia",
+
+  "env.mgr.title": "Ambientes",
+  "env.mgr.intro":
+    "Dê nome aos ambientes que sua organização realmente usa. A cor distingue um do outro num relance; «protegido» é a proteção.",
+  "env.mgr.failed": "Isso não foi concluído",
+  "env.mgr.working": "O Kavka está trabalhando nisso",
+  "env.mgr.add": "Adicionar ambiente",
+  "env.mgr.edit": "Editar",
+
+  "env.mgr.row.protected": "protegido",
+  "env.mgr.row.unprotected": "sem proteção",
+  "env.mgr.row.used":
+    "{count, plural, =0 {nenhuma conexão} one {# conexão} other {# conexões}}",
+
+  "env.mgr.name.label": "Nome",
+  "env.mgr.name.hint":
+    "Como a sua equipe chama — dev, QA, UAT, produção. Mostrado exatamente como você digitar, e nunca traduzido.",
+  "env.mgr.name.taken": "Já existe um ambiente com este nome.",
+  "env.mgr.name.required": "Dê um nome ao ambiente primeiro",
+
+  "env.mgr.color.label": "Cor",
+  "env.mgr.color.hint":
+    "Apenas identidade. A cor tinge a régua do razão e a etiqueta; ela nunca decide o que o Kavka deixa você fazer.",
+
+  "env.mgr.protected.label": "Tratar este ambiente como protegido",
+  "env.mgr.protected.hint":
+    "O Kavka muda para o fundo de aviso, pede que você digite o nome do tópico ou do grupo antes de qualquer ação destrutiva, marca a janela e recusa escritas pela linha de comando e por assistentes de IA, a menos que sejam explicitamente autorizados.",
+  "env.mgr.unprotect.prompt": "Digite {name} para remover a proteção",
+  "env.mgr.unprotect.hint":
+    "Todas as conexões em {name} perdem as proteções: sem confirmações digitadas, e a linha de comando e os assistentes de IA deixam de recusar escritas.",
+
+  "env.mgr.delete.title": "Remover {name}?",
+  "env.mgr.delete.unused": "Nenhuma conexão usa {name}, então nada mais muda.",
+  "env.mgr.delete.used":
+    "{count, plural, one {# conexão usa} other {# conexões usam}} {name}. Escolha para onde elas vão — o Kavka as move antes de remover.",
+  "env.mgr.delete.moveTo": "Mover essas conexões para",
+  "env.mgr.delete.moveHint": "Estas conexões serão movidas: {names}.",
+  "env.mgr.delete.confirm": "Remover ambiente",
+  "env.mgr.delete.needTarget":
+    "Escolha um ambiente para onde mover essas conexões.",
+  "env.mgr.delete.last":
+    "É o único ambiente restante — adicione outro primeiro",
 
   "unit.seconds": "{count, plural, one {# segundo} other {# segundos}}",
   "unit.minutes": "{count, plural, one {# minuto} other {# minutos}}",

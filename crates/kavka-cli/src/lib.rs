@@ -59,7 +59,7 @@
 //! | 0 | The command answered. **An empty answer is still an answer** — a search with no matches exits 0, deliberately unlike `grep`, because a non-zero code here means Kavka could not answer at all. |
 //! | 1 | The cluster, the keychain or the profile file failed. The message is [`errors::classify`]'s. |
 //! | 2 | The command line was wrong (clap's own code, and the one this program raises for a flag combination clap cannot express). |
-//! | 3 | **A guardrail refused it**: a read-only connection, or a write to `prod` without `--yes-prod`. Nothing was sent. See [`gate`]. |
+//! | 3 | **A guardrail refused it**: a read-only connection, or a write to a connection whose environment is marked protected, without `--yes-prod`. Nothing was sent. See [`gate`]. |
 //! | 4 | The connection named does not exist on this machine, or there are none saved at all. |
 //!
 //! 3 is separate from 1 on purpose: a script has to be able to tell "Kavka
@@ -76,10 +76,18 @@
 //!    it; the core would refuse the call anyway
 //!    ([`kavka_core::connection::ClusterConnection::ensure_writable`]), and
 //!    this refuses it before the connection authenticates on behalf of a write.
-//! 2. **A `prod` profile needs `--yes-prod` on the command line.** This is the
-//!    terminal's version of docs/DESIGN.md §6 layer 4 — type-to-confirm,
-//!    environment-gated rather than action-gated. Prod always asks; dev never
-//!    does.
+//! 2. **A profile whose environment is marked PROTECTED needs `--yes-prod` on
+//!    the command line.** This is the terminal's version of docs/DESIGN.md §6
+//!    layer 4 — type-to-confirm, environment-gated rather than action-gated. A
+//!    protected environment always asks; an unprotected one never does.
+//!
+//!    Environments are the user's to define ([`kavka_core::environments`]):
+//!    `dev` and `prod`, or `QA`, `UAT` and `Production`. The gate reads the
+//!    `protected` flag on the environment's definition and never its name, so
+//!    a protected `Production` behaves exactly as `prod` always did. The flag
+//!    keeps its spelling because it is in shell histories and CI scripts;
+//!    `kavka profiles list --output json` reports `environment_protected` per
+//!    connection so a script never has to guess from a name.
 //!
 //! There is deliberately no `kavka delete-topic`, no config editing, no ACLs,
 //! no offset reset. Produce is the write with an obvious undo story (another

@@ -10,7 +10,7 @@
 
 use kavka_core::connection::ClusterConnection;
 use kavka_core::consume::{fetch_messages, FetchSpec, SeekSpec};
-use kavka_core::profiles::{AuthConfig, ConnectionProfile, Environment};
+use kavka_core::profiles::{AuthConfig, ConnectionProfile};
 use kavka_core::serdes::{Encoding, MessageRecord};
 use std::collections::{BTreeSet, HashMap};
 
@@ -30,7 +30,7 @@ fn local_connection() -> ClusterConnection {
     ClusterConnection::connect(ConnectionProfile {
         id: "it-consume".into(),
         name: "local docker".into(),
-        environment: Environment::Dev,
+        environment: "dev".into(),
         bootstrap_servers: vec![
             std::env::var("KAVKA_TEST_BOOTSTRAP").unwrap_or_else(|_| "localhost:9092".into())
         ],

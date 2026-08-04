@@ -1976,7 +1976,7 @@ mod reporting {
 #[cfg(all(test, feature = "kafka"))]
 mod cluster {
     use super::*;
-    use crate::profiles::{AuthConfig, ConnectionProfile, Environment};
+    use crate::profiles::{AuthConfig, ConnectionProfile};
     use rdkafka::config::ClientConfig;
     use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 
@@ -2006,7 +2006,7 @@ mod cluster {
         ClusterConnection::connect(ConnectionProfile {
             id: "it-search".into(),
             name: "local docker".into(),
-            environment: Environment::Dev,
+            environment: "dev".into(),
             bootstrap_servers: vec![bootstrap()],
             auth: AuthConfig::Plaintext,
             read_only,

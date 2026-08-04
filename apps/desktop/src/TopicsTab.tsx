@@ -17,6 +17,7 @@ import ConfirmModal from "./ConfirmModal";
 import CopyWizard from "./CopyWizard";
 import CreateTopicModal from "./CreateTopicModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useIsProtected } from "./environments";
 import { replayHeaders } from "./dlq";
 import { approxCount, groupDigits } from "./format";
 import { Term } from "./Glossary";
@@ -193,7 +194,7 @@ export default function TopicsTab({
 
   useDangerSignal(error !== null, onDanger);
 
-  const isProd = profile.environment === "prod";
+  const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
 
   // ── The list ───────────────────────────────────────────────────────────
@@ -368,13 +369,13 @@ export default function TopicsTab({
    */
   const askElection = useCallback(
     (partitions: number[] | null) => {
-      if (!isProd && partitions !== null) {
+      if (!isProtected && partitions !== null) {
         void runElection(partitions);
         return;
       }
       setElecting({ partitions });
     },
-    [isProd, runElection],
+    [isProtected, runElection],
   );
 
   /** The monitor says a move finished; the partition table has to catch up. */
@@ -777,7 +778,7 @@ export default function TopicsTab({
                     is routine (§6 layer 7). */}
                 <button
                   type="button"
-                  className={`btn ${isProd ? "btn-danger" : ""}`}
+                  className={`btn ${isProtected ? "btn-danger" : ""}`}
                   onClick={openProduce}
                   disabled={readOnly || detail === null}
                   title={
@@ -852,7 +853,7 @@ export default function TopicsTab({
                       it is routine (§6 layer 7). */}
                   <button
                     type="button"
-                    className={`btn ${isProd ? "btn-danger" : ""}`}
+                    className={`btn ${isProtected ? "btn-danger" : ""}`}
                     disabled={readOnly || electBusy || unpreferred === 0}
                     aria-busy={electBusy || undefined}
                     title={
@@ -873,7 +874,7 @@ export default function TopicsTab({
                   </button>
                   <button
                     type="button"
-                    className={`btn ${isProd ? "btn-danger" : ""}`}
+                    className={`btn ${isProtected ? "btn-danger" : ""}`}
                     disabled={readOnly || brokers.length === 0}
                     title={
                       readOnly
@@ -941,7 +942,7 @@ export default function TopicsTab({
                         key={p.partition}
                         partition={p}
                         readOnly={readOnly}
-                        isProd={isProd}
+                        isProtected={isProtected}
                         busy={electBusy}
                         canReassign={brokers.length > 0}
                         onElect={() => askElection([p.partition])}
@@ -1090,7 +1091,7 @@ export default function TopicsTab({
               tone="plain"
               title={
                 electing.partitions === null
-                  ? isProd
+                  ? isProtected
                     ? `Move leadership of ${detail.name} on ${profile.name}?`
                     : `Move leadership for all ${detail.partitions.length} partitions?`
                   : `Move leadership of partition ${electing.partitions[0]}?`
@@ -1114,7 +1115,7 @@ export default function TopicsTab({
                   Producers and consumers reconnect on their own, usually within
                   a second, and a producer may see a retry or two while that
                   happens.
-                  {isProd && (
+                  {isProtected && (
                     <>
                       {" "}
                       {profile.name} is a production cluster, so those retries
@@ -1124,7 +1125,7 @@ export default function TopicsTab({
                 </>
               }
               confirmLabel="Move leadership"
-              typeToConfirm={isProd ? detail.name : null}
+              typeToConfirm={isProtected ? detail.name : null}
               busy={electBusy}
               busyLabel="Kavka is asking the cluster to move leadership"
               onCancel={() => setElecting(null)}
@@ -1167,7 +1168,7 @@ export default function TopicsTab({
           {confirmingDelete && detail !== null && (
             <ConfirmModal
               title={
-                isProd
+                isProtected
                   ? `Delete ${detail.name} on ${profile.name}?`
                   : `Delete ${detail.name}?`
               }
@@ -1179,9 +1180,10 @@ export default function TopicsTab({
                 </>
               }
               confirmLabel="Delete topic"
-              // Environment-gated, not action-gated: prod always asks, dev never
+              // Environment-gated, not action-gated: a protected environment
+              // always asks, an unprotected one never
               // does (§6 layer 4).
-              typeToConfirm={isProd ? detail.name : null}
+              typeToConfirm={isProtected ? detail.name : null}
               busy={deleting}
               busyLabel="Kavka is deleting the topic"
               onCancel={() => setConfirmingDelete(false)}
@@ -1246,7 +1248,7 @@ export default function TopicsTab({
               </button>
               <button
                 type="button"
-                className={`btn ${isProd ? "btn-danger" : ""}`}
+                className={`btn ${isProtected ? "btn-danger" : ""}`}
                 disabled={readOnly}
                 title={readOnly ? READ_ONLY_WHY : undefined}
                 onClick={() => setCreating(true)}
@@ -1373,7 +1375,7 @@ export default function TopicsTab({
         {creating && (
           <CreateTopicModal
             profileId={profile.id}
-            isProd={isProd}
+            isProtected={isProtected}
             clusterName={profile.name}
             brokerCount={brokers.length}
             existing={topics?.map((t) => t.name) ?? []}
@@ -1452,7 +1454,7 @@ export default function TopicsTab({
 function PartitionRow({
   partition,
   readOnly,
-  isProd,
+  isProtected,
   busy,
   canReassign,
   onElect,
@@ -1460,7 +1462,7 @@ function PartitionRow({
 }: {
   partition: PartitionDetail;
   readOnly: boolean;
-  isProd: boolean;
+  isProtected: boolean;
   busy: boolean;
   canReassign: boolean;
   onElect: () => void;
@@ -1531,7 +1533,7 @@ function PartitionRow({
       <td className="col-affordance partition-actions">
         <button
           type="button"
-          className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+          className={`btn btn-row ${isProtected ? "btn-danger" : ""}`}
           disabled={readOnly || busy || onPreferred || !preferredInSync}
           title={electWhy}
           onClick={onElect}
@@ -1540,7 +1542,7 @@ function PartitionRow({
         </button>
         <button
           type="button"
-          className={`btn btn-row ${isProd ? "btn-danger" : ""}`}
+          className={`btn btn-row ${isProtected ? "btn-danger" : ""}`}
           disabled={readOnly || !canReassign}
           title={
             readOnly

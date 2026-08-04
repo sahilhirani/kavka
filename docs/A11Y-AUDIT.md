@@ -472,8 +472,11 @@ mechanism §1.4.10 above is measured through.
 region. The rail is a `complementary` landmark and the workspace is `<main>`, so
 both are skippable by landmark; `⌘K` is a keyboard bypass in its own right.
 
-**SC 2.4.2 Page Titled (A).** `index.html` carries `<title>Kavka</title>`, and
-§6 layer 9 puts the cluster and its environment in the window title.
+**SC 2.4.2 Page Titled (A).** `index.html` carries `<title>Kavka</title>`, which
+is what satisfies the criterion. §6 layer 9 — the cluster and its environment
+appended to that title — is **specified and not shipped**; it is a guardrail
+improvement, not the thing this SC turns on, so the criterion passes today and
+layer 9 makes the title more useful rather than compliant.
 
 **SC 2.5.7 Dragging Movements (AA, new in 2.2).** Nothing in Kavka requires a
 drag. The dock and rail resize handles specced in §5.1 are not implemented yet;
