@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-test:
+    name: Lint, test (Linux)
+    runs-on: ubuntu-latest
+    env:
+      # The debug test binaries (DataFusion + wasmtime + librdkafka in one
+      # workspace) overflow the runner's disk with full debuginfo — the linker
+      # dies with SIGBUS. Line tables are enough for CI backtraces.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships ~25 GB of toolchains this job never uses; the
+      # workspace's target dir needs the room more than dotnet/android do.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # keyring's secret-service backend links against libdbus on Linux;
+      # librdkafka's cmake build enables its curl-based OAuth/HTTP helpers on
+      # Linux and needs the libcurl headers.
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libcurl4-openssl-dev
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # The crate must lint clean BOTH without the kafka feature (the
+      # no-CMake tooling build) and with it.
+      - name: Clippy (no default features)
+        run: cargo clippy -p kavka-core -- -D warnings
+
+      - name: Clippy (kafka)
+        run: cargo clippy -p kavka-core --features kafka -- -D warnings
+
+      # The WASM serde tier stands alone (a decoder needs no cluster), so it
+      # lints on its own.
+      - name: Clippy (wasm serdes)
+        run: cargo clippy -p kavka-core --features wasm-serdes --all-targets -- -D warnings
+
+      # And at the tier the desktop app ships, which is the only one where the
+      # plugin actually meets the read paths: `ClusterConnection::decoder_for`
+      # and its four callers in `consume`, `search`, `sql` and `xcluster` are
+      # compiled only when `kafka` and `wasm-serdes` are both on, and
+      # `kafka-ssl` is the combination that is green with `--all-targets`
+      # (plain `kafka` leaves the ssl-gated test helpers in `connection.rs`
+      # unreferenced, which is why the step above it has no `--all-targets`).
+      - name: Clippy (kafka-ssl, all targets)
+        run: cargo clippy -p kavka-core --features kafka-ssl --all-targets -- -D warnings
+
+      # The MCP server (crates/kavka-mcp). It builds kavka-core at the
+      # kafka-ssl tier — the same one the desktop app ships — because it opens
+      # the same connections from the same profiles.json.
+      - name: Clippy (MCP server)
+        run: cargo clippy -p kavka-mcp --all-targets -- -D warnings
+
+      # The companion CLI (crates/kavka-cli), at the same tier and for the same
+      # reason: it opens the same connections from the same profiles.json.
+      - name: Clippy (CLI)
+        run: cargo clippy -p kavka-cli --all-targets -- -D warnings
+
+      - name: Start local Kafka (KRaft)
+        run: docker compose -f dev/docker-compose.yml up -d --wait
+
+      # kafka-ssl is what the desktop app ships; it also unlocks the
+      # ssl-asserting unit tests (vendored OpenSSL needs the runner's perl).
+      - name: Unit + integration tests
+        run: cargo test -p kavka-core --features kafka-ssl
+        env:
+          KAVKA_IT: "1"
+
+      # The MCP suite spawns the built binary and drives it over real pipes
+      # against the cluster started above, so it runs here rather than beside
+      # the core's own tests.
+      - name: MCP server tests
+        run: cargo test -p kavka-mcp
+        env:
+          KAVKA_IT: "1"
+
+      # The CLI suite spawns the built binary with a real argv against the same
+      # cluster. Its unit half (the flag surface, the output modes, the write
+      # gate, the §7 error table) needs no broker and runs here either way.
+      - name: CLI tests
+        run: cargo test -p kavka-cli
+        env:
+          KAVKA_IT: "1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Frontend typecheck + build
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      # The packaging templates, rendered. This runs on every PR because
+      # `packaging/render.mjs` is only ever executed on release day otherwise —
+      # a placeholder a template grew and the renderer cannot fill is an error
+      # nobody would see until the tag was already pushed.
+      #
+      # No --assets, deliberately: that mode substitutes the version and the
+      # URLs, writes `TODO-…` checksums and says on stderr that the output is
+      # not submittable. It still parses and renders every template and still
+      # fails on an unknown placeholder, which is the half that can rot here.
+      - name: Packaging manifests render
+        run: node packaging/render.mjs --version 0.0.0 --out "$RUNNER_TEMP/pkg"
+
+  check-windows:
+    name: Check (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # tauri's generate_context! wants the frontend dist to exist.
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check workspace (builds librdkafka via CMake)
+        run: cargo check --workspace

@@ -1,0 +1,29 @@
+[package]
+name = "kavka-mcp"
+description = "Kavka MCP server: Kavka's read APIs (and two env-gated write APIs) to an AI agent over stdio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A crate of its own rather than a second `[[bin]]` in apps/desktop/src-tauri.
+# The reasons are in src/lib.rs's "WHY A CRATE" note; the short version is that
+# a binary in that package links Tauri — webview, plugins, `tauri-build`,
+# `generate_context!` and the frontend `dist/` those need — and this program is
+# a headless pipe reader that must build and run where none of that exists (a
+# CI box with no Node, a server, a container). This package depends on
+# kavka-core and nothing else.
+
+[dependencies]
+# The same tier the desktop app ships (apps/desktop/src-tauri/Cargo.toml), and
+# for the same reason: this server reads the SAME profiles.json, so it has to be
+# able to open every connection the app can open — TLS and MSK IAM included.
+# Anything less would mean a profile that works in the app and refuses here.
+kavka-core = { path = "../kavka-core", features = ["kafka-ssl"] }
+serde.workspace = true
+serde_json.workspace = true
+
+# NOTHING ELSE, deliberately — the measurement and the argument are in
+# src/lib.rs under "WHY NOT rmcp". In particular there is no async runtime: the
+# core is blocking by design and this process serves one request at a time down
+# one pipe, so a runtime would be scheduling machinery around a queue of one.

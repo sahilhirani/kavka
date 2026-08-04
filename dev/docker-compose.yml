@@ -1,0 +1,111 @@
+# Local dev Kafka cluster (KRaft, single node, PLAINTEXT).
+#   docker compose -f dev/docker-compose.yml up -d --wait
+#   docker compose -f dev/docker-compose.yml down -v
+#
+# Brokers on localhost:9092. kafka-init creates the dev topics, seeds
+# a few JSON messages so the app has something to browse on first connect, and
+# turns on the share-group feature (see the comment in its command block).
+#
+# The broker runs StandardAuthorizer with User:ANONYMOUS as a superuser, so the
+# ACL APIs are reachable while nothing is actually denied — see the environment
+# block for why that combination is the only one that leaves every other
+# integration test alone.
+services:
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: kavka-dev-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # An authorizer has to be loaded before CreateAcls/DescribeAcls/DeleteAcls
+      # exist at all — without one the broker answers SECURITY_DISABLED and the
+      # ACL screen has nothing to talk to. StandardAuthorizer is the KRaft-native
+      # one (there is no ZooKeeper here for AclAuthorizer to use).
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      # These two keep the authorizer from changing what the dev cluster *does*.
+      # Every listener is PLAINTEXT, so every client — Kavka, the seeding
+      # scripts, the healthcheck, and the broker talking to its own controller —
+      # authenticates as User:ANONYMOUS. Making that a superuser means the
+      # authorizer is loaded and answerable but never denies anything, so the
+      # integration suite is unaffected by its presence, and an ACL the tests
+      # write for a fake principal cannot lock the suite out of a topic.
+      #
+      # allow.everyone.if.no.acl.found is belt and braces for the same
+      # invariant: without it, the first ACL written against a resource turns
+      # that resource deny-by-default for everyone else.
+      KAFKA_SUPER_USERS: User:ANONYMOUS
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+
+  kafka-init:
+    image: apache/kafka:4.1.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        BS=kafka:29092
+        for t in orders payments customers inventory dead-letter; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$BS --create --if-not-exists --topic $$t --partitions 6 --replication-factor 1
+        done
+        SEEDED=$(/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server $$BS --topic orders --time -1 | awk -F: '{sum += $$3} END {print sum+0}')
+        if [ "$$SEEDED" = "0" ]; then
+          for i in $(seq 1 50); do
+            echo "order-$$i:{\"orderId\":$$i,\"status\":\"created\",\"amount\":$$((i * 7)).50}"
+          done | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server $$BS --topic orders \
+                   --property parse.key=true --property key.separator=:
+          echo "seeded orders with 50 messages"
+        else
+          echo "orders already seeded ($$SEEDED messages), skipping"
+        fi
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$BS --list
+        # Share groups (KIP-932) are gated on a KRaft FEATURE, not on a broker
+        # config: `share.version` is finalized at 0 on a fresh 4.1 cluster, and
+        # a broker in that state still ADVERTISES ShareGroupDescribe (77) and
+        # DescribeShareGroupOffsets (90) in its ApiVersions table — it just
+        # answers UNSUPPORTED_VERSION to both, which is why Kavka reads the
+        # feature level rather than the version table (see src/protocol/share.rs).
+        # There is no KAFKA_* environment variable for it: the docker image
+        # formats storage before this file gets a say, so it is upgraded here.
+        #
+        # LAST, deliberately. `set -e` means anything that fails above stops the
+        # rest, and the dev topics are what every other integration test needs —
+        # so the one line that exists for the newest feature cannot be the reason
+        # the seeded cluster never appears.
+        #
+        # Idempotent: re-running it on a cluster already at 1 prints the same
+        # line and exits 0, so `up` on an existing volume is a no-op.
+        #
+        # It changes NOTHING else about the cluster. Enabling the feature creates
+        # no topics and starts no coordinator work — __share_group_state is
+        # created on demand by the first share group, and nothing here can create
+        # one, because librdkafka has no share consumer (see
+        # tests/share_local.rs). Verified by running the whole integration suite
+        # with the feature off and again with it on.
+        /opt/kafka/bin/kafka-features.sh --bootstrap-server $$BS upgrade --feature share.version=1
+
+volumes:
+  kafka-data:

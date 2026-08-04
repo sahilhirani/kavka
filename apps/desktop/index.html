@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>Kavka</title>
+    <style>
+      /* Avoid a white flash before the stylesheet loads. Must stay in sync
+         with --bg-canvas in src/styles.css, or the app flashes the old
+         theme on every cold start. */
+      html {
+        background: #0f1317;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

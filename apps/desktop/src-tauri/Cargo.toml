@@ -14,8 +14,29 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-kavka-core = { path = "../../../crates/kavka-core" }
+# `wasm-serdes` is named even though `kafka-ssl` already implies it (see the
+# core's Cargo.toml). Spelled out rather than inherited because it is the
+# feature this shell has commands for — `wasm_serdes_list/save/delete`, and the
+# plugin step of the decode ladder that `ClusterConnection::decoder_for` feeds —
+# so the day somebody re-cuts the feature tiers, the thing that breaks is this
+# line rather than a ProfileEditor section that silently decodes nothing.
+kavka-core = { path = "../../../crates/kavka-core", features = [
+    "kafka-ssl",
+    "wasm-serdes",
+] }
 tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+# The Rust half of @tauri-apps/plugin-dialog. Present for one command — the OS
+# save dialog behind `export_records`, which needs a path the user chose rather
+# than one Kavka invented.
+tauri-plugin-dialog = "2"
+# The official notification plugin, for one job: an alert that fires while Kavka
+# is behind another window has to reach the person anyway. Everything else about
+# alerting lives in kavka-core — the rules, the hysteresis, the webhook — and
+# this is here because an OS toast is the one part a core crate cannot own
+# (see `kavka_core::alerts::AlertChannels::os_notification`, which is documented
+# as "honoured by the Tauri shell").
+tauri-plugin-notification = "2"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

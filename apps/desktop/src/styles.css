@@ -1,22 +1,5855 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   KAVKA — LEDGER design system
+   See docs/DESIGN.md for the rules this file implements. Three laws:
+
+   1. Elevation is colour and one hairline. Shadows exist only on true
+      overlays (modal, palette, popover, toast). There are two shadow tokens.
+   2. No state is ever encoded by colour alone. Every dot has a word.
+   3. Nothing inside a scrolling table gets a transition, filter,
+      backdrop-filter, border-radius or box-shadow. --row-h is a fixed token
+      the virtualizer reads at runtime.
+
+   Dark ships. Light is specced and audited but must not be user-toggleable
+   until every component composition is verified in it (Phase 6).
+   Environment substrate swaps via [data-env] on the app root.
+   No color-mix(): macOS 12 ships WKWebView/Safari 15.6.
+   ══════════════════════════════════════════════════════════════════════════ */
+
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+
+  /* ── SURFACES ─────────────────────────────────────────────────────── */
+  --bg-rail:         #090B0D;  /* sidebar — recedes behind the stage      */
+  --bg-canvas:       #0F1317;  /* the stage; all data lives here          */
+  --bg-raised:       #161B20;  /* palette, modals, toasts, popovers ONLY  */
+  --bg-sunken:       #0A0D10;  /* inputs, payload inspector, code         */
+  --bg-row-hover:    #161C22;
+  --bg-row-selected: #152227;  /* teal-tinted; primary text 13.57:1       */
+  /* Prod sidebar rows (guardrail layer 6). Named, not inlined, so the
+     theme blocks can move them. Primary text 13.80:1 on the lightest.    */
+  --bg-row-prod-hover:    #241816;
+  --bg-row-prod-selected: #2A1B18;
+  --bg-scrim:        rgba(5, 7, 9, 0.55);       /* no blur — perf         */
+  --selection:       rgba(79, 195, 176, 0.28);  /* precomputed, not color-mix */
+  --skeleton:        #28313A;  /* 1.41:1 — a placeholder, never content   */
+
+  /* ── TEXT — six values; hierarchy lives here, not in boxes ────────── */
+  --text-primary:   #E6EBF0;   /* 15.55:1  values, headings, topic names  */
+  --text-secondary: #A2AEBB;   /*  8.27:1  prose, help text               */
+  --text-tertiary:  #808D9A;   /*  5.50:1  labels, column heads, metadata */
+  --text-disabled:  #657280;   /*  3.79:1  :disabled controls ONLY. Never
+                                  a placeholder — a placeholder is text a
+                                  sighted user is expected to read.       */
+  /* Placeholders and ∅ are different ROLES that the contrast floor puts on
+     the same value: §9 sweeps every --text-* token against all twelve
+     dark+prod surfaces at 4.5:1, and 4.5:1 on a selected row is the binding
+     constraint for both. They stay two tokens because they are two
+     decisions — a future theme can separate them; a shared literal must not
+     let one drift by accident.                                           */
+  --text-placeholder: #7E8A97; /*  4.63:1 worst (selected row)            */
+  --text-absent:    #7E8A97;   /*  4.63:1 worst (selected row) — the ∅
+                                  glyph is TEXT that carries meaning, so
+                                  it clears 4.5:1, not merely 3:1.        */
+  --text-mono:      #C9D4DF;   /* 12.41:1  literals copied out of Kafka   */
+  --text-inverse:   #0B0E11;   /* 16.13:1  on the near-white primary fill */
+
+  /* ── LINES ────────────────────────────────────────────────────────── */
+  --hairline:        #1B2127;  /* decorative separation — 1.4.11 exempt   */
+  --hairline-strong: #262E36;  /* header underline, dock edges            */
+  --border-control:  #636F7C;  /* REQUIRED on every operable boundary.
+                                  Clears 3:1 on ALL 12 dark+prod surfaces,
+                                  worst 3.17 on a selected row. The sunken
+                                  fill is only 1.13:1 against canvas, so
+                                  this border is the ONLY thing satisfying
+                                  SC 1.4.11.                              */
+
+  /* ── ACCENT — means LIVE, and nothing else ────────────────────────── */
+  --accent:       #4FC3B0;     /*  8.67:1  connected · live tail · selected */
+  --accent-quiet: #3C9788;     /*  5.31:1  hairline-weight accent         */
+  --accent-tint:  #12241F;     /*          chip bg; accent on it 7.52:1   */
+  --focus:        #6FE3CD;     /* 12.03:1 — always with outline-offset    */
+  --fill-primary-hover: #FFFFFF; /* the primary button's hover fill       */
+
+  /* ── SEMANTIC ─────────────────────────────────────────────────────── */
+  --ok:          #56C08A;      /*  8.26:1 */
+  --warn:        #D9A441;      /*  8.29:1 */
+  --danger:      #E5786B;      /*  6.42:1 */
+  --danger-fill: #A63C31;      /*  6.34:1 with --on-danger-fill           */
+  --danger-fill-hover: #B84439;/*  5.35:1 with --on-danger-fill           */
+  --on-danger-fill: #FFFFFF;
+  /* The outlined danger button's boundary is operable, so SC 1.4.11
+     applies. Precomputed and OPAQUE: an rgba() border composites against
+     whatever is behind it and collapsed to 2.20:1 on the canvas.         */
+  --danger-border: #A85C50;    /*  3.34:1 worst, on a selected dark row
+                                  (3.56 on --bg-raised, 3.83 on canvas)   */
+  --ok-tint:     #101E18;
+  --warn-tint:   #241D0F;
+  --danger-tint: #1B1315;      /*  --danger on it = 6.28:1               */
+
+  /* Empty half of a lag meter. The FILL is the meaningful indicator and
+     clears 3:1 on every surface; this is the adjacent colour inside the
+     meter, so every fill must also clear 3:1 against IT (ok 4.96, warn
+     4.98, danger 3.86). --hairline-strong was 1.36:1 on canvas: the
+     meter's extent was invisible, so "proportional" meant nothing.       */
+  --track-empty: #333C46;
+
+  /* ── ENVIRONMENT — the ledger rule carries the signal ─────────────────
+     Environments are USER-DEFINED. Two attributes carry them into CSS and
+     they mean different things:
+
+       [data-env-color]      IDENTITY. Seven closed tokens. Colours the
+                             ledger rule, the chip and the picker segment.
+       [data-env-protected]  THE GUARDRAIL. Present or absent, never
+                             "false". Swaps the warm substrate, lights the
+                             top wire, fills the chip, and dampens the rule
+                             behind a danger banner.
+
+     `data-env` used to carry both in one token, which is exactly what made
+     the set closed: `[data-env="prod"]` is a NAME check, and a name is now
+     user data. Every default below is `slate` — the token an environment
+     Kavka has never heard of resolves to.
+
+     The four chip tokens per colour are declared in the [data-env-color]
+     blocks further down; these are the slate fallback, so a chip with no
+     colour attribute still paints something legible.                      */
+  --rule:      #242B33;        /* slate: decorative (1.30:1) BY DESIGN —
+                                  slate has no warning to give, and the
+                                  absence of a coloured rule is itself the
+                                  signal: it means Kavka does not know this
+                                  environment.                             */
+  --env-ink:   #A2AEBB;        /*  7.27:1 on --env-tint                    */
+  --env-tint:  #1A2027;
+  --env-badge-ink:  #E9EDF1;   /*  6.48:1 on --env-badge-fill              */
+  --env-badge-fill: #4A555F;
+  --env-wire:  transparent;    /* 2px bar under the native title bar      */
+
+  /* ── DATA SERIES — one lightness band, so no series shouts ────────── */
+  --series-1: #4FC3B0;  --series-2: #6FA8DC;  --series-3: #B99BD4;
+  --series-4: #D9A441;  --series-5: #E5786B;  --series-6: #86C98A;
+  --grid-line: var(--hairline);
+
+  /* ── PAYLOAD SYNTAX — all AA on --bg-sunken AND on --syn-match ────── */
+  --syn-key:    #8FA6BC;       /*  7.74:1 */
+  --syn-string: #9FD5A8;       /* 11.65:1 */
+  --syn-number: #E0B36A;       /* 10.04:1 */
+  --syn-atom:   #B99BD4;       /*  8.07:1  true / false / null           */
+  --syn-punct:  #7B8899;       /*  5.40:1  braces carry structure = AA   */
+  --syn-match:  #132028;       /* search hit — neutral-cool, so the WORST
+                                  syntax token still clears 4.60:1. Always
+                                  paired with a 2px --accent underline:
+                                  the hit must not be colour-only.       */
+
+  /* ── TYPE ─────────────────────────────────────────────────────────── */
+  --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+             Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+               Menlo, Consolas, monospace;
+
+  --t-micro:   10.5px;  --lh-micro:   14px;  /* uppercase eyebrow, tracked */
+  --t-xs:      11px;    --lh-xs:      15px;  /* kbd, footnotes, status bar */
+  --t-sm:      12px;    --lh-sm:      17px;  /* secondary UI, chips        */
+  --t-base:    13px;    --lh-base:    19px;  /* DEFAULT — all data         */
+  --t-md:      15px;    --lh-md:      21px;  /* panel + modal titles       */
+  --t-lg:      19px;    --lh-lg:      25px;  /* page title                 */
+  --t-xl:      24px;    --lh-xl:      30px;  /* empty-state headline       */
+  --t-display: 30px;    --lh-display: 36px;  /* hero stat numerals         */
+  --lh-prose:  1.55;                          /* banners, hints, empties   */
+
+  --w-normal: 400;  --w-medium: 500;  --w-semi: 600;  --w-bold: 700;
+  --track-eyebrow: 0.08em;     /* uppercase micro labels ONLY             */
+  --track-tight:  -0.011em;    /* >= 19px only                            */
+  --nums-tabular: tabular-nums lining-nums;
+
+  /* ── SPACE (4px base) ─────────────────────────────────────────────── */
+  --s-1:  2px;  --s-2:  4px;  --s-3:  6px;  --s-4:  8px;
+  --s-5: 12px;  --s-6: 16px;  --s-7: 20px;  --s-8: 24px;
+  --s-9: 32px;  --s-10:40px;  --s-11:56px;  --s-12:72px;
+
+  /* ── METRICS ──────────────────────────────────────────────────────── */
+  --rail-w:        240px;   /* resizable 200–360, Ctrl/Cmd+B             */
+  --topbar-h:       44px;
+  --tabstrip-h:     30px;
+  --statusbar-h:    24px;
+  --row-h:          30px;   /* virtualizer reads this token at runtime   */
+  --row-h-head:     28px;
+  --control-h:      28px;
+  --control-h-lg:   32px;   /* search bar, primary form inputs           */
+  --gutter-w:       72px;   /* THE LEDGER GUTTER                         */
+  --gutter-w-code:  40px;   /* inspector line numbers                    */
+  --inspector-w:   480px;   /* resizable 320–60%, Ctrl/Cmd+I             */
+  --palette-w:     580px;
+  --measure:        62ch;   /* max width of ANY prose block              */
+  --hit-min:        24px;   /* nothing operable may be smaller — SC 2.5.8 */
+
+  /* ── SHAPE ────────────────────────────────────────────────────────── */
+  --r-control:  4px;
+  --r-popover:  6px;
+  --r-overlay: 10px;
+  --r-pill:   999px;
+  /* Tables, panels, page sections, stat blocks and banners have NO radius
+     and NO border by design. If you are reaching for a card, use space.  */
+
+  /* ── ELEVATION — exactly two, both overlay-only ───────────────────── */
+  --shadow-popover: 0 6px 20px -6px rgba(0, 0, 0, 0.6),
+                    0 0 0 1px var(--hairline-strong);
+  --shadow-overlay: 0 20px 56px -16px rgba(0, 0, 0, 0.75),
+                    0 0 0 1px var(--hairline-strong);
+
+  /* ── MOTION ───────────────────────────────────────────────────────── */
+  --dur-instant:   0ms;   /* row hover, cell select — data answers NOW   */
+  --dur-fast:    120ms;   /* buttons, chips, checkboxes, chevrons        */
+  --dur-base:    180ms;   /* banners, toasts, tab crossfade              */
+  --dur-slow:    260ms;   /* inspector slide, sidebar collapse           */
+  --ease:        cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-settle: cubic-bezier(0.34, 1.26, 0.64, 1); /* PALETTE + TOAST ONLY */
+
+  /* ── FOCUS (SC 2.4.11 / 1.4.11) ───────────────────────────────────── */
+  --focus-ring:   2px solid var(--focus);
+  --focus-offset: 2px;    /* always offset — the ring must never sit on a
+                             light fill, where it would drop to 1.29:1   */
 }
+
+/* ══ DENSITY — 3 steps, persisted. The message browser defaults ONE step
+   denser than the app; the app-level toggle sets the preference, the
+   browser's default is only its initial value, never a lock. ══════════ */
+[data-density="compact"] { --row-h: 24px; --t-base: 12px; --gutter-w: 64px; }
+[data-density="relaxed"] { --row-h: 34px; --row-h-head: 32px; }
+
+/* ══ ENVIRONMENT IDENTITY — seven colours, one shape ══════════════════
+   Each block declares exactly five tokens and nothing else, because
+   identity must not move the ground: the tag pair (--env-ink on
+   --env-tint), the badge pair (--env-badge-ink on --env-badge-fill), and
+   the ledger rule.
+
+   RATIOS ARE MEASURED, and both members of every pair are OPAQUE — which
+   is what makes a single number honest: an opaque ink on an opaque fill
+   has the same ratio on every surface underneath, so these clear SC 1.4.3
+   on all fifteen dark, protected and protected-row surfaces at once.
+   §9 gate 1 applies to the rule as a graphic (≥3:1) and it is swept
+   across all fifteen; the worst figure is quoted per token.
+
+   The chip FILLS are not indicators and are held to no floor: the chip
+   contains the environment's NAME (Law 2), so the fill is a container,
+   not a signal. They measure 1.93–3.11:1 against the surface set, quoted
+   here so nobody re-derives them believing they are a gate.              */
+
+[data-env-color="green"] {
+  --env-ink:   #79C98F;    /*  8.46:1 on --env-tint                      */
+  --env-tint:  #0F2116;
+  --env-badge-ink:  #E7F7EC;   /*  5.71:1 on the fill below              */
+  --env-badge-fill: #2F6B45;   /*  2.57–3.11 vs surfaces (container)     */
+  --rule:      #4E8560;    /* 3.76 worst (selected neutral row) · 4.31
+                              canvas · 3.86 selected protected row       */
+}
+
+[data-env-color="amber"] {
+  --env-ink:   #D9A441;    /*  7.42:1 — the same amber --warn carries    */
+  --env-tint:  #241D0F;
+  --env-badge-ink:  #FFF0D6;   /*  5.90:1                                */
+  --env-badge-fill: #7A5613;   /*  2.46–2.98 vs surfaces (container)     */
+  --rule:      #8C7036;    /* 3.48 worst · 3.98 canvas — unchanged from
+                              the value staging shipped with             */
+}
+
+[data-env-color="red"] {
+  --env-ink:   #E5786B;    /*  6.28:1 — the same coral --danger carries  */
+  --env-tint:  #1B1315;
+  --env-badge-ink:  #FFE4DF;   /*  6.22:1 — the badge prod shipped with  */
+  --env-badge-fill: #8E3A31;   /*  2.17–2.63 vs surfaces (container)     */
+  --rule:      #A65246;    /* 3.04 worst (selected neutral row) · 3.48
+                              canvas · 3.09 on a selected PROTECTED
+                              sidebar row, which is the binding figure of
+                              the whole sweep: there is no darker coral
+                              that still clears 3:1, which is why the
+                              danger damper below moves chroma, not
+                              lightness.                                 */
+}
+
+[data-env-color="blue"] {
+  --env-ink:   #7FB4E6;    /*  8.03:1                                    */
+  --env-tint:  #0E1A24;
+  --env-badge-ink:  #E3EFFA;   /*  6.54:1                                */
+  --env-badge-fill: #2C5680;   /*  2.13–2.59 vs surfaces (container)     */
+  --rule:      #4B7CA8;    /* 3.68 worst · 4.22 canvas                   */
+}
+
+[data-env-color="violet"] {
+  --env-ink:   #B99BD4;    /*  7.44:1                                    */
+  --env-tint:  #191426;
+  --env-badge-ink:  #F0E8F8;   /*  7.07:1                                */
+  --env-badge-fill: #5A3F86;   /*  1.93–2.34 vs surfaces (container)     */
+  --rule:      #7A5FA6;    /* 3.11 worst · 3.57 canvas                   */
+}
+
+[data-env-color="cyan"] {
+  --env-ink:   #6FC4D6;    /*  8.52:1 — bluer than --accent on purpose:
+                              teal means LIVE and only live (§2)         */
+  --env-tint:  #0C1F24;
+  --env-badge-ink:  #DFF4F9;   /*  6.39:1                                */
+  --env-badge-fill: #1F5E6E;   /*  2.24–2.71 vs surfaces (container)     */
+  --rule:      #3E8FA1;    /* 4.38 worst · 5.02 canvas                   */
+}
+
+[data-env-color="slate"] {
+  --env-ink:   #A2AEBB;    /*  7.27:1                                    */
+  --env-tint:  #1A2027;
+  --env-badge-ink:  #E9EDF1;   /*  6.48:1                                */
+  --env-badge-fill: #4A555F;   /*  2.14–2.59 vs surfaces (container)     */
+  --rule:      #242B33;    /* 1.14–1.38 — DECORATIVE BY DESIGN. Slate is
+                              what an unknown environment resolves to,
+                              and "no coloured rule" is the signal that
+                              Kavka has nothing to say about this one.   */
+}
+
+/* ══ PROTECTED — warm substrate, top wire ═════════════════════════════
+   THE ONE WARM-DANGER TREATMENT, whatever colour the chip is. Identity is
+   the chip; protection is the ground. Keyed on the flag, not on a name,
+   so an org whose production environment is called `PRD` gets the same
+   nine layers `prod` used to get.
+
+   Verified on the warm canvas: primary 15.82 · secondary 8.41 ·
+   tertiary 5.60 · mono 12.62 · danger 6.53 · accent 8.82 · ok 8.41 ·
+   warn 8.44 · border-control 3.70. Across all six protected surfaces the
+   syntax tokens span 4.64 (punct on a selected row) to 11.81. Unchanged
+   from the values prod shipped with — this block moved, it did not
+   change.
+
+   It declares NO identity token, so a protected environment keeps its own
+   colour: the block above and this one never fight.                      */
+[data-env-protected="true"] {
+  --bg-rail:          #0D0B0A;
+  --bg-canvas:        #12100F;
+  --bg-raised:        #1B1715;
+  --bg-sunken:        #0C0A09;
+  --bg-row-hover:     #1E1815;
+  --bg-row-selected:  #241C18;
+  --hairline:         #241B19;
+  --hairline-strong:  #332724;
+  --skeleton:         #332924;   /* 1.34:1 on the warm canvas            */
+  --env-wire:  #B8453A;    /* 3.57:1 — the bar is a MEANINGFUL indicator,
+                              so it must clear 3:1. (--danger-fill would
+                              have been 2.99 here.)                      */
+}
+
+/* Escape hatch for anyone who finds the warm substrate fatiguing:
+   Settings → Environment colour → "Rule only". The rule, chip, wire and
+   window title all remain, so SC 1.4.1 is still satisfied. */
+[data-env-intensity="rule-only"] {
+  --bg-rail: #090B0D; --bg-canvas: #0F1317; --bg-raised: #161B20;
+  --bg-sunken: #0A0D10; --bg-row-hover: #161C22; --bg-row-selected: #152227;
+  --hairline: #1B2127; --hairline-strong: #262E36; --skeleton: #28313A;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --ease-settle: linear; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* A 1ms spin is worse than no spin. */
+  .spinner { animation: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BASE
+   ══════════════════════════════════════════════════════════════════════ */
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root { height: 100%; margin: 0; }
 
 body {
-  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font: var(--w-normal) var(--t-base) / var(--lh-base) var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
 }
 
-.shell {
+/* Quantities Kavka computed line up. Literals from Kafka are mono. */
+.num,
+.stat-value,
+.ledger-gutter,
+.cell-num,
+time,
+.offset { font-variant-numeric: var(--nums-tabular); }
+
+/* ONE focus rule for the whole app. outline, not box-shadow — box-shadow
+   rings are clipped by overflow:hidden on scroll wells. .table-scroll
+   reserves 2px of inner padding so the ring survives on edge rows.
+   The brief's `border-radius` on this rule is deliberately omitted: it
+   would round table rows and panels the moment they take focus. Controls
+   carry their own radius, so the ring already follows it. */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: var(--selection); }
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+input,
+textarea { user-select: text; }
+
+/* A <code> span is always a literal someone may need to copy. Selectable at
+   the base, so no component has to opt in one class at a time. */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  color: var(--text-mono);
+  user-select: text;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SHELL — wire · rail · workspace · status bar
+   ══════════════════════════════════════════════════════════════════════ */
+
+.app {
   display: flex;
-  min-height: 100vh;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+/* Prod guardrail layer 2. Painted inside the webview, under the native
+   title bar. Zero vertical cost, permanently peripheral, no text to
+   habituate to. If a future PR proposes removing this "because the
+   substrate already does it", that PR is wrong. */
+.app-wire {
+  flex: 0 0 auto;
+  height: 2px;
+  background: var(--env-wire);
+}
+
+.app-shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-7) var(--s-8) var(--s-10);
+}
+
+/* Status bar — the permanent home for progressive search progress, tail
+   rate, connection latency, the read-only chip, the alert counter and the
+   two most relevant shortcuts. Phase 2's "search never silently truncates"
+   acceptance gate depends on this existing. */
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: var(--statusbar-h);
+  padding: 0 var(--s-5) 0 var(--s-8);
+  border-top: 1px solid var(--hairline);
+  background: var(--bg-rail);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.statusbar-right { margin-left: auto; flex-shrink: 0; }
+
+.statusbar-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-mono {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  user-select: text;
+}
+
+/* The separator is decorative and aria-hidden, but it is still a glyph a
+   sighted user parses the status line by. --hairline-strong put it at
+   1.43:1 on the rail, i.e. gone. 4.01:1 dark / 3.99:1 prod. */
+.statusbar-sep { color: var(--text-disabled); }
+
+/* Tab strip — multi-topic browsing from Phase 1. */
+.tabstrip {
+  display: flex;
+  align-items: stretch;
+  height: var(--tabstrip-h);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--bg-canvas);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-5);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.tab-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RAIL (sidebar)
+   ══════════════════════════════════════════════════════════════════════ */
+
+.sidebar {
+  width: var(--rail-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--hairline);
+}
+
+.sidebar-header { padding: var(--s-5) var(--s-5) var(--s-3); }
+
+.sidebar-title,
+.eyebrow {
+  display: block;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.profile-list {
+  flex: 1;
+  overflow-y: auto;
+  /* 4px top so the first row's focus ring (2px + 2px offset) survives the
+     scroll well — same reason .table-scroll pads (DESIGN.md §5.3). */
+  padding: 4px var(--s-3) var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.sidebar-note {
+  padding: var(--s-3) var(--s-4) var(--s-5);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.profile-row {
+  display: block;
+  width: 100%;
+  padding: var(--s-3) var(--s-4);
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.profile-row:hover { background: var(--bg-row-hover); }
+
+.profile-row-selected,
+.profile-row-selected:hover {
+  background: var(--bg-row-selected);
+  border-left-color: var(--accent);
+}
+
+/* Guardrail layer 6: a PROTECTED row stays tinted whether it is selected
+   or not, plus a 2px --danger left border. Warm-danger regardless of the
+   environment's own colour — the ground says "protected", the chip beside
+   it says which one. */
+.profile-row-protected {
+  border-left-color: var(--danger);
+  background: var(--danger-tint);
+}
+
+.profile-row-protected:hover { background: var(--bg-row-prod-hover); }
+
+.profile-row-protected.profile-row-selected {
+  background: var(--bg-row-prod-selected);
+  border-left-color: var(--danger);
+}
+
+.profile-row-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.profile-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-base);
+  color: var(--text-primary);
+}
+
+.profile-name-draft {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Prod guardrail layer 3 — the bootstrap address is always on screen.
+   Most prod accidents are right-action-wrong-cluster. */
+.profile-meta {
+  display: block;
+  margin-top: var(--s-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+/* Law 2: every dot is accompanied by a word somewhere in its row. */
+.status-disconnected {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-tertiary);
+}
+
+.status-connecting {
+  background: var(--warn);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+.status-connected { background: var(--accent); }
+
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+/* Operable boundary → --border-control, not --hairline-strong (1.18:1 on a
+   selected row). SC 1.4.11 does not care that the button looks quieter. */
+.new-connection-btn {
+  margin: 0 var(--s-3) var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  min-height: var(--control-h);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.new-connection-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
+}
+
+.sidebar-footer {
+  padding: var(--s-4) var(--s-5) var(--s-5);
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.app-name {
+  font-weight: var(--w-semi);
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+}
+
+/* Operable, so it may not be smaller than --hit-min (SC 2.5.8). */
+.support-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--hit-min);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  text-decoration: none;
+  width: fit-content;
+  border-radius: var(--r-control);
+}
+
+.support-link:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE LEDGER RULE — the device everything inherits
+   A fixed left gutter carrying the row's address in Kafka's own
+   vocabulary — offset, broker id, partition index, line number — then a
+   1px vertical rule running the full height of the data, then the
+   payload. The rule is coloured by environment, so prod is visible in
+   every data view in the app without a single banner.
+   The rule is ALWAYS present, even when the gutter is empty.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.ledger-gutter {
+  width: var(--gutter-w);
+  min-width: var(--gutter-w);
+  padding-right: var(--s-5);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+}
+
+/* Tables whose rows have no address of their own (topics, groups, ACLs,
+   connectors, subjects): --gutter-w is 0 and the rule sits flush at the
+   table's left edge. It is still the app's constant. */
+.data-table-flush th:first-child,
+.data-table-flush td:first-child {
+  border-left: 1px solid var(--rule);
+  padding-left: var(--s-5);
+}
+
+/* Collapse rule: below 1100px of AVAILABLE TABLE WIDTH the gutter folds to
+   zero and the address becomes a normal first column. The trigger is the
+   table's own container, not the viewport — the rail, the inspector dock
+   and a split view all steal width without the window changing size, and a
+   viewport query cannot see any of them. */
+.table-wrap {
+  container-type: inline-size;
+  container-name: ledger;
+}
+
+@container ledger (max-width: 1100px) {
+  .data-table { --gutter-w: 0px; }
+  .ledger-gutter { padding-right: var(--s-5); padding-left: var(--s-3); }
+}
+
+/* Safari 15.6 (macOS 12, the same floor that rules out color-mix()) has no
+   container queries. Fall back to the viewport there — less accurate, but
+   the signature element still never breaks the layout. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 1100px) {
+    :root { --gutter-w: 0px; }
+    .ledger-gutter { padding-right: var(--s-5); padding-left: var(--s-3); }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   TABLES — the load-bearing component
+   No card, no radius, no outer border, no shadow, no zebra, no row
+   separators. Leading alone separates rows; the gutter rule anchors
+   the eye.
+
+   PERFORMANCE CONTRACT (law 3) — nothing below tbody may carry
+   box-shadow, filter, backdrop-filter, transition, border-radius or
+   transform. At 10k rows a 120ms hover transition is visible jank.
+   `contain` is feature-detected; degrade to plain virtualization.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.table-wrap { position: relative; }
+
+.table-scroll {
+  overflow: auto;
+  /* 2px so a focus ring on an edge row is not clipped by the scroll well */
+  padding: 2px 0;
+}
+
+@supports (contain: strict) {
+  .table-scroll { contain: strict; }
+}
+
+.data-table {
+  width: 100%;
+  /* separate + 0 spacing: sticky headers keep their border, which
+     border-collapse:collapse drops in WebKit. */
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--t-base);
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--row-h-head);
+  padding: 0 var(--s-5);
+  text-align: left;
+  /* opaque, so rows never ghost through the header */
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--hairline-strong);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.data-table td {
+  height: var(--row-h);
+  padding: 0 var(--s-5);
+  user-select: text;
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+
+.data-table tbody tr:hover td { background: var(--bg-row-hover); }
+
+.data-table tbody tr:hover .ledger-gutter { background: var(--bg-row-hover); }
+
+.data-table tbody tr.row-selected td { background: var(--bg-row-selected); }
+
+.data-table tbody tr.row-selected .ledger-gutter {
+  border-right: 2px solid var(--accent);
+}
+
+/* Alignment law: identifiers left + mono; quantities right + sans +
+   tabular-nums; timestamps left + mono. Mono column widths are ch-based
+   so nothing reflows as data streams in.
+
+   `.data-table th` sets `text-align: left` at specificity (0,1,1); a bare
+   `.col-num` is (0,1,0) and lost, so every numeric COLUMN HEAD sat left
+   above a right-aligned column. Both selectors are qualified so the two
+   halves of a column can never disagree again. */
+.data-table th.col-num,
+.data-table td.col-num,
+.col-num {
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+
+.data-table th.ledger-gutter,
+.data-table td.ledger-gutter { text-align: right; }
+
+.cell-num {
+  text-align: right;
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-primary);
+}
+
+/* --font-mono + --text-mono = a literal that came out of Kafka and could
+   be pasted into a kafka-topics.sh command. Never mono for a count. */
+.cell-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-mono);
+}
+
+.cell-empty {
+  color: var(--text-secondary);
+  padding: var(--s-7) var(--s-5);
+  height: auto;
+  line-height: var(--lh-prose);
+}
+
+/* Internal topics: dimmed, never hidden, so nobody wonders where they went. */
+.row-internal td { color: var(--text-tertiary); }
+.row-internal .cell-mono { color: var(--text-tertiary); }
+
+/* An inline word that says WHY a row is dimmed, so the row explains itself
+   without a hover. Sans, because it is Kavka talking, not a Kafka literal. */
+.cell-tag {
+  font-family: var(--font-ui);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* null / absent → ∅, never the word "null". Meaningful, so it clears 3:1
+   on every row state including hover, selected and prod. */
+.absent {
+  color: var(--text-absent);
+  font-family: var(--font-mono);
+}
+
+/* Loading: never a spinner over data. A 2px indeterminate bar slides along
+   the bottom edge of the header row; existing rows stay readable. */
+.table-loading {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.table-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: var(--accent);
+  animation: slide 1.1s var(--ease) infinite;
+}
+
+/* Pinned to the bottom edge of the sticky header row, so existing rows
+   stay readable and interactive while the fetch is in flight. */
+.table-wrap > .table-loading {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--row-h-head) - 1px);
+  z-index: 2;
+}
+
+@keyframes slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(430%); }
+}
+
+/* Skeleton rows only where the layout is known. No shimmer — paint cost,
+   no benefit. */
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--rule);
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+  height: var(--row-h);
+  padding: 0 var(--s-5);
+}
+
+.skeleton-cell {
+  height: 8px;
+  border-radius: var(--r-control);
+  background: var(--skeleton);
+}
+
+.table-note {
+  /* margin:0 — this is a <p> inside a flex panel that owns its own gap. */
+  margin: 0;
+  padding: var(--s-5) var(--s-5) var(--s-5) var(--s-5);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+/* ── Health · lag — law 2 in its most load-bearing form ─────────────── */
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  white-space: nowrap;
+}
+
+.health .dot {
+  width: 7px; height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.health-ok     { color: var(--ok); }
+.health-warn   { color: var(--warn); }
+.health-danger { color: var(--danger); }
+
+/* Lag: number, then a 40x3 track, then a trend arrow. Three channels, so
+   colour-blind users get length and direction. Status-adjacency law:
+   --accent may not appear in a column adjacent to health or lag, and lag
+   fills use --ok/--warn/--danger only. */
+.lag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  justify-content: flex-end;
+}
+
+.lag-track {
+  width: 40px; height: 3px;
+  flex-shrink: 0;
+  background: var(--track-empty);
+}
+
+/* A non-zero lag must never round down to zero pixels: at 40px wide,
+   anything under 2.5% of the threshold vanished and the meter read
+   "caught up" for a topic that is not. */
+.lag-fill { height: 100%; min-width: 2px; background: var(--ok); }
+.lag-warn   .lag-fill { background: var(--warn); }
+.lag-danger .lag-fill { background: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PANELS + STATS — Kavka ships zero cards. Grouping is whitespace plus a
+   top hairline; emphasis is type weight plus one of five text lightnesses.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.panel-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.panel-count {
+  font-size: var(--t-sm);
+  font-weight: var(--w-normal);
+  color: var(--text-tertiary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  flex-shrink: 0;
+}
+
+/* Stat blocks: no border, no background, no radius. Siblings separated by
+   40px, floating on the canvas. */
+.stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6) var(--s-10);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.stat-value {
+  font-size: var(--t-display);
+  line-height: var(--lh-display);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+  user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A cluster id is a literal from Kafka, not a quantity Kavka computed. */
+.stat-value-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-md);
+  line-height: var(--lh-display);
+  font-weight: var(--w-normal);
+  letter-spacing: 0;
+  color: var(--text-mono);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BUTTONS
+   All --control-h, --r-control, --t-sm, sentence case, no transform on
+   press. Exactly one primary per surface.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  height: var(--control-h);
+  min-height: var(--hit-min);
+  padding: 0 var(--s-5);
+  /* A button's boundary is the only thing that says "this is operable"
+     when the fill is transparent, so SC 1.4.11 applies: --border-control
+     (3.17:1 worst) and never --hairline-strong (1.18:1 worst). */
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) { background: var(--bg-row-hover); }
+
+/* Disabled controls always carry a title explaining why. Never a dead
+   control with no reason. */
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+.btn-primary {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--text-inverse);
+  font-weight: var(--w-medium);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--fill-primary-hover);
+  border-color: var(--fill-primary-hover);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) { color: var(--text-primary); }
+
+/* Danger OUTLINE only ever *opens* a confirmation. The border is the
+   component boundary, so it is opaque and precomputed: the old
+   rgba(...,.45) composited to 2.20:1 against the canvas. */
+.btn-danger {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) { background: var(--danger-tint); }
+
+/* Danger FILL only ever exists one click away from the action happening,
+   and only inside a modal or an inline confirmation. */
+.btn-danger-confirm {
+  background: var(--danger-fill);
+  border-color: var(--danger-fill);
+  color: var(--on-danger-fill);
+  font-weight: var(--w-medium);
+}
+
+.btn-danger-confirm:hover:not(:disabled) {
+  background: var(--danger-fill-hover);
+  border-color: var(--danger-fill-hover);
+}
+
+/* A latched toggle is a physical switch, not a link — it must read as ON
+   across the room. */
+.btn-latched,
+.btn-latched:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Loading keeps the label and reserves a fixed 16px leading slot, so the
+   button never resizes mid-click and shifts everything after it. */
+.btn-busy-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+.spinner {
+  width: 11px; height: 11px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: spin 620ms linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CHIPS · kbd
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The chip carries the environment's NAME as the user typed it. Uppercased
+   here rather than in the DOM, so the word stays readable to anyone reading
+   the markup or pasting it into a bug report.
+
+   Unprotected is a TAG: colour is identity and nothing else. */
+.env-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-pill);
+  color: var(--env-ink);
+  background: var(--env-tint);
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+/* PROTECTED environments are the only FILLED chips, so they read as a
+   badge and not a tag — the treatment prod had, re-keyed onto the flag.
+   The chip carries its own [data-env-color] / [data-env-protected], which
+   is why a sidebar full of different environments paints correctly under
+   one app-level colour: the nearest declaration wins. The substrate tokens
+   the protected block also sets are inert here — a chip paints from the
+   four --env-* tokens and nothing else. */
+.env-chip[data-env-protected="true"] {
+  color: var(--env-badge-ink);
+  background: var(--env-badge-fill);
+}
+
+/* Sentence case: "read-only" is a phrase Kavka says to you, not a system
+   token like PROD. Uppercase micro-caps survive only on env chips, table
+   column heads, stat labels and section eyebrows. */
+.readonly-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 18px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-medium);
+}
+
+/* Filter chips use --r-control, NOT a pill: pills read immutable, filters
+   are editable. */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 20px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+  font-size: var(--t-sm);
+}
+
+.filter-chip-field { color: var(--text-tertiary); }
+.filter-chip-value { font-family: var(--font-mono); color: var(--text-primary); }
+.filter-chip-invalid { border: 1px solid var(--danger); }
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORMS
+   Labels are sentence case. All-caps labels read as system output;
+   sentence case reads as someone talking to you. Uppercase micro-caps
+   survive only on table column headers, stat labels and section eyebrows.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.editor {
+  max-width: var(--measure);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+}
+
+.view-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.view-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+}
+
+.view-title-id {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.view-title {
+  margin: 0;
+  font-size: var(--t-lg);
+  line-height: var(--lh-lg);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-subtitle {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+.view-address {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.field-label {
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+}
+
+.field-hint {
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+  max-width: var(--measure);
+}
+
+.field-hint code { color: var(--text-secondary); }
+
+.field-error {
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--danger);
+}
+
+/* The sunken fill is only 1.13:1 against the canvas, so --border-control
+   is the only thing satisfying SC 1.4.11 here. Do not remove it. */
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  min-height: var(--control-h-lg);
+  padding: var(--s-3) 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  outline: none;
+}
+
+select { height: var(--control-h-lg); }
+
+/* Machine data is mono; prose (a connection name) is sans. */
+.input-mono,
+textarea {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+}
+
+textarea { resize: vertical; }
+
+input:focus,
+textarea:focus,
+select:focus { border-color: var(--accent); }
+
+/* A placeholder is text a sighted user is expected to READ (it carries the
+   example format), so it takes --text-placeholder at 4.5:1 — not
+   --text-disabled, which is 3.53:1 on a raised surface and exists only to
+   say "this control is off". */
+input::placeholder,
+textarea::placeholder { color: var(--text-placeholder); opacity: 1; }
+
+input:disabled,
+textarea:disabled,
+select:disabled { color: var(--text-disabled); cursor: default; }
+
+select option:disabled { color: var(--text-disabled); }
+
+.input-invalid,
+.input-invalid:focus { border-color: var(--danger); }
+
+/* Fieldsets lose their borders entirely: a fieldset is a micro eyebrow
+   plus 12px of space. <fieldset>/<legend> semantics are kept. */
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fieldset > legend {
+  padding: 0;
+  margin-bottom: var(--s-5);
+}
+
+/* 18px box (up from 14px, which fails SC 2.5.8) in a 18px/1fr grid with
+   the hint in row 2 / column 2. This deletes the .field-hint-indent hack. */
+.check-field {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+}
+
+.check-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check-field .check-label {
+  font-size: var(--t-base);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.check-field .field-hint {
+  grid-column: 2;
+}
+
+/* Inline checkbox for toolbars — same 18px target, no hint row. */
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: fit-content;
+  min-height: var(--hit-min);
+}
+
+.check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* The environment picker. It WAS a fixed three-segment control; it is a
+   wrapping row of chips now, because the members are whatever the user
+   defined and a segmented control with nine segments is a horizontal
+   scrollbar in a form. Picking a PROTECTED environment swaps the substrate
+   of everything the form governs, live — still the single best moment in
+   the product to teach the guardrail.
+
+   NO overflow:hidden anywhere in here. The focus ring is drawn OUTSIDE the
+   box (outline-offset 2px), so any ancestor clip eats it. Same reasoning
+   applies anywhere a rounded shell wraps focusable children (see
+   .palette). */
+.env-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-5);
+}
+
+.env-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.env-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--hit-min);
+  height: var(--control-h);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.env-option:hover { background: var(--bg-row-hover); }
+
+/* Law 2: the chosen segment is not chosen BY COLOUR. It carries a glyph
+   and a heavier weight as well, and `aria-checked` says it out loud. */
+.env-option-check { font-weight: var(--w-bold); }
+
+/* The label ends in an ellipsis and must not wrap into two lines beside a
+   picker that already wraps. */
+.env-manage-btn { white-space: nowrap; }
+
+.env-option-active,
+.env-option-active:hover {
+  background: var(--env-tint);
+  color: var(--env-ink);
+  font-weight: var(--w-medium);
+}
+
+/* The active segment of a PROTECTED environment is filled, exactly like
+   its chip — so the form previews what the sidebar will show. */
+.env-option-active[data-env-protected="true"],
+.env-option-active[data-env-protected="true"]:hover {
+  background: var(--env-badge-fill);
+  color: var(--env-badge-ink);
+}
+
+/* ── The environments manager ──────────────────────────────────────────
+   A dialog, not a page: it is reached from the connection form and its
+   whole job is to answer "what environments are there" before you pick
+   one. Everything here is the modal vocabulary already in this sheet. */
+
+.env-list {
+  margin: var(--s-6) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+}
+
+.env-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  min-height: var(--hit-min);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.env-list-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.env-list-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--s-4);
+}
+
+.env-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A swatch renders as the chip WOULD render — tag when the draft is
+   unprotected, filled badge when it is — so the grid is a live preview of
+   the decision rather than a palette of abstract colours. */
+.env-swatch {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--hit-min);
+  height: var(--control-h);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  background: var(--env-tint);
+  color: var(--env-ink);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.env-swatch[data-env-protected="true"] {
+  background: var(--env-badge-fill);
+  color: var(--env-badge-ink);
+}
+
+/* Selection is a near-white ring (15.55:1), not a hue: a swatch grid whose
+   chosen member is identified by colour is unusable in exactly the grid
+   where colour is the subject. */
+.env-swatch-active {
+  box-shadow: inset 0 0 0 2px var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-5);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+.editor-actions-left,
+.editor-actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.confirm-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.confirm-text {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  max-width: 40ch;
+  line-height: var(--lh-prose);
+}
+
+.editor-kbd-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   GLOSSARY TERM — teaching without documentation
+   Dotted underline, popover on hover AND focus, aria-describedby.
+   Hard cap: 15 terms in a shared registry, one gloss per term per view.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The gloss is a sibling, not a child: nested, it would be swallowed into
+   the term's accessible name instead of its description. */
+.term-wrap { display: inline-block; }
+
+.term {
+  border-bottom: 1px dotted var(--text-disabled);
+  cursor: help;
+}
+
+/* THE POPOVER IS PORTALLED TO <body> AND POSITIONED FIXED.
+   It used to be position:absolute inside .term-wrap, which put it inside
+   whatever the nearest scrollport or clipping ancestor happened to be. Two
+   of its three real call sites are inside a table header: `position: sticky`
+   plus the table's `overflow: auto` scrollport clipped the gloss to a 28px
+   header strip, so the one component whose entire job is teaching a novice
+   was the one component they could not read. `container-type: inline-size`
+   on .table-wrap would also have made it a containing block.
+   Glossary.tsx measures the term with getBoundingClientRect() and writes
+   top/left inline; this rule owns everything else. */
+.term-pop {
+  position: fixed;
+  z-index: 40;
+  width: 260px;
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-popover);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  font-weight: var(--w-normal);
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  pointer-events: none;
+  /* Kept mounted, not unmounted: an aria-describedby target that only
+     exists while hovered is a description a screen reader never resolves.
+     Hidden nodes ARE included in the accessible description when they are
+     referenced directly, so visibility:hidden is both correct and quiet. */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease),
+              visibility var(--dur-fast) var(--ease);
+}
+
+/* `pointer-events: auto` ONLY while it is open — SC 1.4.13's "hoverable"
+   clause needs the pointer to be able to rest on the gloss without it
+   vanishing, and a `pointer-events: none` box is one the pointer can never
+   be over. Closed, it stays inert, so a hidden 260px panel can never eat a
+   click on the table row underneath it. Glossary.tsx owns the grace timer
+   that carries the pointer across the 6px gap. */
+.term-pop-open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BANNERS · TOASTS · MODALS — the three-surface rule
+   Toast = something you did, finished. Banner = a condition you are in.
+   Modal = something irreversible needs your consent.
+   An error the user must act on is NEVER a toast.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  padding: var(--s-4) var(--s-8) var(--s-4) var(--s-6);
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  border-left: 2px solid transparent;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.banner-danger {
+  background: var(--danger-tint);
+  border-top-color: rgba(229, 120, 107, 0.3);
+  border-bottom-color: rgba(229, 120, 107, 0.3);
+  border-left-color: var(--danger);
+}
+
+.banner-warn {
+  background: var(--warn-tint);
+  border-top-color: rgba(217, 164, 65, 0.3);
+  border-bottom-color: rgba(217, 164, 65, 0.3);
+  border-left-color: var(--warn);
+}
+
+.banner-info {
+  background: var(--bg-raised);
+  border-top-color: var(--hairline);
+  border-bottom-color: var(--hairline);
+  border-left-color: var(--accent-quiet);
+}
+
+/* Protected de-collision: on a protected cluster a danger banner drops its
+   red tint for a neutral shell with a --danger left bar. Otherwise the
+   warm substrate plus a coral banner is an undifferentiated red wash and
+   BOTH signals die. */
+[data-env-protected="true"] .banner-danger {
+  background: var(--bg-raised);
+  border-top-color: var(--hairline-strong);
+  border-bottom-color: var(--hairline-strong);
+  border-left-color: var(--danger);
+}
+
+/* ...and the env rule dampens while a danger banner is up, so the banner is
+   the only red thing on screen.
+
+   THE DAMPER MOVES CHROMA, NOT LIGHTNESS. The undampened red rule is
+   already only 3.09:1 on a selected protected row, so there is no darker
+   coral left: the previous #6E3A33 measured 1.83:1 there and 2.09:1 on the
+   canvas, i.e. the most load-bearing guardrail switched itself off exactly
+   when an error was on screen. #9C8079 is the same rule at a third of the
+   chroma (spread 35 vs the coral's 96) and MORE luminance contrast, not
+   less: 5.22 canvas · 5.43 sunken · 4.90 raised · 4.83 row-hover · 4.61
+   row-selected · 4.55 on a selected protected sidebar row, which is its
+   worst. It reads as "muted", never as "gone".
+
+   ONE DAMPER FOR EVERY IDENTITY COLOUR, and it keys on PROTECTION rather
+   than on the colour that collides. That is deliberate: the figures above
+   are measured on the warm protected surfaces, which is where a dampened
+   rule ever renders, and a neutral warm grey reads as "muted" behind a
+   coral banner whatever hue it replaced. Seven damped variants would be
+   seven more tokens to sweep for one composition nobody can tell apart. */
+/* Also matches protected-scoped descendants (the profile editor form sets
+   its own attributes, which would otherwise re-declare --rule over the
+   damper). */
+[data-env-protected="true"][data-alert="danger"],
+[data-alert="danger"] [data-env-protected="true"] { --rule: #9C8079; }
+
+.banner-glyph {
+  flex-shrink: 0;
+  font-weight: var(--w-bold);
+  line-height: var(--lh-base);
+}
+
+.banner-danger .banner-glyph { color: var(--danger); }
+.banner-warn .banner-glyph { color: var(--warn); }
+.banner-info .banner-glyph { color: var(--accent); }
+
+.banner-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Line 1: what happened. */
+.banner-title {
+  margin: 0;
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  user-select: text;
+  word-break: break-word;
+}
+
+/* Line 2: what to do. Capped at --measure. */
+.banner-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+}
+
+.banner-details {
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+}
+
+/* A `<summary>` is a target, and one line of --t-sm prose is 18.6px tall —
+   under SC 2.5.8's 24px floor. `min-height` on a list-item box is the whole
+   fix and keeps the disclosure marker, which changing `display` would eat. */
+.banner-details > summary,
+.sql-surface > summary,
+.chart-table > summary {
+  min-height: var(--hit-min);
+}
+
+.banner-details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  width: fit-content;
+  border-radius: var(--r-control);
+}
+
+/* The raw broker string, verbatim and selectable. */
+.banner-raw {
+  margin: var(--s-3) 0 0;
+  padding: var(--s-4);
+  background: var(--bg-sunken);
+  border-radius: var(--r-control);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+
+/* Toast — bottom-right, 24px inset, 320px, 4px left rule in the semantic
+   colour (the ledger rule at toast scale). Success auto-dismisses at 5s;
+   errors and warnings never do. */
+.toast-stack {
+  position: fixed;
+  right: var(--s-8);
+  bottom: var(--s-8);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.toast {
+  width: 320px;
+  padding: var(--s-5);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  animation: toast-in var(--dur-base) var(--ease-settle);
+}
+
+.toast-ok     { border-left-color: var(--ok); }
+.toast-warn   { border-left-color: var(--warn); }
+.toast-danger { border-left-color: var(--danger); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal — scrim with NO backdrop blur (a measurable WebView2 cost, and
+   the tell of a templated design). Focus trap; initial focus on Cancel;
+   Esc always cancels. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  background: var(--bg-scrim);
+}
+
+.modal {
+  width: 440px;
+  max-width: calc(100vw - var(--s-10));
+  padding: var(--s-7);
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-overlay);
+}
+
+.modal-wide { width: 560px; }
+
+/* Destructive modals get the same 2px wire as the prod bar, so the two
+   guardrails rhyme. */
+.modal-destructive { border-top: 2px solid var(--danger-fill); }
+
+.modal-title {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+}
+
+.modal-body {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE — the only element with real elevation, and one of only
+   two using --ease-settle. ⌘K is the real navigation; the sidebar is not.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Same trap as .env-picker: overflow:hidden here clipped the focus ring off
+   .palette-input, which is the one control in the palette. The children
+   carry the shell's radius instead. */
+.palette {
+  width: var(--palette-w);
+  max-width: calc(100vw - var(--s-10));
+  border-radius: var(--r-overlay);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-overlay);
+  animation: toast-in var(--dur-base) var(--ease-settle);
+}
+
+.palette-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--s-6);
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: var(--r-overlay) var(--r-overlay) 0 0;
+  background: transparent;
+  font-size: var(--t-md);
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: 36px;
+  padding: 0 var(--s-6);
+  cursor: pointer;
+}
+
+.palette-row:last-child {
+  border-bottom-left-radius: var(--r-overlay);
+  border-bottom-right-radius: var(--r-overlay);
+}
+
+/* Identical to table selection, so the pattern is learned once. */
+.palette-row-active {
+  background: var(--bg-row-selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-context { color: var(--text-tertiary); }
+.palette-row-danger .palette-context { color: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PAYLOAD INSPECTOR + DIFF — the ledger device at document scale
+   ══════════════════════════════════════════════════════════════════════ */
+
+.inspector {
+  width: var(--inspector-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--hairline-strong);
+  background: var(--bg-canvas);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  height: 36px;
+  padding: 0 var(--s-5);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+/* The tabs' panel. It exists so `aria-controls` has one stable target for
+   all four tabs, and it has to be transparent to the layout: it takes the
+   column's remaining height and passes it straight to the body, so the
+   payload still scrolls in its own well and the foot stays pinned. */
+.inspector-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.inspector-body {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+  user-select: text;
+}
+
+.code-line { display: flex; }
+
+.code-gutter {
+  width: var(--gutter-w-code);
+  min-width: var(--gutter-w-code);
+  padding-right: var(--s-4);
+  text-align: right;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+  user-select: none;
+}
+
+.code-text { padding-left: var(--s-5); white-space: pre-wrap; }
+
+.syn-key    { color: var(--syn-key); }
+.syn-string { color: var(--syn-string); }
+.syn-number { color: var(--syn-number); }
+.syn-atom   { color: var(--syn-atom); }
+.syn-punct  { color: var(--syn-punct); }
+
+/* A search hit must not be colour-only: background PLUS a 2px underline. */
+.syn-match {
+  background: var(--syn-match);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.collapsed-summary { color: var(--text-absent); }
+
+/* One diff component serves payload diff, config diff-from-default and
+   schema version diff. Build it once. */
+.diff-add { background: var(--ok-tint); }
+.diff-del { background: var(--danger-tint); }
+.diff-add .code-gutter { color: var(--ok); }
+.diff-del .code-gutter { color: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SEARCH BAR — plain text by default, CEL one keystroke away behind ƒx
+   ══════════════════════════════════════════════════════════════════════ */
+
+.searchbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  height: var(--control-h-lg);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-popover);
+  background: var(--bg-sunken);
+}
+
+.searchbar-input {
+  flex: 1;
+  min-height: auto;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.searchbar-input:focus { border: none; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CHARTS
+   1px strokes, no gradient fills, no chart junk, no shadows. Series must
+   be direct-labelled or dash-patterned — a 6-series chart identified by
+   hue alone fails SC 1.4.1 for deuteranopes.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.chart-grid  { stroke: var(--grid-line); stroke-width: 1; }
+.chart-axis  { font-size: var(--t-micro); fill: var(--text-tertiary); }
+.chart-s1 { stroke: var(--series-1); } .chart-s2 { stroke: var(--series-2); }
+.chart-s3 { stroke: var(--series-3); } .chart-s4 { stroke: var(--series-4); }
+.chart-s5 { stroke: var(--series-5); } .chart-s6 { stroke: var(--series-6); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CONNECTION LADDER — the highest-leverage novice component
+   A streaming checklist localizes the failure before the user has to
+   interpret prose.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.ladder {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  border-left: 1px solid var(--rule);
+}
+
+.ladder-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  height: var(--row-h);
+  padding: 0 var(--s-5);
+  color: var(--text-tertiary);
+}
+
+.ladder-step-glyph { width: 12px; flex-shrink: 0; text-align: center; }
+.ladder-step-label { flex: 1; min-width: 0; }
+.ladder-step-note { color: var(--text-tertiary); }
+.ladder-ok     { color: var(--text-secondary); }
+.ladder-ok     .ladder-step-glyph { color: var(--ok); }
+.ladder-fail   { color: var(--text-primary); }
+.ladder-fail   .ladder-step-glyph { color: var(--danger); }
+.ladder-fail   .ladder-step-note { color: var(--danger); }
+.ladder-skip   .ladder-step-glyph { color: var(--text-absent); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   EMPTY STATES
+   One sentence naming the situation, one naming the action, at most one
+   primary action. Centred block, left-aligned text inside it. No
+   illustrations, no shrug emoji.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.empty-state {
+  min-height: 100%;
+  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  padding: var(--s-9) 0;
 }
 
-.hint {
-  opacity: 0.6;
-  font-size: 0.85rem;
+.empty-block {
+  width: 100%;
+  max-width: 52ch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  text-align: left;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: var(--t-xl);
+  line-height: var(--lh-xl);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+}
+
+.empty-hint {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* No user-select opt-in here — `code` is selectable at the base rule. */
+.empty-hint code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-top: var(--s-2);
+}
+
+.empty-footnote {
+  margin: 0;
+  max-width: 44ch;
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   CLUSTER VIEW
+   ══════════════════════════════════════════════════════════════════════ */
+
+.cluster-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  max-width: 1040px;
+}
+
+/* Read-only mode: mutating controls are disabled, never hidden — hiding
+   creates the "where did the button go" ticket. But a dead control with
+   no reason reads as a broken app, so the toolbar carries the sentence. */
+.readonly-note {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS / WINDOWS HIGH CONTRAST
+   Windows HC drops our tints. The prod guardrail must NOT depend on hue,
+   so the wire thickens and gains the literal word.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Any label at all, not the literal "PROD": the attribute is only ever
+     set on a PROTECTED environment (see `envWireLabel`), and the word it
+     prints is that environment's own name, uppercased — `PROD`,
+     `PRODUCTION`, `UAT`. Matching the value would have been a name check
+     in a stylesheet, which is the exact bug this migration removes. */
+  .app-wire[data-env-label] {
+    height: auto;
+    min-height: 4px;
+    background: Mark;
+    color: MarkText;
+    text-align: center;
+    font-size: var(--t-micro);
+    font-weight: var(--w-bold);
+    letter-spacing: var(--track-eyebrow);
+  }
+
+  .app-wire[data-env-label]::after { content: attr(data-env-label); }
+
+  /* There is deliberately NO `* { border-color: CanvasText }` here.
+     Forced-colors mode already preserves `transparent` and repaints every
+     other border with a system colour, so the blanket rule did nothing for
+     real borders and destroyed every indicator built on a transparent one:
+     it painted the idle state of the sidebar row, the tab strip, the banner
+     shell and the ghost button in the SAME colour as their active state, so
+     in Windows high contrast every row read as selected and every tab as
+     current. Indicators are restated POSITIVELY below instead — a distinct
+     system colour per meaning, which is also the only way two indicators
+     stacked on one element (prod AND selected) stay tellable apart. */
+
+  /* Selection — the same system colour the OS uses for selection. */
+  .profile-row-selected,
+  .profile-row-selected:hover { border-left-color: Highlight; }
+  .data-table tbody tr.row-selected .ledger-gutter { border-right-color: Highlight; }
+  .palette-row-active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .tab-active { border-bottom-color: Highlight; }
+
+  /* Protected — Mark, the same colour the wire above uses, so the guardrail
+     reads as one signal. Wins over Highlight when a protected row is
+     selected, because the environment matters more than the selection. */
+  .profile-row-protected,
+  .profile-row-protected:hover,
+  .profile-row-protected.profile-row-selected { border-left-color: Mark; }
+
+  /* Severity — a banner is a condition you are in, so its shell must not
+     vanish into the canvas. */
+  .banner {
+    border-top-color: CanvasText;
+    border-bottom-color: CanvasText;
+    border-left-color: CanvasText;
+  }
+  .banner-danger,
+  .toast-danger { border-left-color: Mark; }
+  .modal-destructive { border-top-color: Mark; }
+
+  /* The latched toggle is a switch: it has to read as ON across the room. */
+  .btn-latched { outline: 2px solid Highlight; outline-offset: -3px; }
+
+  /* Forced colors flattens every fill, so the badge and the tag would be
+     the same shape. The border restores the "this one is filled" reading
+     for the chips that carry the guardrail. */
+  .env-chip[data-env-protected="true"],
+  .btn-danger-confirm { border: 1px solid CanvasText; }
+
+  /* The manager's swatches are colour by definition, and colour is what
+     forced-colors takes away. The selected one keeps its outline so the
+     radio group still says which is chosen — the WORD inside each swatch
+     is what carries the identity here, exactly as Law 2 requires. */
+  .env-swatch-active { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LIGHT — SPECCED AND AUDITED, NOT SHIPPED
+   Every text token clears AA on all six light surfaces; --border-control
+   clears 3:1 on all six. Do NOT expose a user toggle until every
+   component composition has been verified in it (Phase 6).
+   ══════════════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-rail: #F2F4F6;  --bg-canvas: #FBFCFD;  --bg-raised: #FFFFFF;
+  --bg-sunken: #F5F7F9; --bg-row-hover: #F1F4F7; --bg-row-selected: #E8F4F1;
+  --bg-row-prod-hover: #F7E2DF;  --bg-row-prod-selected: #F2D8D4;
+  --bg-scrim: rgba(16, 21, 25, 0.30);
+  --selection: rgba(10, 117, 101, 0.20);
+  --skeleton: #DDE2E7;
+  --text-primary: #10151A;    /* 17.87:1 */
+  --text-secondary: #3E4A57;  /*  8.80:1 */
+  --text-tertiary: #5C6875;   /*  5.54:1 */
+  --text-disabled: #7D8794;   /* :disabled only                          */
+  --text-placeholder: #646E7B;/*  4.59:1 worst (selected row)             */
+  --text-absent: #646E7B;     /*  4.59:1 worst (selected row) — same
+                                 reasoning as dark: one floor, two roles  */
+  --text-mono: #1A222B;  --text-inverse: #FFFFFF;
+  --hairline: #E4E8EC;  --hairline-strong: #D3D9DF;
+  --border-control: #767F8C;  /* 3.94 canvas / 4.05 raised / 3.77 sunken */
+  --accent: #0A7565;  --accent-quiet: #0A7565;  --accent-tint: #E4F2EF;
+  --focus: #0A7565;
+  --fill-primary-hover: #000000;
+  --ok: #0B7A52;  --warn: #8A5A08;  --danger: #B3392A;  --danger-fill: #9E2E22;
+  --danger-fill-hover: #8A281D;  --on-danger-fill: #FFFFFF;
+  --danger-border: #B9564A;   /*  4.07:1 worst (danger tint)              */
+  --ok-tint: #E9F5EF;  --warn-tint: #FAF1DE;  --danger-tint: #FBECEA;
+  --track-empty: #C9D0D6;     /* fills clear 3.44–3.81:1 against it       */
+  --rule: #D3D9DF;
+  --env-ink: #4A555F;  --env-tint: #EDF0F3;   /* 6.66:1                   */
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  /* 7.62:1        */
+  --syn-key: #3F5266;  --syn-string: #136B45;  --syn-number: #7A4E06;
+  --syn-atom: #5B3FC4; --syn-punct: #5C6875;   --syn-match: #E3EEF6;
+  --shadow-popover: 0 6px 20px -6px rgba(16, 21, 25, 0.18),
+                    0 0 0 1px var(--hairline-strong);
+  --shadow-overlay: 0 20px 56px -16px rgba(16, 21, 25, 0.22),
+                    0 0 0 1px var(--hairline-strong);
+}
+
+/* The seven identity tokens in light. Each dark ink is far too light on a
+   white surface, so light inverts the pair: a dark hue on a pale wash for
+   the tag, white on the same dark hue for the badge. Two values per token
+   instead of four, which is also why they fit on one line each.
+
+   Ink-on-tint / white-on-dark, measured: green 5.82 / 6.67 · amber 5.27 /
+   5.92 · red 5.17 / 7.32 · blue 6.65 / 7.75 · violet 5.97 / 7.11 ·
+   cyan 6.25 / 7.24 · slate 6.66 / 7.62. Red is the tightest ink-on-tint of
+   the seven — #B3392A on #FBECEA, the --danger pair reused so the light
+   theme has one red — and still clears AA. The rule is the same dark hue and
+   clears ≥4.38:1 on all eight light surfaces, worst on a selected light
+   protected row — comfortably past the 3:1 graphics floor, because a light
+   theme has luminance to spare where the dark one does not. */
+[data-theme="light"] [data-env-color="green"] {
+  --env-ink: #0F6A3C;  --env-tint: #E4F3EA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F6A3C;  --rule: #0F6A3C;
+}
+[data-theme="light"] [data-env-color="amber"] {
+  --env-ink: #8A5A08;  --env-tint: #FAF1DE;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #8A5A08;  --rule: #8A5A08;
+}
+[data-theme="light"] [data-env-color="red"] {
+  --env-ink: #B3392A;  --env-tint: #FBECEA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #9E2E22;  --rule: #8E3A31;
+}
+[data-theme="light"] [data-env-color="blue"] {
+  --env-ink: #15558C;  --env-tint: #E5EFF8;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #15558C;  --rule: #15558C;
+}
+[data-theme="light"] [data-env-color="violet"] {
+  --env-ink: #5B3FC4;  --env-tint: #EDE9FA;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #5B3FC4;  --rule: #5B3FC4;
+}
+[data-theme="light"] [data-env-color="cyan"] {
+  --env-ink: #0F5F72;  --env-tint: #E2F1F5;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F5F72;  --rule: #0F5F72;
+}
+/* Slate keeps the light theme's own neutral rule: "no colour" is the
+   signal, exactly as in dark. */
+[data-theme="light"] [data-env-color="slate"] {
+  --env-ink: #4A555F;  --env-tint: #EDF0F3;
+  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  --rule: #D3D9DF;
+}
+
+[data-theme="light"] [data-env-protected="true"] { --env-wire: #9E2E22; }
+/* Light needs its own damper, or it inherits the dark one. Same rule:
+   chroma down, contrast kept (4.09:1 worst, on a selected row). */
+[data-theme="light"] [data-env-protected="true"][data-alert="danger"],
+[data-theme="light"] [data-alert="danger"] [data-env-protected="true"] {
+  --rule: #8A6F6A;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE — rows, and the two dialogs that hang off it
+   Additions only. Every rule below is a NEW selector: the palette shell,
+   the row, the modal and the banner already exist above and are reused
+   verbatim, because the palette's active row must stay pixel-identical to
+   a selected table row (§5.9) and a dialog must stay a modal (§5.8).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The ⌘K chip sits inside the input's box, so the wrapper is the
+   positioning context. No overflow here either — the input's focus ring is
+   drawn outside its box and any ancestor clip would eat it (see .palette). */
+.palette-inputwrap {
+  position: relative;
+  display: block;
+}
+
+.palette-inputwrap .palette-input {
+  /* Room for the chip, so a long query never runs underneath it. */
+  padding-right: 76px;
+}
+
+.palette-inputchip {
+  position: absolute;
+  top: 50%;
+  right: var(--s-6);
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-disabled);
+}
+
+.palette-list {
+  /* ~9 rows, then it scrolls. A palette taller than that is a menu. */
+  max-height: 324px;
+  overflow-y: auto;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.palette-glyph {
+  flex: 0 0 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.palette-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* Scoped so the shared .palette-context colour rule above still owns the
+   colour — this only adds the truncation the row layout needs. */
+.palette-row .palette-context {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+}
+
+/* Fixed slot on the right, so the ⏎ appearing on the active row can never
+   shove the label around as the selection moves. */
+.palette-kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Greyed, never removed — and the row carries the reason as its context
+   line, so the sentence is on screen and not only in the tooltip. */
+.palette-row-disabled,
+.palette-row-disabled .palette-label,
+.palette-row-disabled .palette-context {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.palette-empty {
+  margin: 0;
+  padding: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-6);
+  border-top: 1px solid var(--hairline);
+  border-bottom-left-radius: var(--r-overlay);
+  border-bottom-right-radius: var(--r-overlay);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.palette-foot-sep { color: var(--text-disabled); }
+
+/* ── The ⌘K hint in the status bar ─────────────────────────────────── */
+
+/* Operable, so --hit-min applies (SC 2.5.8) — which is exactly the height
+   of the bar, so it fills it rather than sitting inside it. */
+.statusbar-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--hit-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  cursor: pointer;
+}
+
+.statusbar-hint:hover { color: var(--text-secondary); }
+
+/* ── Sidebar footer: About beside the support link ─────────────────── */
+
+.sidebar-footer-links {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+/* The About control is a button (it opens a dialog, it is not a link), but
+   it has to read as the same quiet footer text as the link next to it. */
+button.support-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.footer-sep { color: var(--text-disabled); font-size: var(--t-sm); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   DIALOGS — About · Export/Import
+   Built entirely from the modal, tab, banner and form primitives above.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Tabs inside a raised surface: the .tabstrip shell paints --bg-canvas,
+   which is wrong on a modal, so only the .tab children are reused. */
+.modal-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-6);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* The app's tab-strip metric, because a bare .tab is only as tall as its
+   text — well under the 24px SC 2.5.8 floor. */
+.modal-tabs .tab { min-height: var(--tabstrip-h); }
+
+/* The import panel is the tallest thing Kavka puts in a modal, and the
+   window's minimum height is 600px: at 14vh from the top that leaves about
+   500px. It scrolls rather than running off the bottom of the window, where
+   Close and Import would be unreachable. Safe to clip here in a way a table
+   well is not: the modal's own 20px padding is five times what the focus
+   ring needs, so no ring is ever cut. */
+.modal-wide {
+  max-height: calc(86vh - var(--s-8));
+  overflow-y: auto;
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+/* A quiet aside under the body copy — the secrets promise, the loading
+   sentence, the fallback address. Never a control, never a warning. */
+.dialog-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.dialog-inline-action {
+  display: flex;
+  gap: var(--s-4);
+}
+
+/* The keyboard path, said out loud — ⏎ inside a textarea is a newline, so
+   the modifier has to be taught rather than guessed at. */
+.dialog-kbd-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* The JSON boxes. Mono comes from the base textarea rule; this only caps
+   the height and stops a long single line from widening the modal. */
+.io-json {
+  max-height: 40vh;
+  white-space: pre;
+  overflow: auto;
+}
+
+.io-strategy {
+  gap: var(--s-6);
+  margin-top: var(--s-1);
+}
+
+/* The base sheet styles checkboxes; radios need the same 18px target and
+   the same accent, or the two controls read as different families. */
+.check-field input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* An info banner inside a modal shares the modal's own --bg-raised fill,
+   so it would read as loose text with a stripe. Sunken gives it back the
+   edge that makes it a banner. */
+.modal .banner-info {
+  background: var(--bg-sunken);
+}
+
+.about-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: var(--s-6) 0 0;
+}
+
+.about-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+}
+
+.about-fact-label {
+  flex: 0 0 96px;
+  color: var(--text-tertiary);
+}
+
+.about-fact-value {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-top: var(--s-6);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the overlay additions
+   Same doctrine as the block above: restate indicators POSITIVELY, one
+   system colour per meaning. No blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* The palette and the dialogs are the only things with real elevation,
+     and forced colors drops the shadow that says so. A border is the only
+     way the surface stays tellable from the canvas behind it. */
+  .palette,
+  .modal { border: 1px solid CanvasText; }
+
+  /* Prod, and every danger context, uses Mark — matching the wire, so the
+     guardrail reads as one signal wherever it appears. */
+  .palette-row-danger .palette-context { color: Mark; }
+
+  /* GrayText is the one colour forced-colors guarantees reads as "off". */
+  .palette-row-disabled,
+  .palette-row-disabled .palette-label,
+  .palette-row-disabled .palette-context { color: GrayText; }
+
+  .banner-info { border-left-color: Highlight; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 1 — BROWSE
+   Additions only. Every rule below is a NEW selector: the table, the
+   ledger rule, the tab strip, the banner, the modal and the inspector
+   already exist above and are reused verbatim, because a message row must
+   stay pixel-identical to a broker row and a reset modal must stay a
+   modal (§5.2, §5.8, §5.10).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Specificity repair (additive) ────────────────────────────────────
+   `input[type="text"]` is (0,1,1) and sets the `border` SHORTHAND, so it
+   also sets border-color at (0,1,1) — which the (0,1,0) `.input-invalid`
+   and `input:focus` rules above could never beat. Restated here at equal
+   specificity and later in the cascade, with invalid AFTER focus so an
+   invalid control stays red while it has focus. Number and datetime-local
+   inputs join the same family: the seek bar and the reset modal are the
+   first surfaces to use them. */
+
+input[type="number"],
+input[type="datetime-local"] {
+  min-height: var(--control-h-lg);
+  padding: var(--s-3) 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="datetime-local"]:focus,
+textarea:focus,
+select:focus { border-color: var(--accent); }
+
+input.input-invalid,
+input.input-invalid:focus,
+textarea.input-invalid,
+select.input-invalid { border-color: var(--danger); }
+
+/* ── The cluster workspace ────────────────────────────────────────── */
+
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  min-height: 0;
+}
+
+/* The message browser owns the full height: its own scrollport, its own
+   status line and a docked inspector cannot live inside a page that
+   scrolls as a whole. */
+.cluster-view-full {
+  height: 100%;
+  max-width: none;
+  gap: var(--s-5);
+}
+
+.cluster-view-full .tabpanel {
+  flex: 1;
+  gap: var(--s-5);
+}
+
+/* A breadcrumb is a ghost button that has to sit on the type baseline of
+   the title it precedes, not float above it as a control. */
+/* `height: auto` put it at one 17px line box, which is under the 24px floor
+   in both directions that SC 2.5.8 asks for. The min-height restores the
+   target without moving the baseline — `.btn` is an inline-flex box that
+   centres its own line. */
+.crumb-btn {
+  height: auto;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-3) 0 0;
+  font-size: var(--t-sm);
+  font-weight: var(--w-normal);
+}
+
+/* A topic or group id is a literal that came out of Kafka. */
+.topic-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-md);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* ── Rows you can open ────────────────────────────────────────────── */
+
+.row-click { cursor: pointer; }
+
+.col-affordance {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Row affordance for novices: the whole row is clickable, and the last
+   column says so on hover. NO transition — law 3.
+
+   IT IS A REAL BUTTON, and that is an accessibility contract rather than a
+   style choice. A <tr> carrying tabIndex + Enter/Space has the implicit role
+   `row`, which tells assistive technology nothing about being operable — SC
+   4.1.2 wants a name AND a role, and "row" is the wrong one. The button
+   carries both; the row keeps its click for the pointer.
+
+   Which is why it is `opacity: 0` and not `visibility: hidden`: a hidden
+   element is not focusable, and the one control that names the row's action
+   has to be reachable by Tab. It paints itself the moment it takes focus, so
+   nothing is ever an invisible tab stop (SC 2.4.7). */
+.row-affordance {
+  height: 24px;
+  min-height: var(--hit-min);   /* SC 2.5.8 */
+  padding: 0 var(--s-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  /* SC 2.4.11: the table header is `position: sticky`, and the browser's
+     scroll-into-view does not know that — so tabbing down a long list
+     parked the control it had just focused UNDER 28px of opaque
+     --bg-canvas. The margin is the header's own height, so the row arrives
+     below it. */
+  scroll-margin-top: calc(var(--row-h-head) + 4px);
+  scroll-margin-bottom: 4px;
+}
+
+.data-table tbody tr:hover .row-affordance,
+.row-affordance:focus-visible { opacity: 1; }
+
+/* ── Partition + config detail ────────────────────────────────────── */
+
+/* An offset in a column is still a literal you could paste into a seek
+   command, so it stays mono — it only gains tabular figures so a column
+   of them lines up. A message COUNT beside it is sans: §4. */
+.cell-mono-num { font-variant-numeric: var(--nums-tabular); }
+
+/* The diff gutter carries + / −, not an address, so it is the narrow code
+   gutter rather than the 72px row gutter. The rule stays. */
+.data-table-sign th.ledger-gutter,
+.data-table-sign td.ledger-gutter {
+  width: var(--gutter-w-code);
+  min-width: var(--gutter-w-code);
+  padding-right: 0;
+  text-align: center;
+  color: var(--ok);
+}
+
+.config-source { white-space: nowrap; }
+
+/* ── Consumer groups ──────────────────────────────────────────────── */
+
+/* Every dot has a word, and every state has a sentence on hover AND focus
+   — which is why the chip is focusable. */
+.health-quiet { color: var(--text-tertiary); }
+
+.col-lag {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.lag-number {
+  min-width: 8ch;
+  text-align: right;
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-primary);
+}
+
+/* The third channel. Kavka has no lag history until Phase 4, so a trend
+   arrow would be invented — a word is honest, and survives greyscale. */
+.lag-word {
+  min-width: 9ch;
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.lag-warn   .lag-word { color: var(--warn); }
+.lag-danger .lag-word { color: var(--danger); }
+
+.member-id {
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── The seek bar ─────────────────────────────────────────────────── */
+
+/* Sentence-case labels: uppercase micro-caps are reserved for table column
+   heads, stat labels and section eyebrows (§5.3). */
+.seekbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4) var(--s-5);
+}
+
+.seekbar-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.seekbar-label {
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+}
+
+.seekbar-field > select {
+  width: auto;
+  min-width: 200px;
+}
+
+.seekbar-field > .input-num { width: 104px; }
+.seekbar-field > .input-time { width: 210px; }
+.seekbar-field-wide > input { width: 150px; }
+
+/* ── The message browser ──────────────────────────────────────────── */
+
+.messages-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  min-height: 0;
+}
+
+.messages-head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.messages-panel-head {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.messages-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.messages-table-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.messages-main .inspector { min-height: 0; }
+
+/* THE VIRTUALIZED SCROLLPORT. Its height comes from the flex line, never
+   from its contents — which is what makes `contain: strict` (and the size
+   containment it implies) safe here. Feature-detected; without it the
+   windowing still works, it just does more work per frame. */
+.messages-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* 2px so a focus ring on an edge row is not clipped by the scroll well */
+  padding: 2px 0;
+}
+
+@supports (contain: strict) {
+  .messages-scroll { contain: strict; }
+}
+
+/* The ring is on the scrollport itself — it is the grid's focus target,
+   and an outline drawn outside a `contain: paint` box is exactly what the
+   containment would hide. */
+.messages-scroll:focus-visible { outline-offset: -2px; }
+
+/* Fixed layout: column widths come from the colgroup, so a 200-character
+   payload preview cannot widen a column mid-stream, and every row is
+   exactly --row-h tall — the arithmetic the virtualizer depends on. */
+.messages-table {
+  /* THE OFFSET COLUMN IS ch-BASED, not px (§5.2: "mono column widths are
+     `ch`-based so nothing reflows as data streams in"). It was
+     var(--gutter-w) — 72px, and with 12px of padding on each side that is
+     room for about six mono characters. A space-grouped offset is up to 13
+     (`1 234 567 890`), so every topic past a few million records overflowed
+     the one column in the app that must never lie about a row's address.
+     The padding is added explicitly because `* { box-sizing: border-box }`
+     makes a column width a BORDER-box width: a bare `13ch` here would leave
+     ten characters of room and quietly reintroduce the same overflow. */
+  --col-offset-w: calc(13ch + var(--s-5) * 2);
+  table-layout: fixed;
+}
+
+/* Compact narrows it roughly as much as the app-wide gutter narrows
+   (72px -> 64px). It needs saying explicitly: the gutter cell's font-size
+   is --t-sm in every density, so `ch` does not shrink on its own. */
+[data-density="compact"] .messages-table {
+  --col-offset-w: calc(12ch + var(--s-5) * 2);
+}
+
+/* `ch` resolves against THIS element's own font, and with `table-layout:
+   fixed` the <col> is where the column width is decided — so the column
+   carries the gutter cell's mono family and size even though a <col>
+   paints none of it. Keep these two in sync with .ledger-gutter. */
+.mcol-offset {
+  width: var(--col-offset-w);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+.mcol-part   { width: 72px; }
+.mcol-ts     { width: 124px; }
+.mcol-key    { width: 24%; }
+
+/* The cell has to agree with its <col>: the shared .ledger-gutter rule sets
+   width AND min-width from --gutter-w, and a min-width that disagrees with
+   the fixed layout is a column that quietly grows. This also means the
+   offset column keeps its width when the gutter collapses to 0 (§2) — the
+   address becomes a normal first column, which is exactly the collapse's
+   intent, so no separate collapsed width is needed any more. */
+.messages-table .ledger-gutter {
+  width: var(--col-offset-w);
+  min-width: var(--col-offset-w);
+}
+
+/* The backstop, on the DATA cells only: an offset wider than the column is
+   ellipsised inside it and never spills across the ledger rule.
+   Deliberately NOT on the header cell — it holds a glossed <Term>, which is
+   focusable, and §5.3's rule applies: a focus ring is an outline drawn
+   OUTSIDE the box with outline-offset, so any clipping ancestor eats it. */
+.messages-table td.ledger-gutter {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Spacer rows carry the height of everything not rendered. They are
+   aria-hidden and their height is inline, so nothing here may set one. */
+.row-pad td { border: 0; }
+.data-table tbody tr.row-pad:hover td { background: transparent; }
+
+.cell-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tombstone: a --warn tick in the gutter, and the value cell reads
+   "∅ tombstone" — the tick is decoration, the words are the meaning. */
+.tomb-tick {
+  margin-right: var(--s-3);
+  color: var(--warn);
+}
+
+.messages-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  max-width: 52ch;
+  padding: var(--s-9) var(--s-6);
+}
+
+/* An offer to catch up, never a thing that moves the view for you. It
+   sits OUTSIDE the scrollport, so law 3 is untouched — and it carries no
+   shadow, because it is not one of the four true overlays. */
+.newmsg-chip {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s-6);
+  z-index: 3;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  min-height: var(--hit-min);
+  padding: 0 var(--s-6);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+/* ── The view's status line ───────────────────────────────────────── */
+
+/* The same metrics and typography as the app status bar directly below
+   it, so the two read as one strip: counts, the tail's honesty about what
+   it dropped, and the two shortcuts that matter in this view. */
+.view-statusline {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  height: var(--statusbar-h);
+  border-top: 1px solid var(--hairline);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.statusline-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--accent);
+}
+
+/* Dropped messages are stated, never hidden: a tail that silently loses
+   records lies about what the topic contains. */
+.statusline-dropped { color: var(--warn); }
+
+.view-statusline .kbd { margin-right: var(--s-1); }
+
+/* ── The payload inspector ────────────────────────────────────────── */
+
+.inspector-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.inspector-close { flex-shrink: 0; }
+
+.inspector-tabs {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 var(--s-5);
+}
+
+.inspector-body-plain {
+  padding: var(--s-5);
+  font-family: var(--font-ui);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+}
+
+.inspector-note {
+  margin: 0;
+  padding: var(--s-4) var(--s-5);
+  max-width: var(--measure);
+  font-family: var(--font-ui);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+}
+
+.inspector-inline-btn {
+  height: auto;
+  min-height: var(--hit-min);
+  padding: 0;
+  color: var(--accent-quiet);
+  text-decoration: underline;
+}
+
+.inspector-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-5);
+  border-top: 1px solid var(--hairline-strong);
+}
+
+.inspector-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.inspector-copied {
+  min-height: var(--lh-xs);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+/* Provenance, pinned at the bottom: what these bytes were read as, and
+   which schema said so — or plainly that none did. */
+.inspector-provenance {
+  margin: 0;
+  max-width: var(--measure);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+  user-select: text;
+}
+
+/* No `.schema-chip` here. §5.6 specs a schema chip, and the inspector's
+   provenance line already carries subject · version · id — the chip would
+   say the same thing twice in the same panel. It comes back when a schema
+   reference appears somewhere the provenance line does not (the subjects
+   view, Phase 4). */
+
+/* ── Modals: create topic, reset offsets ──────────────────────────── */
+
+.confirm-type { margin-top: var(--s-5); }
+
+.config-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  align-items: center;
+}
+
+.reset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4) var(--s-5);
+}
+
+/* THE SENTENCE. "checkout-service will re-process about 4.2M messages."
+   It updates live as the mode changes, and it is the loudest prose in the
+   modal — hairlines above and below rather than a card. */
+.reset-preview {
+  margin: 0;
+  padding: var(--s-5) 0;
+  max-width: var(--measure);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Phase 1 additions
+   Same doctrine as the blocks above: restate indicators POSITIVELY, one
+   system colour per meaning. No blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* The jump-to-newest chip is an offer, and Highlight is what the OS
+     uses for "the thing you want". */
+  .newmsg-chip {
+    border-color: Highlight;
+    color: Highlight;
+  }
+
+  /* A selected message row has to stay tellable from its neighbours when
+     every fill collapses to Canvas. */
+  .data-table tbody tr[aria-selected="true"] .ledger-gutter {
+    border-right-color: Highlight;
+  }
+
+  /* The tombstone tick and the dropped counter are meaning, not
+     decoration — Mark, matching the wire, so severity reads as one signal. */
+  .tomb-tick,
+  .statusline-dropped { color: Mark; }
+
+  /* The affordance cannot rely on a hover colour change alone. */
+  .row-affordance { color: LinkText; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   REFLOW (SC 1.4.10) — Phase 1 additions
+   Rules that are no-ops at the sizes Kavka normally runs at, and that stop
+   controls being clipped out of reach when the window is narrow or the
+   webview is zoomed. Nothing here changes a layout that already fits.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Ten tabs in a strip that could neither wrap nor scroll: `.workspace` is
+   `overflow: hidden`, so past about 900px of workspace the last tabs were
+   simply unreachable — by pointer AND by keyboard, because a roving
+   tabindex still cannot focus what the clip has removed. `min-height` so a
+   horizontal scrollbar cannot squeeze the tabs it appears for. */
+.tabstrip {
+  min-height: var(--tabstrip-h);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Scoped to the cluster strip: `.modal-tabs` reuses `.tab` and holds two of
+   them inside a dialog that is already width-capped, so it has nothing to
+   scroll and nothing to protect from shrinking. */
+.tabstrip > .tab { flex: 0 0 auto; }
+
+/* A panel head carries up to seven controls (the topic detail's). They wrap
+   under the title rather than running off the edge of the workspace. */
+.panel-head,
+.panel-tools,
+.view-title-row,
+.editor-actions,
+.editor-actions-left,
+.editor-actions-right,
+.modal-actions { flex-wrap: wrap; }
+
+/* §5.10 already says "resizable 320–60%". The dock was a flat 480px that
+   could not shrink, so at the window's own 960px minimum the message table
+   was left about 200px — the payload column, which is the loudest thing in
+   the app, disappeared before the chrome did. */
+.inspector { max-width: 60%; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 2 — SEARCH · PRODUCE · EXPORT · TOASTS
+   Additions only. Everything here composes the primitives above: the
+   search bar, the table, the banner, the modal, the chip and the form.
+   Nothing gains a card, a radius or a shadow that did not already have
+   one, and nothing inside .messages-scroll is touched (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The search bar (§5.7) ────────────────────────────────────────────
+   [⌕] [input, flex:1] [ƒx] [cheatsheet]. The ƒx toggle is VISIBLE so an
+   expert finds it in one second, and never the default so a junior never
+   faces it. The shell has no overflow:hidden — its children are square,
+   so nothing needs clipping and no focus ring can be eaten. */
+
+.searchbar-glyph {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-md);
+  line-height: 1;
+}
+
+/* The two trailing controls sit INSIDE the well, so they lose the well's
+   own height and keep the 24px hit floor. */
+.searchbar-fx,
+.searchbar-help {
+  flex-shrink: 0;
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+}
+
+.searchbar-fx { font-family: var(--font-mono); }
+
+/* "Same in CEL: …" — how a support engineer accidentally learns CEL. */
+.searchbar-hint {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+}
+
+/* ── Saved filters ───────────────────────────────────────────────────
+   A filter chip is --r-control, not a pill: pills read immutable, and
+   these are editable. The chip is a container of two operable children,
+   so the BORDER is --border-control, never a hairline. */
+
+.savedfilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-4);
+}
+
+.savedfilters-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.savedfilters-empty {
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.saved-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-raised);
+}
+
+/* Latched: a saved filter that is currently IN the bar reads as ON. */
+.saved-chip-active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.saved-chip-apply,
+.saved-chip-del {
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.saved-chip-active .saved-chip-apply,
+.saved-chip-active .saved-chip-del { color: var(--accent); }
+
+/* A 7px glyph in 12px of padding is a 19px-wide target, and it sits flush
+   against Apply — so SC 2.5.8's spacing exception cannot rescue it either.
+   The min-width is the whole fix; a button centres its own text, so the ×
+   stays where it was. */
+.saved-chip-del {
+  min-width: var(--hit-min);
+  padding: 0 var(--s-3);
+  border-left: 1px solid var(--hairline-strong);
+  color: var(--text-tertiary);
+}
+
+.saved-chip-apply:hover,
+.saved-chip-del:hover { background: var(--bg-row-hover); }
+
+.savefilter-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.savefilter-input {
+  width: 180px;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  font-size: var(--t-sm);
+}
+
+/* ── The seek bar's trailing actions ──────────────────────────────────
+   A blank label keeps the button on the same baseline as the fields it
+   sits beside, without pretending to name it. */
+.seekbar-actions { justify-content: flex-end; }
+
+/* ── Search progress ──────────────────────────────────────────────────
+   A sentence, then one bar per partition. Law 2: every bar carries its
+   two offsets as digits, so nothing here is legible by length alone. */
+
+.search-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.search-progress-line {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The honesty line under the progress sentence: which partitions stopped
+   because nothing more arrived rather than because they reached the end.
+   Prose, so it is capped at the measure and never mono. */
+.search-progress-note {
+  margin: 0;
+  max-width: var(--measure);
+  font-size: var(--t-xs);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+}
+
+.pbars {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--s-2) var(--s-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.pbar-label {
+  flex: 0 0 4ch;
+  font-family: var(--font-mono);
+}
+
+/* Same track token as the lag meter, so a bar's EXTENT is visible and
+   the fill clears 3:1 against it (accent 5.2, tertiary 3.5). */
+.pbar-track {
+  flex: 1;
+  min-width: 40px;
+  height: 3px;
+  background: var(--track-empty);
+}
+
+.pbar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;          /* a started partition never renders as zero */
+  background: var(--accent);
+}
+
+/* Accent means LIVE. A finished scan is not live, so it stops being teal. */
+.pbar-fill-done { background: var(--text-tertiary); }
+
+.pbar-num {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* A glyph, not a colour: this partition's bar is full like every other
+   finished one, and the difference is a claim about WHY (Law 2). */
+.pbar-assumed {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-family: var(--font-mono);
+}
+
+/* ── The disclosure popover (CEL cheatsheet, template placeholders) ────
+   A true overlay, so it is one of the four things allowed a shadow. */
+
+.help-pop {
+  position: fixed;
+  z-index: 80;
+  width: 380px;
+  max-width: calc(100vw - var(--s-6));
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--s-5);
+  border-radius: var(--r-popover);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  user-select: text;
+}
+
+.help-pop-title {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-sm);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.help-pop-lead {
+  margin: 0 0 var(--s-5);
+  color: var(--text-secondary);
+}
+
+.help-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin: 0;
+}
+
+.help-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* A CEL expression is a literal you could paste into the box above it. */
+.help-syntax {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-mono);
+  word-break: break-word;
+}
+
+.help-what {
+  margin: 0;
+  color: var(--text-tertiary);
+}
+
+.help-eg {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.help-trigger { flex-shrink: 0; }
+
+/* ── Toasts ───────────────────────────────────────────────────────────
+   The shell is in the OVERLAYS block above; these are its contents. */
+
+.toast-title {
+  margin: 0;
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.toast-detail {
+  margin: var(--s-2) 0 0;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* A path and an offset are literals someone may need to copy. */
+.toast-detail-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+/* The 1px progress hairline. It pauses with the timer — hover and focus
+   both stop the clock, so the bar can never disagree with the toast. */
+.toast-progress {
+  display: block;
+  height: 1px;
+  margin: var(--s-4) calc(var(--s-5) * -1) calc(var(--s-5) * -1);
+  background: var(--accent-quiet);
+  transform-origin: left center;
+  animation: toast-drain 5s linear forwards;
+}
+
+.toast-progress-paused { animation-play-state: paused; }
+
+@keyframes toast-drain {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+.toast-more {
+  margin: 0;
+  text-align: right;
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+/* ── Produce ──────────────────────────────────────────────────────────
+   Built from the modal, tab, field and banner primitives. The only new
+   metric is the value box, which is the loudest thing in the panel. */
+
+.produce-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.produce-value {
+  width: 100%;
+  min-height: calc(var(--control-h-lg) * 2);
+  max-height: 40vh;
+  white-space: pre;
+  overflow: auto;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.header-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--s-4);
+  align-items: center;
+}
+
+/* The preview: three rendered rows in the ledger shape — an index in a
+   gutter, the rule, then the payload. Mono, because every character of
+   it is what will land on the broker. */
+.preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: var(--s-4) 0;
+  list-style: none;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+.preview-row { display: flex; }
+
+.preview-index {
+  width: var(--gutter-w-code);
+  min-width: var(--gutter-w-code);
+  padding-right: var(--s-4);
+  text-align: right;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+  user-select: none;
+}
+
+.preview-body {
+  padding-left: var(--s-5);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.preview-key { color: var(--syn-key); }
+
+.bulk-progress {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ── Forced colors — the Phase 2 additions ────────────────────────────
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning. No blanket border rule. */
+
+@media (forced-colors: active) {
+  /* A running scan is the "live" meaning, and Highlight is the OS's word
+     for it — matching the selected row and the active tab. */
+  .pbar-fill { background: Highlight; }
+  .pbar-fill-done { background: CanvasText; }
+  .pbar-track { background: Canvas; border: 1px solid CanvasText; }
+
+  /* A latched saved filter must stay tellable from an idle one when every
+     fill collapses to Canvas. */
+  .saved-chip-active { border-color: Highlight; }
+  .saved-chip-active .saved-chip-apply { color: Highlight; }
+
+  .toast-progress { background: Highlight; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 3a — ACLS · BROKER CONFIG · CONNECT · SCHEMAS
+   Additions only. Every rule below is a NEW selector: the table, the
+   ledger rule, the +/− diff gutter, the banner, the modal, the health
+   chip and the seek bar already exist above and are reused verbatim,
+   because an ACL row must stay pixel-identical to a topic row and a
+   connector's state chip must stay the same chip a consumer group's is
+   (§5.2, §5.6, §5.8).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── A control that lives inside a table row ──────────────────────────
+   24px is the SC 2.5.8 floor exactly, which is what lets two of them sit
+   in a 30px row. NO transition: law 3 is about the scrolling table, and
+   these tables are the ones that will grow a virtualizer next. */
+.btn-row {
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-4);
+  transition: none;
+}
+
+/* ── ACLs ─────────────────────────────────────────────────────────────
+   A deny rule is the one row in the app that is a WARNING about itself:
+   removing it widens access. Three channels say so — a glyph, the word,
+   and the danger wash — because law 2 forbids the pinker-row-only
+   version. The hover rule is restated so a deny row still responds to
+   the pointer like every other row (equal specificity, later wins). */
+.data-table tbody tr.row-deny td { background: var(--danger-tint); }
+.data-table tbody tr.row-deny .ledger-gutter { background: var(--danger-tint); }
+.data-table tbody tr.row-deny:hover td { background: var(--bg-row-hover); }
+
+.acl-perm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.acl-perm-deny {
+  color: var(--danger);
+  font-weight: var(--w-medium);
+}
+
+/* ── Broker configuration ─────────────────────────────────────────────
+   A value can be a 400-character listener map, and a wrapped cell breaks
+   --row-h, which the virtualizer reads at runtime. Clip and keep the
+   whole string in a title, the same trade the member id makes. */
+.config-value {
+  max-width: 44ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Edit in place: the input replaces the value, in the value's own cell,
+   at the row's own height. */
+.config-edit {
+  width: 100%;
+  height: 24px;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-3);
+}
+
+/* While the cell holds an editor it may also hold that editor's refusal
+   message, so the one-line clip is lifted for exactly as long as the
+   editor is open — a message ellipsised out of existence is worse than no
+   message. The 44ch cap stays, so the message wraps inside the column the
+   value already had and no other row moves. */
+.config-value-editing {
+  overflow: visible;
+  white-space: normal;
+}
+
+.config-edit-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-block: var(--s-2);
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+/* ── Kafka Connect ────────────────────────────────────────────────────
+   A task count is a quantity Kavka computed, so it is sans + tabular
+   (§4). The failure beside it is a WORD in the danger colour, never a
+   differently-shaded number. */
+.task-count {
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+}
+
+.task-failed {
+  color: var(--danger);
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
+}
+
+/* The cluster picker sits in a panel-tools row, so it takes its content's
+   width instead of the form control's 100%. */
+.connect-picker {
+  width: auto;
+  min-width: 160px;
+  height: var(--control-h);
+  min-height: var(--control-h);
+  padding: 0 var(--s-4);
+  font-size: var(--t-sm);
+}
+
+/* The config editor is the one textarea that gets the room a JSON
+   document needs — .io-json caps at 40vh, which is a keyhole here. */
+.connect-json {
+  max-height: 60vh;
+  min-height: 240px;
+}
+
+/* Validation results: the field name is a literal from the config (mono),
+   the message is the worker's own words, and the name is a BUTTON because
+   its whole job is putting the caret on that key in the text above. */
+.validate-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.validate-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.validate-jump {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: var(--hit-min);
+  padding: 0;
+}
+
+.validate-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--text-mono);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.validate-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+  max-width: var(--measure);
+}
+
+.validate-msg {
+  color: var(--danger);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.validate-doc {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* A worker's stack trace, in §7's three layers: plain title, then the
+   next click, then the verbatim text behind Show details. Grouping is
+   whitespace plus a hairline — no card. */
+.trace-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-5) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.trace-title {
+  margin: 0;
+  max-width: var(--measure);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  user-select: text;
+  word-break: break-word;
+}
+
+.trace-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Schema version diff ──────────────────────────────────────────────
+   The shared diff component's parts (.code-line, .code-gutter, the +/−
+   in it, .diff-add / .diff-del) are reused verbatim; this only puts two
+   of them side by side and gives each its own scrollport. */
+.diff-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s-5);
+}
+
+.diff-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.diff-pane-head {
+  margin: 0;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.diff-view {
+  max-height: 46vh;
+  overflow: auto;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: var(--lh-base);
+  color: var(--text-mono);
+  user-select: text;
+}
+
+/* `pre`, not `pre-wrap`: a wrapped line in one pane pushes every line
+   after it out of step with the other, and a side-by-side diff whose
+   sides don't line up is worse than no diff. Each pane scrolls instead. */
+.diff-pane .code-text { white-space: pre; }
+
+/* The registry's own words about an incompatible schema, verbatim. */
+.sr-messages {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  user-select: text;
+}
+
+/* ── The connection form's Connect list ───────────────────────────────
+   A repeated group of fields is grouped the way everything else is:
+   whitespace plus a top hairline. No card. */
+.connect-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.connect-cluster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+/* ── Forced colors — the Phase 3a additions ───────────────────────────
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning. Mark is severity everywhere else in this sheet, so it is
+   severity here too. */
+
+@media (forced-colors: active) {
+  /* The deny wash collapses to Canvas, so the word carries it — and it
+     carries it in the same colour as the prod wire and every other
+     danger in the app. */
+  .acl-perm-deny,
+  .task-failed,
+  .validate-msg { color: Mark; }
+
+  /* A diff line's wash goes too; the +/− in the gutter is the channel
+     that survives, and it must not read as ordinary text. */
+  .diff-add .code-gutter,
+  .diff-del .code-gutter { color: Mark; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 3b — THE QUORUM · LEADER ELECTION · REPLICA MOVES · QUOTAS
+   Additions only. Everything here composes primitives that already exist:
+   the table, the lag meter, the health chip, the banner, the modal, the
+   button and the field. Nothing gains a card, a radius or a shadow that
+   did not already have one, and nothing inside a scrollport is touched
+   (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The quorum ───────────────────────────────────────────────────────
+   The leader badge is NEUTRAL, not accent. §2's status-adjacency law
+   forbids --accent in a column beside a health or lag column, and this
+   row has both — so the badge borrows .readonly-chip's shape, which is
+   the app's existing "a fact about this row, not a status" treatment. */
+.role-word {
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+}
+
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: var(--s-3);
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-medium);
+}
+
+/* ── What a batch of per-partition results did ────────────────────────
+   Grouping is whitespace plus a top hairline. It is NOT a banner: a
+   banner is a condition the SYSTEM is in, and this is the answer to the
+   button that was just pressed — but it is not a toast either, because a
+   batch with one refusal in it is something the user still has to act on
+   (§5.8's three-surface rule, read carefully). */
+.ops-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.ops-result-line {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.ops-failures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ops-failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Three layers, as everywhere else: plain title, the next click, then the
+   broker's own words behind Show details. */
+.ops-failure-title {
+  margin: 0;
+  max-width: var(--measure);
+  font-weight: var(--w-medium);
+  color: var(--danger);
+  line-height: var(--lh-prose);
+}
+
+.ops-failure-detail {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* Two controls in a 30px row. .btn-row is already the 24px SC 2.5.8 floor;
+   this only stops them stacking. Same shape as .config-actions. */
+.partition-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+/* ── The replica editor ───────────────────────────────────────────────
+   One block per partition, grouped by whitespace and a hairline. The
+   picker is a row of latched toggles: a replica list is an ordered set of
+   broker ids, and a latched toggle is the app's existing "this is ON"
+   (§5.5) — it reads as a switch across the room, which a checkbox in a
+   list of twelve brokers does not. */
+.reassign-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  /* The modal already scrolls (.modal-wide), so this does not: two nested
+     scrollports in one dialog is a wheel event nobody can predict. */
+}
+
+.reassign-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.reassign-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.reassign-part-id {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  font-size: var(--t-base);
+}
+
+/* The Reset button is pushed to the far edge so the two identifying
+   phrases stay together on the left. */
+.reassign-head .btn-row:last-child { margin-left: auto; }
+
+.reassign-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A broker id is a literal out of Kafka, so the toggle's label is mono —
+   and every toggle is the same width, so twelve of them read as a keypad
+   rather than as a ransom note. */
+.reassign-picker .btn-row {
+  min-width: 40px;
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.reassign-target {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.reassign-target-label {
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ── The move monitor ─────────────────────────────────────────────────
+   The one prose cell in a data table. It wraps, and it is allowed to:
+   this table lists partitions mid-move — a few dozen at the very most —
+   so it is not a scrollport and law 3's fixed --row-h contract does not
+   bind it. The cap keeps the sentence readable rather than letting it run
+   the width of the workspace. */
+.move-phrase {
+  max-width: 46ch;
+  white-space: normal;
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  padding-block: var(--s-3);
+}
+
+/* ── Quotas ───────────────────────────────────────────────────────────
+   A list, not a table: one entity carries between one and four values,
+   and a table of them is either four mostly-empty columns or a cell that
+   wraps and breaks --row-h. Grouping is whitespace plus a top hairline,
+   which is what this app does instead of cards. */
+.quota-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-6);
+}
+
+.quota-group-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.quota-entity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--hairline);
+}
+
+.quota-entity-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.quota-entity-name {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.quota-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.quota-entity-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+}
+
+.quota-default-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.quota-values {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* key · exact number · what it means. Three columns on a wide panel, one
+   stacked block when the workspace is narrow — the meaning is the point,
+   so it is the part that keeps the room. */
+.quota-value {
+  display: grid;
+  grid-template-columns: minmax(0, 22ch) minmax(0, 12ch) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+@media (max-width: 900px) {
+  .quota-value { grid-template-columns: minmax(0, 1fr); }
+}
+
+.quota-key {
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The number is grouped for reading (4 218 907), which makes it Kavka's
+   rendering rather than a literal — so it is sans with tabular figures,
+   per §4. The KEY beside it is the literal, and that is the <code>. */
+.quota-number {
+  font-variant-numeric: var(--nums-tabular);
+  text-align: right;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+}
+
+.quota-means {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Forced colors — the Phase 3b additions ───────────────────────────
+   Same doctrine again: restate indicators POSITIVELY, one system colour
+   per meaning, and never a blanket border rule. */
+
+@media (forced-colors: active) {
+  /* A refused partition's wash and colour both collapse, so the word
+     carries it — in Mark, which is severity everywhere else here. */
+  .ops-failure-title { color: Mark; }
+
+  /* A latched broker toggle is a switch: it has to read as ON when every
+     fill goes to Canvas. Same treatment .btn-latched already gets. */
+  .reassign-picker .btn-latched {
+    outline: 2px solid Highlight;
+    outline-offset: -3px;
+  }
+
+  /* The leader badge is a fact about the row, and its only channel in
+     high contrast is its border. */
+  .role-chip { border-color: CanvasText; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 4 — MONITORING · ALERTS · SHARE GROUPS · STREAMS TOPOLOGY
+   Additions only. §5.11 is the whole of the chart vocabulary: 1px strokes,
+   grid at --grid-line, --t-micro tertiary axis labels, no gradient fills
+   beyond a 6%-alpha wash under a SINGLE series, no chart junk, no shadows,
+   and a line-draw animation on first paint only.
+
+   Nothing here gains a card, a radius or a shadow that did not already
+   have one. The charts use --series-*, which is a different token family
+   from --accent on purpose: §2's status-adjacency law means teal may not
+   appear beside a health or lag reading, and this whole tab is health and
+   lag readings.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The chart ───────────────────────────────────────────────────────── */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+/* The plot is the measured element — the SVG is drawn in real pixels from
+   its width, so strokes stay 1px and type stays 10.5px at every size. */
+.chart-plot {
+  position: relative;
+  min-width: 0;
+}
+
+.chart-grid {
+  stroke: var(--grid-line);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-axis-line {
+  stroke: var(--hairline-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+/* SVG text takes `fill`, not `color`. Same step and same tertiary value as
+   every other label in the app. */
+.chart-axis {
+  fill: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* The one fill §5.11 allows, and only under a single series. */
+.chart-area {
+  stroke: none;
+  fill-opacity: 0.06;
+}
+
+/* Tertiary, not accent: teal means live, and it may not appear beside a
+   lag or health reading. Dashed, so it is never mistaken for a series. */
+.chart-crosshair {
+  stroke: var(--text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  shape-rendering: crispEdges;
+}
+
+/* The dot takes the canvas as its own outline so it stays legible where
+   two series cross. */
+.chart-dot {
+  stroke: var(--bg-canvas);
+  stroke-width: 1;
+}
+
+/* LINE-DRAW ON FIRST PAINT ONLY. The element is mounted once and never
+   re-keyed, so React reuses it across every data update and this animation
+   cannot re-run. Its RESTING state is the full plot, so a browser that
+   ignores the animation — or a user who has asked for less motion — gets a
+   correct chart rather than an empty one. */
+@keyframes chart-draw {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+.chart-wipe {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: chart-draw var(--dur-slow) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-wipe { animation: none; }
+}
+
+.chart-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Legend — the pattern IS the channel ──────────────────────────────
+   §5.11: "a 6-series line chart identified by hue alone fails SC 1.4.1 for
+   deuteranopes." The swatch draws the real dash pattern, and a hidden
+   series is struck through as well as dimmed — two channels for the OFF
+   state, neither of them colour. */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+}
+
+/* Operable, so it takes --border-control and the --hit-min floor. */
+.chart-key-btn {
+  height: var(--hit-min);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.chart-key-off {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.chart-key-off .chart-swatch { opacity: 0.4; }
+
+.chart-swatch { flex: none; }
+
+.chart-swatch line { stroke-width: 1.5; }
+
+/* ── Readout ──────────────────────────────────────────────────────────
+   A live region, so the keyboard crosshair says something rather than only
+   moving a line. It reserves its own leading, so a value appearing does
+   not shift everything under it. */
+
+.chart-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+  min-height: var(--lh-sm);
+  font-size: var(--t-sm);
+}
+
+.chart-readout-hint { color: var(--text-tertiary); }
+
+.chart-readout-time {
+  font-family: var(--font-mono);
+  color: var(--text-mono);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.chart-readout-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.chart-readout-label { color: var(--text-tertiary); }
+
+.chart-readout-value {
+  color: var(--text-primary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The axis note. Never optional: a downsampled chart whose bucket rule is
+   unstated is a chart the reader will assume is an average. */
+.chart-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* THE A11Y LAW: a chart is never the only way to read the data. */
+.chart-table > summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  padding: var(--s-2) 0;
+}
+
+.chart-table > summary:hover { color: var(--text-secondary); }
+
+.chart-table[open] > summary { margin-bottom: var(--s-3); }
+
+/* One topic, one metric, one picture. A heading plus a count, in the same
+   shape as .panel-head one level down. */
+.chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+.chart-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  font-size: var(--t-base);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.chart-title-name {
+  font-family: var(--font-mono);
+  color: var(--text-mono);
+  overflow-wrap: anywhere;
+}
+
+.chart-title-count {
+  max-width: var(--measure);
+  font-weight: var(--w-normal);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+}
+
+/* ── Monitoring controls ──────────────────────────────────────────── */
+
+/* Latched toggles, not a segmented control: the env picker's segments carry
+   the environment guardrail, and nothing else may borrow that shape. */
+.range-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* A label, a control and a hint on one line, for a picker that lives in a
+   panel rather than in a form. The hint always takes its own row so it
+   keeps its measure. */
+.field-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+.field-inline > .field-hint { flex-basis: 100%; }
+
+.field-inline select { width: auto; min-width: 22ch; }
+
+.inline-label {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* The sampler line. A dot AND a word AND the numbers behind it — the state
+   the whole tab's trustworthiness rests on. */
+.sampler-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+  margin: 0;
+}
+
+.sampler-detail {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* Health readings sit like stat blocks: no border, no background, no
+   radius, separated by space. Each one is a label, a dot-plus-word, a
+   number and a sentence. */
+.health-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6) var(--s-10);
+}
+
+.health-reading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: 46ch;
+  min-width: 0;
+}
+
+.health-number {
+  margin-left: var(--s-3);
+  color: var(--text-primary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.health-explain {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* A trend is a word AND a glyph AND a colour — three channels, so the
+   colour is the one that can be lost. It is not a --t-display numeral, so
+   it steps down to panel-title size rather than shouting. */
+.stat-value-word {
+  font-size: var(--t-md);
+  line-height: var(--lh-display);
+  font-weight: var(--w-semi);
+  letter-spacing: 0;
+}
+
+.trend-ok    { color: var(--ok); }
+.trend-warn  { color: var(--warn); }
+.trend-quiet { color: var(--text-tertiary); }
+
+/* ── Alerts ───────────────────────────────────────────────────────── */
+
+/* Two of these tables carry a sentence per row, so their cells stop being
+   single-line. `--row-h` stays the MINIMUM (a CSS table treats a height
+   that way), and the padding keeps two-line rows from touching. */
+.data-table-tall td {
+  padding-top: var(--s-3);
+  padding-bottom: var(--s-3);
+  vertical-align: top;
+}
+
+.rule-name {
+  display: block;
+  color: var(--text-primary);
+}
+
+.rule-kind {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+/* The sentence is the feature, so it gets prose leading and a measure
+   rather than being squeezed into a single line. */
+.rule-sentence {
+  display: block;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.rule-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  justify-content: flex-end;
+}
+
+/* The alert counter §5.1 asks for, on the tab that owns it. The NUMBER is
+   the signal and the title carries the word, so it is never colour alone.
+   --danger on --danger-tint is 6.28:1. */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: var(--t-micro);
+  font-weight: var(--w-semi);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ── Streams topology ─────────────────────────────────────────────────
+   The honesty note is permanent, not a disclosure. The whole picture is a
+   guess, and a guess behind a chevron is a claim. It takes the banner's
+   shape — a 2px left bar, a sunken well, no radius and no shadow — in the
+   neutral tone, because it is a statement about the data rather than an
+   error. */
+
+.inferred-note {
+  padding: var(--s-4) var(--s-5);
+  border-left: 2px solid var(--border-control);
+  background: var(--bg-sunken);
+}
+
+.inferred-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  font-weight: var(--w-medium);
+}
+
+.inferred-detail {
+  margin: var(--s-2) 0 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.inferred-caveats {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The graph can be wider than the workspace. Nothing inside it is
+   focusable — the keyboard path is the list below it — so a scroll well
+   here cannot clip a focus ring. */
+.topology-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.topology-box {
+  fill: var(--bg-canvas);
+  stroke-width: 1;
+}
+
+.topology-box-dashed { stroke-dasharray: 4 3; }
+
+/* A sub-topology is the application's own code: sunken, like an input or a
+   payload, because it is the one box whose contents Kavka cannot see. */
+.topology-box-code { fill: var(--bg-sunken); }
+
+.topology-label {
+  fill: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+/* The kind, in words, under every label — law 2 applied to a diagram. */
+.topology-kind {
+  fill: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+}
+
+.topology-edge {
+  fill: none;
+  stroke: var(--border-control);
+  stroke-width: 1;
+}
+
+.topology-arrowhead { fill: var(--border-control); }
+
+.topology-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topology-legend li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 18ch) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s-3) var(--s-5);
+}
+
+@media (max-width: 900px) {
+  .topology-legend li { grid-template-columns: 26px minmax(0, 1fr); }
+  .topology-legend .topology-legend-gloss { grid-column: 2; }
+}
+
+.topology-legend-mark { align-self: center; }
+
+.topology-legend-word {
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+}
+
+.topology-legend-gloss {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── Forced colors — the Phase 4 additions ────────────────────────────
+   Same doctrine as every phase before it: restate indicators POSITIVELY,
+   one system colour per meaning, and never a blanket border rule.
+
+   High contrast drops every --series-* hue, so a multi-series chart
+   collapses to one colour and the DASH PATTERN becomes the only channel
+   left. That is exactly why the patterns are there, and why the legend
+   draws them rather than a colour block. */
+
+@media (forced-colors: active) {
+  .chart-line,
+  .chart-swatch line { stroke: CanvasText; }
+
+  /* The wash under a single series has no meaning without its hue, and a
+     flat grey fill would read as a second series. Drop it. */
+  .chart-area { display: none; }
+
+  .chart-crosshair,
+  .chart-grid { stroke: GrayText; }
+
+  .chart-dot { fill: CanvasText; stroke: Canvas; }
+
+  /* A hidden series keeps its strike-through, which survives everything. */
+  .chart-key-off { color: GrayText; }
+
+  /* The alert counter is severity, so it takes the same system colour as
+     the prod wire and every danger banner. */
+  .tab-badge {
+    background: Canvas;
+    color: Mark;
+    border: 1px solid Mark;
+    forced-color-adjust: none;
+  }
+
+  /* Node kind survives as shape and as the word underneath; the dash
+     pattern is what keeps a repartition topic tellable from a source. */
+  .topology-box { stroke: CanvasText; fill: Canvas; }
+  .topology-box-code { fill: Canvas; }
+  .topology-edge { stroke: CanvasText; }
+  .topology-arrowhead { fill: CanvasText; }
+  .topology-label { fill: CanvasText; }
+  .topology-kind { fill: GrayText; }
+
+  /* The honesty note's left bar is its only structure once the well goes. */
+  .inferred-note { border-left-color: CanvasText; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 5a — SQL · CROSS-CLUSTER COPY · CONFIG DIFF · OFFSET MIGRATION ·
+   DEAD LETTERS
+   Additions only. Everything here composes the primitives above: the
+   table, the ledger gutter, the banner, the modal, the seek bar and the
+   form. Nothing gains a card, a radius or a shadow that did not already
+   have one, and nothing inside .messages-scroll is touched (law 3).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── The SQL editor ───────────────────────────────────────────────────
+   A query is a literal you could paste into any other SQL client, so it
+   is mono on the sunken surface every input in this app uses. No syntax
+   highlighting: a <textarea> cannot carry it without a second, absolutely
+   positioned copy of the text underneath, and a highlighter that drifts
+   one pixel out of register is worse than none. */
+
+.sql-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.sql-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.sql-input {
+  width: 100%;
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+  resize: vertical;
+}
+
+.sql-input:focus-visible { border-color: var(--accent); }
+
+/* What the engine understands. A disclosure rather than a permanent
+   block: it is reference, and it is long. The summary is always visible,
+   because a user who does not know there is a documented surface will
+   never go looking for one. */
+.sql-surface > summary {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+
+.sql-surface-list {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-6);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* How much will be read, and what that means for the answer. §7 rule 6 —
+   a sentence rather than a bar. */
+.sql-scope-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── The result grid ──────────────────────────────────────────────────
+   Same table, same gutter, same virtualizer as the message grid. The one
+   addition is a sortable header, and the caret's slot is reserved on
+   EVERY column (§5.2) so sorting never reflows the header. */
+
+.result-table th { padding: 0; }
+
+.th-sort {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  height: var(--row-h-head);
+  min-height: var(--hit-min);
+  padding: 0 var(--s-5);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.result-table th.col-num .th-sort { justify-content: flex-end; }
+
+.th-sort-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Reserved always, so the header does not move when a column is sorted. */
+.sort-caret {
+  flex: 0 0 8px;
+  width: 8px;
+  color: var(--accent);
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* ── The dead-letter column ───────────────────────────────────────────
+   Present only on a topic that actually has dead letters — see
+   MessageGrid. The badge carries the exception's short name, so it reads
+   as information rather than as a coloured label. */
+
+.mcol-dlq { width: 22ch; }
+
+.dlq-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--warn);
+  font-size: var(--t-sm);
+}
+
+/* ── The inspector's dead-letter section ──────────────────────────────
+   Above the tabs, because on a dead letter this is what the user came
+   for. Grouping is a hairline plus space, like everything else. */
+
+.dlq-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-5) var(--s-6);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.dlq-eyebrow {
+  margin: 0;
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.dlq-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin: 0;
+}
+
+.dlq-fact {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 1fr);
+  gap: var(--s-2) var(--s-4);
+  align-items: baseline;
+}
+
+.dlq-fact dt {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.dlq-fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dlq-message {
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.dlq-trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+/* The trace scrolls in its own well rather than growing the panel: forty
+   frames of JVM internals must not push the actions off the screen. */
+.dlq-stack {
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.dlq-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.dlq-convention {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-prose);
+}
+
+/* ── The copy wizard ──────────────────────────────────────────────────
+   The body carries the DESTINATION's [data-env], so the ledger rule
+   inside this modal is coral the moment a prod destination is picked —
+   §6 layer 1, aimed at the cluster that is actually being written to. */
+
+.copy-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  min-width: 0;
+}
+
+/* Where you are in the wizard: numbers and space, no card, no chevrons. */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-6);
+  margin: 0;
+  padding: 0 0 var(--s-4);
+  border-bottom: 1px solid var(--hairline);
+  list-style: none;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+/* The current step is weight plus lightness — never colour alone (law 2),
+   and the number stays legible in every state. */
+.wizard-step-active {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.wizard-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-pill);
+  font-size: var(--t-micro);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.wizard-step-active .wizard-step-n {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+.copy-dest-id {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.copy-dest-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.copy-topic-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.copy-topic-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── The config comparison ────────────────────────────────────────────
+   Two pickers side by side, and one table. A fieldset keeps the two
+   halves' semantics without a border (§5.3). */
+
+.diff-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4) var(--s-6);
+  padding: 0 var(--s-5) var(--s-5);
+}
+
+.diff-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.diff-side-legend {
+  padding: 0 0 var(--s-2);
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+/* A row the two topics disagree about. The gutter's sign is the meaning;
+   the wash only makes a run of them findable at a glance. */
+.diff-change { background: var(--warn-tint); }
+.diff-change .ledger-gutter { color: var(--warn); }
+
+/* A value that is not set on the topic at all — muted, and always beside
+   the words "broker default" (§5.2's special cells: never colour alone). */
+.config-inherited { color: var(--text-tertiary); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Phase 5a additions
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning, and never a blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Sorting is an indicator, and Highlight is what the OS uses for "the
+     thing you chose". */
+  .sort-caret { color: Highlight; }
+
+  /* A dead letter is severity, so it takes the same system colour as the
+     prod wire and every danger banner. The word is already there. */
+  .dlq-badge,
+  .dlq-eyebrow { color: Mark; }
+
+  /* The differing row keeps its sign; the wash is gone, so the gutter is
+     the only channel left and it must not fade. */
+  .diff-change .ledger-gutter { color: Mark; }
+
+  /* The current step is weight and a border, never a fill. */
+  .wizard-step-active .wizard-step-n { border-color: Highlight; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PHASE 5b — the plain-English bar, the MCP section, masking
+   Nothing here invents a vocabulary: the bar is a form row, the MCP
+   snippets are the banner's raw block, and every masking indicator is a
+   chip or a note that already exists somewhere else in this file.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Plain English → the editor ────────────────────────────────────── */
+
+/* A row of the seek-bar family, not a panel: it belongs to the control it
+   writes into, so it takes the same label metrics and no box of its own. */
+/* No padding of its own: every child of .messages-head sits flush and the
+   column's gap does the spacing, so an inset here would indent the one
+   control that is supposed to read as part of the editor below it. */
+.nlbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.nlbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.nlbar-row .seekbar-label { flex: 0 0 auto; }
+
+.nlbar-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+}
+
+.nlbar-input::placeholder { color: var(--text-placeholder); }
+.nlbar-input:focus { border-color: var(--accent); }
+
+/* The answer. A left rule in the semantic colour — the ledger device at
+   note scale, exactly as a toast wears it — and no fill in the confident
+   case, because a translation that worked is not an event. */
+.nlbar-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: var(--measure);
+  padding: var(--s-3) 0 var(--s-3) var(--s-5);
+  border-left: 2px solid var(--hairline-strong);
+}
+
+/* Low confidence: the caution colour, AND the sentence above it, AND the
+   chips below. Three channels — never the border alone (Law 2). */
+.nlbar-result-low {
+  border-left-color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.nlbar-caution {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  font-weight: var(--w-medium);
+}
+
+.nlbar-explanation {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.nlbar-unknown {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.nlbar-unknown-label { color: var(--text-tertiary); }
+.nlbar-unknown-tail { color: var(--text-tertiary); }
+
+/* A filter chip's shape — --r-control, not a pill: a pill reads immutable,
+   and these are phrases the user is about to rewrite. */
+.nlbar-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-sunken);
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 18px;
+}
+
+.nlbar-note {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The grammar, verbatim from the core: a fixed-width block that scrolls in
+   both directions rather than wrapping — the two columns of every line are
+   the pattern and its synonyms, and a wrap makes them one column of mush. */
+.nlbar-grammar {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  user-select: text;
+}
+
+/* ── The MCP section in About ──────────────────────────────────────── */
+
+.mcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+.mcp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.mcp-label {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+/* The path is a literal someone pastes elsewhere: mono, selectable, and
+   allowed to ellipsis rather than to break the dialog's width. */
+.mcp-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.mcp-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.mcp-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+/* Verbatim: it scrolls sideways rather than wrapping, because a wrapped
+   JSON snippet is a snippet somebody pastes wrong. */
+.mcp-code {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.mcp-subhead {
+  margin: var(--s-4) 0 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tool {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+}
+
+.mcp-tool code {
+  flex: 0 0 auto;
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+}
+
+.mcp-tool-what { color: var(--text-secondary); }
+
+.mcp-gates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+}
+
+.mcp-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.mcp-gate dt code {
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+}
+
+.mcp-gate dd {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The one external link in here goes through About's allowlisted helper,
+   so it is a button wearing the link's clothes. */
+.mcp-repo-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ── Masking ───────────────────────────────────────────────────────── */
+
+/* The status-bar chip. Same shape as the read-only chip beside it — both
+   are conditions the connection is in — and it always carries a number,
+   never a bare mark. */
+.mask-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 18px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+}
+
+/* The inspector's notice. Above the tabs, in the warn vocabulary, with the
+   bullets themselves as the glyph — the mark and the sentence say the same
+   thing, so neither is load-bearing alone. */
+.mask-notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  margin: 0;
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--warn-tint);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.mask-notice-mark {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+/* A masked payload reads one step quieter than a verbatim one: the text is
+   what arrived, but it is not what the producer sent. */
+.inspector-masked .code-text { color: var(--text-secondary); }
+
+.mask-pattern {
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row's switch. The word is the state; the box is how you change it. */
+.mask-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--hit-min);
+  cursor: pointer;
+}
+
+.mask-switch-word {
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-secondary);
+}
+
+/* A list inside a panel carries its own inset, exactly as `.table-note` and
+   `.sql-surface-list` do — the panel owns the gap, never the padding. */
+.mask-consequences {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: 0 var(--s-5) var(--s-5) calc(var(--s-5) + var(--s-6));
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.mask-consequences strong {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.mask-sample { min-height: calc(var(--lh-base) * 2 + var(--s-5)); }
+
+.mask-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding-left: var(--s-5);
+  border-left: 2px solid var(--accent-quiet);
+}
+
+.mask-preview-out {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mask-preview-count,
+.mask-preview-none {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Phase 5b additions
+   Same doctrine: restate indicators POSITIVELY, one system colour per
+   meaning, and never a blanket border rule.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Masking is a condition rather than a severity — but it is the one that
+     changes what the data MEANS, so it takes the same Mark the prod wire
+     and every danger indicator use. The words are already there. */
+  .mask-chip { border-color: Mark; color: Mark; }
+  .mask-notice-mark { color: Mark; }
+
+  /* A low-confidence translation loses its tint here, so the border is the
+     only channel left and it must not fade into the hairline. */
+  .nlbar-result-low { border-left-color: Mark; }
+  .nlbar-caution { color: Mark; }
+
+  /* The preview is a positive indicator — the thing you asked to see. */
+  .mask-preview { border-left-color: Highlight; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   REDUCED MOTION — the per-animation pass
+   The block at the top of this file is the blanket: 1ms durations, one
+   iteration, no smooth scrolling. That is right for an animation whose
+   RESTING STATE is what the user should see — a toast that has finished
+   sliding in is a toast in place, and a chart wipe that has finished is a
+   drawn chart.
+   It is exactly WRONG for the two indeterminate animations, whose resting
+   state is the end of a loop that is supposed to repeat: collapsing them to
+   1ms does not calm them down, it deletes the indicator. Each one is turned
+   off and given a static appearance instead.
+
+   THE INVARIANT, not the position: every rule below is at the same
+   specificity as the one it overrides, so it only wins by being LATER in
+   the sheet. Anything that adds an animation must either sit above this
+   block or bring its own reduced-motion rule — see §9 gate 7.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  /* The indeterminate table bar slides a 30% sliver from -100% to 430%. At
+     1ms it lands at 430% — off the end of its own overflow-hidden box — so
+     the ONE signal that a fetch is in flight over live data (§5.2: never a
+     spinner over data) vanished for exactly the users who asked for less
+     motion. A full-width static bar says "busy" without moving. */
+  .table-loading::after {
+    animation: none;
+    width: 100%;
+  }
+
+  /* Same failure, opposite direction: the toast's progress hairline drains
+     scaleX(1) → 0 over the 5s the dismiss timer runs. At 1ms it is empty
+     immediately and then sits there for five seconds contradicting the
+     toast it belongs to. It is a progress indicator with no progress to
+     show under this setting, so it holds full width and stays honest. */
+  .toast-progress {
+    animation: none;
+    transform: scaleX(1);
+  }
+
+  /* A 1ms pulse is a dot that flickers once. `--warn` plus the word
+     "connecting…" beside it (Law 2) is the whole signal either way. */
+  .status-connecting { animation: none; }
+
+  /* Entrances: the resting state IS the answer, so they are simply not
+     played rather than played imperceptibly. */
+  .toast,
+  .palette { animation: none; }
+
+  /* Belt and braces with the top block's `transition-duration: 1ms`: the
+     gloss and the disclosure appear and disappear outright. */
+  .term-pop { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE PLAYGROUND — "try Kavka without a cluster"
+   A second block inside an empty state, separated by whitespace and one
+   top hairline. Zero cards: this is a section of the same page, not a
+   panel that arrived on top of it.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.playground {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+/* One step below `.empty-title`: the empty state's headline is the thing
+   this page is about, and the playground is the alternative to it. Same
+   weight, smaller, no radius, no background. */
+.playground-title {
+  margin: 0;
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+/* The checklist, indented under the button that started it. `.ladder`
+   already carries the rule, the mono family and the fixed --row-h steps;
+   this only removes the list's own furniture and gives the block room. */
+.playground-ladder {
+  margin: var(--s-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The one thing on this panel that must read as an error. Not a global
+   banner: a playground that would not start is this panel's condition,
+   not the app's, and it renders exactly where its fix is (§7). */
+.playground-failed {
+  margin: 0;
+  max-width: var(--measure);
+  padding-left: var(--s-4);
+  border-left: 2px solid var(--danger);
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  white-space: pre-wrap;
+}
+
+.playground-footnote {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.playground-footnote code,
+.playground .empty-hint code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+/* `Show details ▾` for whatever Docker actually said. A button wearing a
+   link's clothes, like `.mcp-repo-link` — same reason, same shape. */
+.playground-details-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
 }

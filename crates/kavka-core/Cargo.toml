@@ -8,16 +8,347 @@ repository.workspace = true
 
 [features]
 default = []
-# Enabled in Phase 0 once CMake + MSVC Build Tools are available (see docs/ARCHITECTURE.md D2).
-# rdkafka is compiled with cmake-build + vendored OpenSSL for reproducible cross-platform builds.
-kafka = ["dep:rdkafka"]
+# Base Kafka support (PLAINTEXT + SASL_PLAINTEXT + OAUTHBEARER/OIDC).
+# librdkafka is compiled via cmake-build (see docs/ARCHITECTURE.md D2) —
+# requires CMake + MSVC Build Tools, and nothing more. Deliberately free of the
+# AWS SDK: `aws-config` drags in `aws-lc-sys`, whose build needs NASM, and this
+# tier is the one tooling and CI use on a bare toolchain.
+#
+# `src/protocol` (the hand-rolled wire client) rides along here rather than
+# behind a feature of its own: its OAUTHBEARER path reuses
+# `connection::auth::TokenSource`, which is gated on `kafka` because it returns
+# an rdkafka type, and a build without `kafka` cannot open a cluster connection
+# at all — so there would be nothing for those RPCs to talk to. It adds NO
+# build-tool requirement: rustls and ring are already in this crate's graph via
+# ureq, so the tier's promise (CMake + MSVC, nothing more) is unchanged.
+#
+# `src/sql` (SQL over topics, Phase 5a) rides along for the same reason and by
+# the same rule: a query answers about the records in a topic, and a build that
+# cannot open a cluster connection has no records to answer about. Riding along
+# rather than standing alone is also what keeps it reachable — the desktop shell
+# enables `kafka-ssl` and nothing else. It is the ONE place in this crate where
+# that rule costs something real; the numbers are on the `datafusion` entry
+# below, and they are the reason it is not in the bare tier.
+kafka = [
+    "dep:rdkafka",
+    "dep:rustls",
+    "dep:rustls-platform-verifier",
+    "dep:ring",
+    "dep:datafusion",
+    "dep:futures",
+]
+# AWS MSK IAM tokens (SigV4-presigned `kafka-cluster:Connect` URLs). Split out
+# of `kafka` because of the NASM/`aws-lc-sys` build requirement above. Without
+# it, `AuthConfig::AwsMskIam` refuses to connect instead of failing to build.
+# `url` rides along: src/auth/msk.rs is its only user.
+msk-iam = [
+    "kafka",
+    "dep:aws-config",
+    "dep:aws-credential-types",
+    "dep:aws-sigv4",
+    "dep:aws-types",
+    "dep:url",
+]
+# TLS/SASL_SSL: vendored OpenSSL build. On Windows this additionally requires
+# Strawberry Perl + NASM — so MSK IAM is folded in here (MSK is TLS-only, and
+# this is the tier the desktop app ships). Kerberos/GSSAPI is added per-platform
+# later (SSPI is built into librdkafka's Windows cmake build; cyrus-sasl on unix
+# via CI).
+kafka-ssl = ["kafka", "rdkafka/ssl-vendored", "msk-iam", "wasm-serdes"]
+# Custom serde plugins as sandboxed WASM modules (docs/ARCHITECTURE.md D4,
+# Phase 5b). `src/wasm_serde.rs` and the front step of the decode ladder.
+#
+# Standing alone rather than riding on `kafka` — unlike `datafusion` — because a
+# decoder needs no cluster: it takes bytes and answers JSON, so
+# `cargo test -p kavka-core --features wasm-serdes` runs the whole thing on a
+# bare toolchain with no librdkafka. It is folded into `kafka-ssl` (the tier the
+# desktop app ships) so the ProfileEditor's plugin section reaches a real engine
+# rather than a stub. The cost is on the `wasmtime` entry below.
+wasm-serdes = ["dep:wasmtime"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `net` + `time` on top of the workspace set: the AWS credential chain (SSO,
+# STS, IMDS) is async and needs tokio's IO and timer drivers.
+tokio = { workspace = true, features = ["net"] }
 tracing.workspace = true
-keyring = "3"
+# One native backend per target OS — without these keyring silently uses an
+# in-memory mock store.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
-rdkafka = { version = "0.37", features = ["cmake-build", "ssl-vendored", "gssapi"], optional = true }
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio"], optional = true }
+
+# --- HTTP (src/auth OAUTHBEARER providers, src/sr Schema Registry) ----------
+# ureq + rustls, deliberately NOT reqwest/native-tls: both callers are blocking
+# by design — the OIDC token fetch runs on librdkafka's poll thread and the
+# Schema Registry lookup runs inline in the decode path — so an async client
+# would buy nothing, and rustls keeps this off the vendored-OpenSSL link that
+# `kafka-ssl` sets up for librdkafka. `platform-verifier` adds
+# rustls-platform-verifier so the OS trust store can be used instead of the
+# bundled webpki roots — enterprise IdPs and self-hosted registries are
+# routinely behind an internal CA (see src/auth/oidc.rs and src/sr.rs, which
+# must also select it at request time).
+#
+# NOT optional: the Schema Registry client decodes payloads and has no
+# librdkafka involvement, so `serdes`/`sr` have to compile on the bare
+# (feature-free) tier that tooling and clippy use. It is pure Rust — `ring`
+# ships pregenerated Windows objects — so it adds no build-tool requirement.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# Basic auth for Schema Registry (src/sr.rs) and SigV4 for MSK (src/auth/msk.rs).
+base64 = "0.22"
+
+# --- Serde pipeline (src/serdes.rs, docs/ARCHITECTURE.md D4) ----------------
+# Avro is the only wire format whose decoder needs a schema, so it is the only
+# one tied to the registry. `default-features = false` drops the object-container
+# codecs (bzip/snappy/xz/zstd): Kafka payloads are single Avro datums framed by
+# the registry's magic byte, never container files, and every one of those
+# codecs is a C dependency this crate does not otherwise have.
+apache-avro = { version = "0.21", default-features = false }
+# MessagePack and CBOR as dynamic values, not typed deserialization: the decoder
+# has no target type, it has bytes off a topic. `rmpv`/`ciborium::value` are the
+# minimal "parse to a self-describing tree" halves of their ecosystems —
+# rmp-serde/ciborium's serde half would only add a layer we would immediately
+# have to undo to reach serde_json::Value.
+rmpv = "1"
+ciborium = "0.2"
+
+# --- Display masking (src/masking.rs, docs/ROADMAP.md Phase 5b) -------------
+# ZERO new crates: `regex` is already in this crate's graph, at this version,
+# because `cel` above enables its `regex` feature for CEL's `matches()`. Naming
+# it here rather than reaching through cel's re-exports is the difference
+# between a dependency this crate declares and one it borrows by accident.
+#
+# `regex-syntax` is regex's own parser, and it is here for one reason: a mask
+# rule is rejected at SAVE with the POSITION of the mistake, and
+# `regex::Error`'s message carries a caret drawing rather than an offset a UI
+# can put a caret at. `Parser::parse` hands back `ast::Error::span()`, which is
+# the number. Also already in the graph, as regex's own dependency, so it is
+# +0 crates as well.
+#
+# NOT optional, like `cel` and `apache-avro`: masking is applied to decoded
+# payloads and has no librdkafka involvement, so it compiles on the bare tier.
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode"] }
+
+# --- WASM serde plugins (src/wasm_serde.rs, docs/ARCHITECTURE.md D4) --------
+# THE SECOND EXPENSIVE DEPENDENCY IN THIS FILE, measured to the same standard as
+# `datafusion` above. Numbers on this machine (Windows, rustc 1.97.1), before
+# and after this entry:
+#
+#   crates in the tree      bare tier          118 ->  118   (+0, gated)
+#                           wasm-serdes alone  118 ->  177   (+59)
+#                           kafka-ssl          344 ->  388   (+44, 15 shared)
+#   cargo check, wasm-serdes (cold, the +59)          51s
+#   cold release build of that tier                   4m 00s
+#   linked release binary (kavka-core + its tests)
+#     bare tier                                       10.3 MiB
+#     with wasm-serdes                                21.8 MiB   (+11.5)
+#
+# (The binary figures are an ordinary `--release` link — no LTO, no strip, no
+# `panic = "abort"`, none of which the test harness can be built with. The
+# shipped app's own profile takes a large bite out of the delta, exactly as it
+# does out of datafusion's above; the honest headline is the +11.5 MiB, and it
+# is a ceiling rather than a shipping figure.)
+#
+# **+59 crates and a Cranelift code generator, against D1's "small
+# installers" — this is the trade, stated plainly.** It buys the one thing a
+# built-in decoder ladder can never buy: a team whose payloads are in a format
+# nobody outside their company has heard of can read them in Kavka without
+# Kavka shipping their format. Every alternative was worse:
+#
+# - **`wasmi`** (an interpreter, ~15 crates, no Cranelift) is genuinely
+#   smaller, and it is 10-50x slower per record. A decoder runs once per
+#   message on a search that scans millions of them, so the interpreter's cost
+#   lands exactly where this app's crown jewel (D3) is measured.
+# - **A subprocess with a pipe protocol** needs no dependency at all and needs
+#   a per-platform sandbox story instead — this one is `Config::new()` plus a
+#   fuel limit, and it is the same sandbox on both OSes.
+# - **`default-features = false` is doing real work.** It drops
+#   `component-model` (+ the whole wit/component tooling), `async`, `gc`,
+#   `threads`, `coredump`, `demangle`, `addr2line`/`debug-builtins`,
+#   `parallel-compilation` (rayon), `pooling-allocator` and `profiling`. What
+#   is kept is the minimum an ABI-v1 module needs: `cranelift` to compile it,
+#   `runtime` to run it, `std`, and `wat`.
+# - **`wat` is kept deliberately**, and it is what keeps a binary fixture out
+#   of this repo: every test in `src/wasm_serde.rs` compiles its plugin from
+#   WebAssembly text at test time (see `MODULE_V1`), so the test corpus is
+#   readable source in a `.rs` file rather than an opaque blob nobody can
+#   review. It also means a user may point a plugin at a `.wat` file, which is
+#   a small, honest bonus rather than the reason it is on.
+#
+# OPTIONAL, and NOT on the `kafka` list: see the `wasm-serdes` feature above.
+wasmtime = { version = "47", default-features = false, features = [
+    "cranelift",
+    "runtime",
+    "std",
+    "wat",
+], optional = true }
+
+# --- Search filters (src/search.rs, docs/ARCHITECTURE.md D3) ----------------
+# `cel` is cel-rust, the maintained crate: the `cel-interpreter` name D3 was
+# written against was renamed at 0.11 and stopped receiving releases at 0.10, so
+# this is the same project under its current name (github.com/cel-rust/cel-rust).
+#
+# `default-features = false` drops `chrono`, which exists to give CEL its
+# `timestamp`/`duration` types — and nothing in the search activation can
+# produce or consume one: a record's time reaches the expression as
+# `timestamp_ms`, a plain int, so the types would be unreachable while chrono's
+# `clock` feature pulled in platform time plumbing regardless.
+#
+# `regex` is kept, deliberately: `matches()` is CEL standard-library, it is the
+# one standard function a *message search* genuinely needs, and dropping it does
+# not produce "this build has no regex" — it produces "undeclared reference to
+# 'matches'", which reads as a broken expression rather than a missing feature.
+# The `json` feature (CEL value -> serde_json) is not enabled: the traffic here
+# is the other way, serde_json -> CEL, which `cel::to_value` does unfeatured.
+#
+# NOT optional, for the same reason as `apache-avro` and `ureq`: compiling a
+# filter has no librdkafka involvement, so it has to build on the bare
+# (feature-free) tier that tooling and clippy use. Pure Rust — antlr4rust, nom,
+# regex — so it adds no build-tool requirement.
+cel = { version = "0.14", default-features = false, features = ["regex"] }
+
+# --- SQL over topics (src/sql.rs, docs/ROADMAP.md Phase 5a) -----------------
+# THE EXPENSIVE DEPENDENCY IN THIS FILE, and the only one whose cost is worth a
+# paragraph of numbers rather than a paragraph of reasoning. Measured on this
+# machine (Windows, rustc 1.97.1), before and after this entry:
+#
+#   crates in the tree      bare tier    113 ->  113   (+0)
+#                           kafka-ssl    231 ->  330   (+99)
+#   cargo check, kafka-ssl               0.3s -> 69s   (the +99, cold)
+#   release build of the datafusion tree alone       3m 55s
+#     …with lto + codegen-units=1 + strip           12m 49s
+#   linked binary running one query, release       108.5 MiB
+#     …with lto + strip + panic=abort               49.2 MiB
+#     …the same binary without datafusion            0.2 MiB
+#
+# **+49 MiB of shipped binary, against D1's "small installers" — this is the
+# trade, stated plainly.** It buys the feature FEATURES.md names as the reason
+# teams pay four figures a year elsewhere ("engineers could just query topics"),
+# and it is not a trade that can be made smaller by being cleverer:
+#
+# - `default-features = false` is doing real work: it drops parquet (+ thrift,
+#   snap, brotli, bzip2, liblzma, flate2 — one of which is a C build), the Avro
+#   datasource, `compression`, `crypto_expressions` (blake2/blake3/md-5/sha2),
+#   and `recursive_protection` (psm/stacker, an asm build). That is 49 of the
+#   240 crates a default `datafusion` would bring: 240 -> 191 standalone.
+# - The six features kept add ZERO crates between them — every one of them is a
+#   module inside `datafusion-functions`, so `string_expressions` and friends
+#   cost compile time and nothing else. `sql` is not optional (it is the whole
+#   point); the rest are what make the surface in src/sql.rs's SQL_SURFACE the
+#   one an analyst expects. `crypto`/`nested`/`encoding` are left off: hashes,
+#   array constructors and base64 have nothing to do here.
+# - What CANNOT be trimmed: `object_store`, `arrow-csv`/`-json`/`-ipc` and the
+#   CSV/JSON/Arrow datasource crates are unconditional dependencies of
+#   `datafusion` itself, and arrow-ipc's zstd (a `cc` build via zstd-sys) rides
+#   in on `arrow`'s own defaults, which a downstream crate cannot switch off.
+#   Roughly 20 of the 99 crates are file-format machinery nothing here calls.
+#
+# NOT the "core-only" crates. Assembling datafusion-sql + -expr + -optimizer +
+# -physical-plan by hand would skip the datasource layer — but `DefaultPhysical
+# Planner` lives in this umbrella crate and nowhere else, so "core-only" means
+# hand-writing the logical->physical planner and a `ContextProvider`, which is
+# the one part of a query engine where a subtle mistake produces a wrong ANSWER
+# rather than an error. A query result nobody can check is worth less than the
+# 20 crates it would save.
+#
+# OPTIONAL, and on the `kafka` list. This is the one dependency in this file
+# that would have broken the bare tier's promise. `cc` is already a build-dep of
+# that tier via ring — but ring ships PREGENERATED Windows objects, so nothing
+# there actually compiles C; zstd-sys compiles C source on every platform, so a
+# non-optional datafusion would mean `cargo clippy -p kavka-core` on a bare
+# toolchain stops building. Gated, the bare tier is byte-for-byte what it was
+# (113 crates, no C source compiled) and the `kafka` tier — which already needs
+# CMake + MSVC for librdkafka — absorbs a C compiler at no new cost.
+#
+# `54.1` pins the API line: DataFusion ships a breaking major every couple of
+# months, and `54.x` is the range whose `SessionContext`, `SQLOptions` and
+# `MemTable` this module is written against. Cargo.lock pins the exact build.
+datafusion = { version = "54.1", default-features = false, features = [
+    "sql",
+    "string_expressions",
+    "unicode_expressions",
+    "regex_expressions",
+    "datetime_expressions",
+    "math_expressions",
+], optional = true }
+# `StreamExt::next`, and nothing else. DataFusion's `execute_stream` hands back
+# a `Stream`, and streaming the answer out batch by batch — rather than
+# `collect()`ing the whole result before the first row can be shown — is the
+# difference between a query that reports progress and one that hangs then
+# blinks. futures is ALREADY in this crate's graph via datafusion, at the same
+# version, so depending on it directly adds exactly zero crates; the alternative
+# is hand-rolling a `poll_fn` around a trait we would have to reach into
+# datafusion's own graph to name. Optional, and on the `kafka` list beside
+# datafusion, so the bare tier is untouched.
+futures = { version = "0.3", optional = true }
+
+# --- Wire protocol client (src/protocol, docs/ARCHITECTURE.md D2) -----------
+# The six admin APIs Phase 3b needs (ElectLeaders, Alter/ListPartitionReassignments,
+# Describe/AlterClientQuotas, DescribeQuorum) are wrapped by neither rdkafka
+# 0.37 nor librdkafka's C admin API, so the frames are encoded here by hand.
+#
+# NOT the `kafka-protocol` crate, deliberately. It generates codecs for the
+# whole Kafka schema — ~200 message types plus indexmap/uuid/crc32c/bytes/string
+# and a record-batch layer with four optional compression crates — and this
+# module needs eleven message types and no record batches. Its one genuinely
+# attractive feature, flexible-version (KIP-482) support, turns out to be a
+# varint length and a tag buffer: ~60 lines in src/protocol/wire.rs, pinned by
+# hand-verified golden bytes. Set against a binary whose selling point is its
+# size (D1) and a dependency list where every entry is justified in prose, a
+# generated codec for 190 messages nothing calls is the wrong trade.
+#
+# rustls: this module opens its own sockets, so it needs its own TLS. Already
+# in the graph via ureq above, and pinned to the SAME provider ureq selects
+# (`ring`) so only one crypto implementation is linked. `default-features =
+# false` is load-bearing: rustls defaults to `aws-lc-rs`, whose build needs
+# NASM — exactly the requirement the `kafka` tier promises not to have. There is
+# no `rustls-pki-types` entry because rustls re-exports it (and has parsed PEM
+# itself since pki-types 1.11, so no `rustls-pemfile` either).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+# The OS trust store, for a TLS cluster with no CA file configured — same reason
+# ureq enables it (enterprise clusters behind an internal CA). Its own defaults
+# pull no crypto provider, so it inherits `ring` from the line above.
+rustls-platform-verifier = { version = "0.6", optional = true }
+# SCRAM (RFC 5802) needs HMAC-SHA-256/512, SHA-256/512 and PBKDF2 — all four of
+# which are already linked, because ring is the provider rustls is compiled
+# with. Depending on it directly costs nothing and keeps a SCRAM crate's second
+# copy of those primitives out of the binary; see src/protocol/scram.rs.
+ring = { version = "0.17", optional = true }
+
+# --- Lag history store (src/history.rs, docs/ARCHITECTURE.md D6) ------------
+# The embedded store D6 names by crate. Lag history is the one thing in Kavka
+# that has to survive a restart — "24 h lag history survives app restarts" is a
+# Phase 4 acceptance criterion — and it is written every 15 seconds per
+# connected profile, forever, which is the shape a log-structured JSON file
+# handles badly and a B-tree handles well.
+#
+# 4.1 rather than an older line: redb reached 1.0 with an on-disk format
+# guarantee and has bumped it deliberately since, so pinning to the current
+# major is the version whose format this build will keep reading. The MSRV
+# (1.89) is well under this workspace's toolchain.
+#
+# **Zero runtime dependencies, pure Rust, no build tooling.** That is the whole
+# reason it is here rather than `sled` (unmaintained 0.34 with a format it never
+# stabilised), `rocksdb` (a C++ build — the exact requirement the `kafka` tier
+# promises not to add), or `rusqlite` (bundled SQLite is a C build, and the
+# system-library alternative is a per-platform hunt). It is also the only new
+# dependency Phase 4 takes: the Prometheus text format is parsed by hand in
+# src/metrics.rs (it is a line format, and a parser crate would be larger than
+# the parser), and alert webhooks reuse the `ureq` already above.
+#
+# NOT optional: the store has no librdkafka involvement — it takes the numbers
+# admin.rs already computed — so it has to compile on the bare (feature-free)
+# tier that tooling and clippy use.
+redb = "4.1"
+
+# `msk-iam` only. MSK IAM is hand-signed rather than via
+# `aws-msk-iam-sasl-signer`; see the dependency note at the top of
+# src/auth/msk.rs.
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-credential-types = { version = "1", optional = true }
+aws-sigv4 = { version = "1", optional = true }
+aws-types = { version = "1", optional = true }
+url = { version = "2", optional = true }

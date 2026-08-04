@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+#
+# TEMPLATE. Every `{{…}}` is filled by packaging/render.mjs from a real GitHub
+# Release, so the URLs and the SHA-256s are always the ones that shipped.
+#
+# TWO INSTALLERS, ONE ARCHITECTURE, and that is intentional rather than a
+# duplicate: Tauri's NSIS bundle installs per-user (`installMode: currentUser`
+# is the bundler's default) and the WiX MSI installs per-machine. winget
+# distinguishes them by `Scope`, so `winget install SahilHirani.Kavka` gets the
+# user install a person wants on their own laptop and
+# `winget install SahilHirani.Kavka --scope machine` gets the MSI an admin wants
+# for a fleet. Shipping only one of them would mean answering the other case
+# with "not supported".
+PackageIdentifier: SahilHirani.Kavka
+PackageVersion: "{{VERSION}}"
+InstallerLocale: en-US
+# Kavka renders in WebView2, which is preinstalled from Windows 11 and shipped
+# to Windows 10 by Windows Update. 1809 is the floor Tauri 2 supports.
+MinimumOSVersion: 10.0.17763.0
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+ReleaseDate: "{{RELEASE_DATE}}"
+ReleaseNotesUrl: https://github.com/sahilhirani/kavka/releases/tag/v{{VERSION}}
+Installers:
+  - Architecture: x64
+    InstallerType: nullsoft
+    Scope: user
+    InstallerUrl: https://github.com/sahilhirani/kavka/releases/download/v{{VERSION}}/Kavka_{{VERSION}}_x64-setup.exe
+    InstallerSha256: {{SHA256_EXE}}
+
+  - Architecture: x64
+    InstallerType: wix
+    Scope: machine
+    InstallerUrl: https://github.com/sahilhirani/kavka/releases/download/v{{VERSION}}/Kavka_{{VERSION}}_x64_en-US.msi
+    InstallerSha256: {{SHA256_MSI}}
+    # TODO(human): read the ProductCode off a real MSI and uncomment. Without
+    # it winget matches upgrades on display name and version, which mostly
+    # works; with it, upgrade and uninstall are exact. It cannot be filled in
+    # from this repository because it does not exist until WiX has run.
+    # ProductCode: "{00000000-0000-0000-0000-000000000000}"
+
+# NOT AN ARM64 ENTRY. `.github/workflows/release.yml` builds Windows on
+# `windows-latest` with no `--target`, which is x86_64 only — so there is no
+# `Kavka_X.Y.Z_arm64-setup.exe` to point at, and a manifest entry for one would
+# be a 404 for exactly the users least able to work around it. Windows on ARM
+# runs the x64 build under emulation today. Add the entry in the same pull
+# request that adds `aarch64-pc-windows-msvc` to the release matrix, never
+# before.
+
+ManifestType: installer
+ManifestVersion: 1.6.0

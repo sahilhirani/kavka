@@ -1,0 +1,153 @@
+# Builds installers and publishes a GitHub Release whenever a version tag is
+# pushed to main:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
+# Intel. Users download from the Releases page and install — no toolchain
+# needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
+# macOS users need right-click → Open the first time.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-13
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: Windows x64
+            platform: windows-latest
+            target: ""
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Kavka ${{ github.ref_name }}"
+          releaseBody: |
+            Downloads:
+            - **Windows:** `.exe` (NSIS installer) or `.msi`
+            - **macOS:** `.dmg` — Apple Silicon (`aarch64`) or Intel (`x64`)
+
+            Binaries are not yet code-signed; on macOS use right-click → Open
+            on first launch. `SHA256SUMS.txt` is attached alongside them, with
+            the package-manager manifests rendered for this version.
+
+            Kavka is free and open source (AGPL-3.0). If it saves you time:
+            https://buymeacoffee.com/sahilhirani ☕
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # Renders the package-manager manifests against the release that was just
+  # published and attaches them to it.
+  #
+  # WHY AFTER, AND NOT IN THE BUILD MATRIX. A winget manifest names the Windows
+  # installer AND both macOS disk images, so it cannot be written by any single
+  # matrix leg — the checksums do not all exist until every leg has uploaded.
+  # This job downloads what the release actually has, which also means the
+  # manifests can never disagree with it.
+  #
+  # WHAT IT DOES NOT DO: submit anything. No PR to winget-pkgs, no `choco push`,
+  # no PR to homebrew-cask. Those need credentials this workflow deliberately
+  # does not hold, and each ecosystem has a human review queue that a project's
+  # first automated submission is a poor way to enter. The rendered files are
+  # attached so the human step is "download three files and open a PR" rather
+  # than "hand-edit eight checksums" — see packaging/README.md.
+  manifests:
+    name: Package manifests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Only the installers: `--pattern` keeps the source archives GitHub
+      # attaches to every tag out of the checksum directory, where a stray file
+      # is at best noise and at worst hashed into the wrong placeholder.
+      - name: Download the release's installers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir release-assets \
+            --pattern 'Kavka_*.exe' \
+            --pattern 'Kavka_*.msi' \
+            --pattern 'Kavka_*.dmg'
+          ls -la release-assets
+
+      # `render.mjs` fails if any expected asset is missing rather than writing
+      # a manifest with a placeholder checksum in it, so this step failing is
+      # the intended way to find out that Tauri's artifact naming changed.
+      - name: Render manifests
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node packaging/render.mjs --version "$VERSION" --assets ./release-assets
+
+      # Flat, and named so the three ecosystems do not collide: a person
+      # downloading these is about to copy them into three different forks.
+      - name: Attach manifests to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p manifests
+          cp packaging/out/winget/SahilHirani.Kavka.yaml                  "manifests/winget-SahilHirani.Kavka.yaml"
+          cp packaging/out/winget/SahilHirani.Kavka.installer.yaml        "manifests/winget-SahilHirani.Kavka.installer.yaml"
+          cp packaging/out/winget/SahilHirani.Kavka.locale.en-US.yaml     "manifests/winget-SahilHirani.Kavka.locale.en-US.yaml"
+          cp packaging/out/chocolatey/kavka.nuspec                        "manifests/chocolatey-kavka.nuspec"
+          cp packaging/out/chocolatey/tools/chocolateyinstall.ps1         "manifests/chocolatey-chocolateyinstall.ps1"
+          cp packaging/out/homebrew/kavka.rb                              "manifests/homebrew-kavka.rb"
+          # SHA256SUMS is worth as much as the manifests: it is what somebody
+          # verifying a download by hand needs, and what a mirror needs to
+          # prove it mirrored the right bytes.
+          (cd release-assets && sha256sum Kavka_* > ../manifests/SHA256SUMS.txt)
+          gh release upload "${{ github.ref_name }}" manifests/* \
+            --repo "${{ github.repository }}" --clobber
