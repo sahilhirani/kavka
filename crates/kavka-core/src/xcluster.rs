@@ -37,7 +37,12 @@
 use crate::admin::ConfigEntry;
 use crate::connection::ClusterConnection;
 use crate::consume::SeekSpec;
+// The clock a copy stops on, shared with the other scan engines: what counts as
+// the source going quiet has one definition (see [`crate::quiet`]), and three of
+// the waits on this loop deliberately do not count.
 use crate::produce::ProduceHeader;
+#[cfg_attr(not(feature = "kafka"), allow(unused_imports))]
+use crate::quiet::SourceSilence;
 use crate::search::{PartitionProgress, SearchQuery};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -700,83 +705,6 @@ fn migration_row(
 /// [`CopySession::stop`] while the source is quiet.
 #[cfg(feature = "kafka")]
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-
-/// How long the copy waits for its *first* record before concluding there is
-/// nothing to read. Generous: it covers connect, metadata and first-fetch
-/// latency on a cold cluster.
-#[cfg_attr(not(feature = "kafka"), allow(dead_code))]
-const QUIET_BEFORE_DATA: Duration = Duration::from_secs(10);
-
-/// How long it waits between records once they are flowing. The end watermarks
-/// captured at the start are the primary completion signal, but a transactional
-/// topic's markers occupy offsets a consumer never receives, so a watermark-only
-/// loop can never reach the end — this is the backstop, and it is long because a
-/// slow broker mid-copy must not read as "finished".
-#[cfg_attr(not(feature = "kafka"), allow(dead_code))]
-const QUIET_AFTER_DATA: Duration = Duration::from_secs(5);
-
-/// **How long the SOURCE has been quiet** — and nothing else.
-///
-/// The copy has one clock that may end it short of its watermarks — the source
-/// going silent — and several waits running through the same loop that are not
-/// the source at all: the rate limiter's pacing gap, the in-flight drain that
-/// lets delivery reports come back, and a CEL filter's decode, which can sit on
-/// a Schema Registry HTTP call for that call's whole timeout. None of those is
-/// the source saying anything, and a single deadline spanning all of them means
-/// a paced copy, a slow destination or a slow registry spends the source's
-/// silence budget — at which point the copy stops early, marks every remaining
-/// partition finished, and reports success.
-///
-/// So the deadline is re-armed on every edge: when a record arrives (the source
-/// spoke), after every wait spent on the destination, and after every decode
-/// (neither of those was the source's time). What is left measures exactly what
-/// it claims to.
-///
-/// Pure over a clock it is handed, and outside the `kafka` gate, so the
-/// arithmetic is a unit test rather than a five-second sleep.
-#[derive(Debug)]
-#[cfg_attr(not(feature = "kafka"), allow(dead_code))]
-struct SourceSilence {
-    deadline: Instant,
-}
-
-#[cfg_attr(not(feature = "kafka"), allow(dead_code))]
-impl SourceSilence {
-    /// Before the first record: the long, cold-cluster budget.
-    fn waiting_for_first(now: Instant) -> Self {
-        Self {
-            deadline: now + QUIET_BEFORE_DATA,
-        }
-    }
-
-    /// The source spoke, or a wait on the destination has just ended. Either
-    /// way the budget starts again from `now`.
-    fn heard_from_source(&mut self, now: Instant) {
-        self.deadline = now + QUIET_AFTER_DATA;
-    }
-
-    /// Time spent on the destination is not the source being quiet. Identical
-    /// arithmetic to [`Self::heard_from_source`], and a separate name because
-    /// the two are separate facts and a reader has to be able to tell which
-    /// call site is which.
-    fn waited_on_destination(&mut self, now: Instant) {
-        self.deadline = now + QUIET_AFTER_DATA;
-    }
-
-    /// Time spent deciding whether to keep a record is not the source being
-    /// quiet either. `keep` decodes only when a CEL filter needs it to, and
-    /// that decode can reach the Schema Registry over HTTP — a lookup bounded
-    /// by [`crate::sr`]'s 10s timeout, twice [`QUIET_AFTER_DATA`], for a single
-    /// record. Identical arithmetic once more, and a third name for the third
-    /// fact, so a reader can tell which one a call site is stating.
-    fn waited_on_decode(&mut self, now: Instant) {
-        self.deadline = now + QUIET_AFTER_DATA;
-    }
-
-    fn expired(&self, now: Instant) -> bool {
-        now >= self.deadline
-    }
-}
 
 /// A copy is expected to run for minutes, so its records get the bulk timeout
 /// rather than the single-send one.
@@ -2384,100 +2312,6 @@ mod mapping {
         assert_eq!(partitions_needed(&[]), 0);
         assert!(ensure_partition_mapping("orders", partitions_needed(&[0]), "one", 1).is_ok());
         assert!(ensure_partition_mapping("orders", partitions_needed(&[5]), "one", 1).is_err());
-    }
-}
-
-/// The deadline that decides when a copy has read everything readable. Its
-/// whole correctness is "which waits count", so it is tested against a clock it
-/// is handed rather than by sleeping through five seconds of it.
-#[cfg(test)]
-mod silence {
-    use super::*;
-
-    #[test]
-    fn the_first_record_gets_the_long_cold_start_budget() {
-        let start = Instant::now();
-        let silence = SourceSilence::waiting_for_first(start);
-        assert!(!silence.expired(start + QUIET_BEFORE_DATA - Duration::from_millis(1)));
-        assert!(silence.expired(start + QUIET_BEFORE_DATA));
-    }
-
-    #[test]
-    fn a_record_restarts_the_budget_from_when_it_arrived() {
-        let start = Instant::now();
-        let mut silence = SourceSilence::waiting_for_first(start);
-        let arrived = start + Duration::from_secs(9);
-        silence.heard_from_source(arrived);
-        // The cold-start deadline is gone; the after-data one runs from here.
-        assert!(!silence.expired(start + QUIET_BEFORE_DATA));
-        assert!(!silence.expired(arrived + QUIET_AFTER_DATA - Duration::from_millis(1)));
-        assert!(silence.expired(arrived + QUIET_AFTER_DATA));
-    }
-
-    /// THE BUG THIS TYPE EXISTS FOR. A copy paced at one record per second, or
-    /// one whose destination sits in the in-flight drain, spends real time
-    /// between polls — and none of it is the source going quiet. Without the
-    /// re-arm the budget runs out mid-copy and every unread partition is
-    /// silently marked finished.
-    #[test]
-    fn waiting_on_the_destination_never_spends_the_sources_budget() {
-        let start = Instant::now();
-        let mut silence = SourceSilence::waiting_for_first(start);
-        let mut now = start;
-
-        // Twenty records, each of them a full QUIET_AFTER_DATA + change spent
-        // pacing and draining — four times the whole budget, twenty times over.
-        for _ in 0..20 {
-            silence.heard_from_source(now);
-            now += QUIET_AFTER_DATA * 4;
-            silence.waited_on_destination(now);
-            assert!(
-                !silence.expired(now),
-                "a wait on the destination expired the source's deadline"
-            );
-        }
-
-        // And the source genuinely going quiet still ends it, on schedule.
-        assert!(!silence.expired(now + QUIET_AFTER_DATA - Duration::from_millis(1)));
-        assert!(silence.expired(now + QUIET_AFTER_DATA));
-    }
-
-    /// THE SAME BUG, ON THE THIRD EDGE. A CEL filter decodes through the schema
-    /// registry, and one lookup there is bounded by an HTTP timeout of 10s —
-    /// twice the whole budget for a single record. Worse than the destination
-    /// case: a record the filter rejects continues straight back to the expiry
-    /// check with no pacing gap and no drain in between, so nothing else on the
-    /// loop would ever re-arm the deadline.
-    #[test]
-    fn a_slow_decode_never_spends_the_sources_budget() {
-        let start = Instant::now();
-        let mut silence = SourceSilence::waiting_for_first(start);
-        let mut now = start;
-
-        // Ten records in a row that the filter throws away, each one having sat
-        // on a registry lookup for its full timeout.
-        for _ in 0..10 {
-            silence.heard_from_source(now);
-            now += Duration::from_secs(10);
-            silence.waited_on_decode(now);
-            assert!(
-                !silence.expired(now),
-                "a decode expired the source's deadline"
-            );
-        }
-
-        // And the two kinds of wait compose: a record that decoded slowly and
-        // was then paced slowly is still not the source going quiet.
-        silence.heard_from_source(now);
-        now += Duration::from_secs(10);
-        silence.waited_on_decode(now);
-        now += QUIET_AFTER_DATA * 4;
-        silence.waited_on_destination(now);
-        assert!(!silence.expired(now));
-
-        // The source genuinely going quiet still ends it, on schedule.
-        assert!(!silence.expired(now + QUIET_AFTER_DATA - Duration::from_millis(1)));
-        assert!(silence.expired(now + QUIET_AFTER_DATA));
     }
 }
 
