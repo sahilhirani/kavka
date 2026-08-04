@@ -9,7 +9,7 @@
 [![Windows 10+](https://img.shields.io/badge/Windows-10%2B-0078D4?logo=windows&logoColor=white)](#installing)
 [![Rust](https://img.shields.io/badge/Rust-stable-B7410E?logo=rust&logoColor=white)](#development-setup)
 
-**[Website](https://sahilhirani.com/kavka/)** · **[Download](https://github.com/sahilhirani/kavka/releases/latest)** · **[Features](docs/FEATURES.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Roadmap](docs/ROADMAP.md)**
+**[Website](https://sahilhirani.github.io/kavka/)** · **[Download](https://github.com/sahilhirani/kavka/releases/latest)** · **[Features](docs/FEATURES.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Roadmap](docs/ROADMAP.md)**
 
 ![Kavka's message browser: a table of offsets, partitions, timestamps and keys for the orders topic, with the inspector docked on the right showing one record's JSON value formatted with line numbers.](docs/screenshots/06-message-browser.png)
 
@@ -239,7 +239,7 @@ Kavka is not affiliated with or endorsed by the Apache Software Foundation; Apac
 
 Distribution is prepared but not executed — everything below needs a human, money or an account, and none of it can be done from this repository:
 
-- **The site** — live at [sahilhirani.com/kavka](https://sahilhirani.com/kavka/), deployed from [`docs-site/`](docs-site/) by [`.github/workflows/pages.yml`](.github/workflows/pages.yml). The one thing still missing is a 1200×630 Open Graph card of its own.
+- **The site** — live at [sahilhirani.github.io/kavka](https://sahilhirani.github.io/kavka/), deployed from [`docs-site/`](docs-site/) by [`.github/workflows/pages.yml`](.github/workflows/pages.yml). The one thing still missing is a 1200×630 Open Graph card of its own.
 - **A domain** — `kavka.io` was verified unregistered on 2026-08-02. Registering it and adding a `CNAME` to `docs-site/` is a human action.
 - **macOS** — Apple Developer Program membership, a Developer ID Application certificate, and `notarytool` credentials in the release workflow. Until then the `.dmg` is unsigned and Gatekeeper says the app is "damaged", which is the wrong message for the truth.
 - **Windows** — an OV or EV code-signing certificate. Until then SmartScreen warns on every first run.

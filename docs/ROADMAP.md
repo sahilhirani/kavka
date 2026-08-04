@@ -46,7 +46,7 @@ Phases build the complete product from docs/FEATURES.md (this is the full-app pl
 - **Accept:** SQL query over a live topic returns correct results vs a golden corpus; MCP server drives a topic browse from Claude Code
 
 ## Phase 6 — Polish & Launch
-- WCAG 2.2 AA pass; localization framework + first 5 languages; docs site (with a "Support Kavka" donate page) — live at [sahilhirani.com/kavka](https://sahilhirani.com/kavka/), with `kavka.io` still unregistered; embedded single-node sandbox ("try without a cluster")
+- WCAG 2.2 AA pass; localization framework + first 5 languages; docs site (with a "Support Kavka" donate page) — live at [sahilhirani.github.io/kavka](https://sahilhirani.github.io/kavka/), with `kavka.io` still unregistered; embedded single-node sandbox ("try without a cluster")
 - Distribution: notarized dmg, signed NSIS/MSIX, Homebrew cask, winget, Chocolatey; crash reporting (opt-in)
 - Launch as open source: ~~flip the GitHub repo private → public~~ **done** — public at [github.com/sahilhirani/kavka](https://github.com/sahilhirani/kavka), with the site on GitHub Pages; README Buy Me a Coffee link; Show HN / r/apachekafka posts leaning on the "open source Conduktor Desktop replacement" demand thread still to write
 - Companion CLI sharing profiles (Phase 6 or fast-follow)

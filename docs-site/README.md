@@ -7,7 +7,7 @@ The Kavka website. Two files: `index.html` and `styles.css`.
 Open `index.html` in a browser. That is the whole workflow — there is no build
 step, no dependency, no dev server, no `npm install`. Every path in the page is
 relative, so it renders identically from `file://`, from a project site under a
-path prefix (`https://sahilhirani.com/kavka/`, `https://sahilhirani.github.io/kavka/`)
+path prefix (`https://sahilhirani.github.io/kavka/`, or a custom domain later)
 and from a domain root. The single exception is `og:image`, which Open Graph
 requires to be absolute — if the site ever moves, that one tag moves with it.
 
@@ -93,7 +93,7 @@ Still open:
 
 ## Publishing to GitHub Pages
 
-Wired up and live at **<https://sahilhirani.com/kavka/>**.
+Wired up and live at **<https://sahilhirani.github.io/kavka/>**.
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) does it on every
 push to `main` that touches `docs-site/**` or `docs/screenshots/**`. It is the
