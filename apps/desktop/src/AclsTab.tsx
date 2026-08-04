@@ -853,6 +853,35 @@ function AclCreateModal({
       });
   }, []);
 
+  /**
+   * The pattern picker's keyboard model — the same fix as the connection
+   * form's environment picker, for the same reason. `role="radiogroup"`
+   * promises one tab stop walked with the arrows, with selection following
+   * focus; two plain buttons in the tab order kept neither half of that
+   * (SC 2.1.1, SC 4.1.2).
+   */
+  const patternRefs = useRef<Partial<Record<AclPatternType, HTMLButtonElement | null>>>(
+    {},
+  );
+  const onPatternKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      const order: AclPatternType[] = ["literal", "prefixed"];
+      const index = order.indexOf(patternType);
+      let next: number | null = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown")
+        next = (index + 1) % order.length;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
+        next = (index - 1 + order.length) % order.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = order.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      setPatternType(order[next]);
+      patternRefs.current[order[next]]?.focus();
+    },
+    [patternType],
+  );
+
   const isProd = profile.environment === "prod";
   const isCluster = resourceType === "cluster";
   // Kafka's own literal for the cluster resource. It is not a name the user
@@ -1155,10 +1184,15 @@ function AclCreateModal({
                 type="button"
                 role="radio"
                 aria-checked={patternType === "literal"}
+                tabIndex={patternType === "literal" ? 0 : -1}
+                ref={(el) => {
+                  patternRefs.current.literal = el;
+                }}
                 className={`env-option ${
                   patternType === "literal" ? "env-option-active" : ""
                 }`}
                 onClick={() => setPatternType("literal")}
+                onKeyDown={onPatternKeyDown}
               >
                 Exactly
               </button>
@@ -1166,10 +1200,15 @@ function AclCreateModal({
                 type="button"
                 role="radio"
                 aria-checked={patternType === "prefixed"}
+                tabIndex={patternType === "prefixed" ? 0 : -1}
+                ref={(el) => {
+                  patternRefs.current.prefixed = el;
+                }}
                 className={`env-option ${
                   patternType === "prefixed" ? "env-option-active" : ""
                 }`}
                 onClick={() => setPatternType("prefixed")}
+                onKeyDown={onPatternKeyDown}
               >
                 Starts with
               </button>

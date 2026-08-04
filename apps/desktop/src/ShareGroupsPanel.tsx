@@ -221,20 +221,11 @@ export default function ShareGroupsPanel({
                   className={`row-click${
                     selected === g.group_id ? " row-selected" : ""
                   }`}
-                  tabIndex={0}
                   onClick={() =>
                     setSelected((prev) =>
                       prev === g.group_id ? null : g.group_id,
                     )
                   }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setSelected((prev) =>
-                        prev === g.group_id ? null : g.group_id,
-                      );
-                    }
-                  }}
                 >
                   <td className="cell-mono">{g.group_id}</td>
                   <td>
@@ -249,10 +240,33 @@ export default function ShareGroupsPanel({
                     </span>
                   </td>
                   <td className="col-num cell-num">{g.member_count}</td>
+                  {/* The row's keyboard path, and the only element here with
+                      a role that says it does something. `aria-expanded`
+                      because it genuinely discloses the member list below —
+                      the row it belongs to has no such state to carry. */}
                   <td className="col-affordance">
-                    <span className="row-affordance">
+                    <button
+                      type="button"
+                      className="row-affordance"
+                      aria-expanded={selected === g.group_id}
+                      aria-label={
+                        selected === g.group_id
+                          ? `Hide members of ${g.group_id}`
+                          : `View members of ${g.group_id}`
+                      }
+                      // The row is still clickable for the pointer, so a
+                      // click on the button would otherwise run the handler
+                      // twice — and this one is a TOGGLE, which means twice
+                      // is the same as never.
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelected((prev) =>
+                          prev === g.group_id ? null : g.group_id,
+                        );
+                      }}
+                    >
                       {selected === g.group_id ? "Hide ↑" : "View members →"}
-                    </span>
+                    </button>
                   </td>
                 </tr>
               ))}

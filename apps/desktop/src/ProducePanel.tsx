@@ -152,6 +152,12 @@ function reportFinalCounts(
 }
 
 type Tab = "one" | "bulk";
+
+/** The strip, in order, so its rendering and its arrow keys read one list. */
+const PRODUCE_TABS: ReadonlyArray<readonly [Tab, string]> = [
+  ["one", "Send one"],
+  ["bulk", "Bulk"],
+];
 type ValueKind = "text" | "json" | "avro";
 
 interface HeaderRow {
@@ -218,6 +224,25 @@ export default function ProducePanel({
   initial = null,
 }: ProducePanelProps) {
   const [tab, setTab] = useState<Tab>("one");
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+
+  /** Arrow keys walk the strip; selection follows focus, as everywhere else. */
+  const onTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      let next: number | null = null;
+      if (e.key === "ArrowRight") next = (index + 1) % PRODUCE_TABS.length;
+      else if (e.key === "ArrowLeft")
+        next = (index - 1 + PRODUCE_TABS.length) % PRODUCE_TABS.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = PRODUCE_TABS.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      const [key] = PRODUCE_TABS[next];
+      setTab(key);
+      tabRefs.current[key]?.focus();
+    },
+    [],
+  );
 
   // ── One message ────────────────────────────────────────────────────────
   const [key, setKey] = useState(initial?.key ?? "");
@@ -705,20 +730,25 @@ export default function ProducePanel({
         <p className="dialog-note">{initial.note}</p>
       )}
 
+      {/* One tab stop walked with the arrows, and each tab points at the
+          panel it opens — the same contract every other tablist in the app
+          keeps (SC 2.1.1, SC 4.1.2). */}
       <div className="modal-tabs" role="tablist" aria-label="Produce">
-        {(
-          [
-            ["one", "Send one"],
-            ["bulk", "Bulk"],
-          ] as const
-        ).map(([k, label]) => (
+        {PRODUCE_TABS.map(([k, label], index) => (
           <button
             key={k}
             type="button"
             role="tab"
+            id={`pp-tab-${k}`}
             aria-selected={tab === k}
+            aria-controls={tab === k ? `pp-panel-${k}` : undefined}
+            tabIndex={tab === k ? 0 : -1}
+            ref={(el) => {
+              tabRefs.current[k] = el;
+            }}
             className={`tab${tab === k ? " tab-active" : ""}`}
             onClick={() => setTab(k)}
+            onKeyDown={(e) => onTabKeyDown(e, index)}
           >
             {label}
           </button>
@@ -730,7 +760,12 @@ export default function ProducePanel({
       )}
 
       {tab === "one" ? (
-        <div className="modal-panel">
+        <div
+          className="modal-panel"
+          id="pp-panel-one"
+          role="tabpanel"
+          aria-labelledby="pp-tab-one"
+        >
           <div className="field">
             <label className="field-label" htmlFor="pp-key">
               Key
@@ -958,7 +993,12 @@ export default function ProducePanel({
           </div>
         </div>
       ) : (
-        <div className="modal-panel">
+        <div
+          className="modal-panel"
+          id="pp-panel-bulk"
+          role="tabpanel"
+          aria-labelledby="pp-tab-bulk"
+        >
           <p className="dialog-note">
             Bulk sends the same template over and over, rendering the
             placeholders fresh each time. Kavka's core does the rendering — the

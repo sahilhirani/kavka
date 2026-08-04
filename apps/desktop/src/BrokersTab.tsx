@@ -232,20 +232,28 @@ export default function BrokersTab({
                     <tr
                       key={b.id}
                       className="row-click"
-                      tabIndex={0}
                       onClick={() => onSelectBroker(b.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onSelectBroker(b.id);
-                        }
-                      }}
                     >
                       <td className="ledger-gutter">{b.id}</td>
                       <td className="cell-mono">{b.host}</td>
                       <td className="col-num cell-num">{b.port}</td>
+                      {/* The row's keyboard path, and the only element here
+                          with a role that says it opens something (SC
+                          4.1.2). The row keeps its click for the pointer. */}
                       <td className="col-affordance">
-                        <span className="row-affordance">View settings →</span>
+                        <button
+                          type="button"
+                          className="row-affordance"
+                          aria-label={`View settings for broker ${b.id}`}
+                          // The row is still clickable for the pointer;
+                          // without this the handler runs twice per click.
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectBroker(b.id);
+                          }}
+                        >
+                          View settings →
+                        </button>
                       </td>
                     </tr>
                   ))

@@ -1,0 +1,551 @@
+<!doctype html>
+<!--
+  KAVKA — the site.
+
+  ONE FILE, NO BUILD SYSTEM. Open it in a browser and it is the site; drop the
+  directory on any static host and it is the site there too. Every path is
+  relative, so it works from `https://kavka.io/`, from
+  `https://sahilhirani.github.io/kavka/` and from `file://` without changing a
+  character. That is deliberate: GitHub Pages serves a project site under a
+  path prefix, and a page built with absolute `/styles.css` silently loses its
+  stylesheet the moment it moves.
+
+  IT IS BUILT ON THE APP'S OWN DESIGN SYSTEM (docs/DESIGN.md), because the
+  gap between a product's marketing page and the product is a thing people
+  notice and hold against you. No cards, no gradients, no drop shadows, no
+  hero illustration, no scroll animation. Grouping is whitespace and a top
+  hairline; the ledger rule runs down the left of every section exactly as it
+  runs down every table in the app.
+
+  SCREENSHOT PLACEHOLDERS are marked `TODO — screenshot` and render as mono
+  skeletons of the view that belongs there. They are NOT `<img>` tags with
+  missing files: a broken image icon is a worse placeholder than an honest
+  one, and the skeleton is the same device docs/DESIGN.md §7 asks for in an
+  empty state. Search this file for "TODO" to find all of them.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kavka — a fast, fully open-source Kafka client</title>
+    <meta
+      name="description"
+      content="Kavka is a free, open-source desktop client for Apache Kafka on macOS and Windows. Browse, search, operate and monitor your clusters. Every feature included, no tiers, no server component, AGPL-3.0."
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0F1317" />
+
+    <!-- Social cards. TODO(human): add docs-site/og-card.png (1200×630) and
+         set an absolute og:image URL once the domain is registered — Open
+         Graph does not accept a relative one, so it is deliberately absent
+         rather than present and broken. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Kavka — a fast, fully open-source Kafka client" />
+    <meta
+      property="og:description"
+      content="A free, open-source desktop client for Apache Kafka. Every feature included. No tiers, no licence keys, no server component."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <!-- Guardrail layer 2 at site scale. In the app this bar is transparent
+         until you open a production cluster; here it is the accent, which
+         means "live" in the product and means the same thing on the page. -->
+    <div class="wire" aria-hidden="true"></div>
+
+    <div class="page">
+      <header class="topbar">
+        <a class="wordmark" href="./">
+          Kavka
+          <span class="wordmark-note">Czech: jackdaw</span>
+        </a>
+        <nav class="topnav" aria-label="Sections">
+          <a href="#features">Features</a>
+          <a href="#download">Download</a>
+          <a href="#ai">AI &amp; MCP</a>
+          <a href="#licence">Licence</a>
+          <a href="https://github.com/sahilhirani/kavka">GitHub</a>
+          <a href="https://buymeacoffee.com/sahilhirani">Support&nbsp;☕</a>
+        </nav>
+      </header>
+
+      <main id="main">
+        <!-- ── HERO ──────────────────────────────────────────────────── -->
+        <section class="hero">
+          <div>
+            <h1 class="hero-title">
+              A Kafka client that is<br />
+              <em>actually</em> free.
+            </h1>
+
+            <p class="hero-lede">
+              Kavka is a desktop client for Apache Kafka on macOS and Windows.
+              Every feature is in the free app — no tiers, no licence keys, no
+              seat count, no server to run. Personal use, commercial use, a
+              hundred engineers: the same build.
+            </p>
+
+            <p class="hero-lede">
+              It fills the gap left by Conduktor Desktop's retirement and Offset
+              Explorer's stagnation: a small, native-feeling client with no JVM
+              and no Docker of its own.
+            </p>
+
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#download">Download</a>
+              <a class="btn" href="https://github.com/sahilhirani/kavka">
+                Source on GitHub
+              </a>
+            </div>
+
+            <p class="hero-footnote">
+              Connection passwords go to the operating system's keychain.
+              Nothing about your clusters leaves the machine — there is no
+              telemetry endpoint in the app.
+            </p>
+          </div>
+
+          <!-- The ledger rule: offsets in a fixed gutter, a 1px vertical rule,
+               then the payload. It is the app's signature and its information
+               architecture, so the page opens with it rather than with a
+               screenshot of it. -->
+          <div>
+            <div class="ledger" role="img"
+                 aria-label="A message table: offsets 8410 to 8415, each with a JSON order payload.">
+              <div class="ledger-row">
+                <span class="ledger-addr">8 410</span>
+                <span class="ledger-cell"><span class="p">{</span><span class="k">"orderId"</span><span class="p">:</span> <span class="n">8410</span><span class="p">,</span> <span class="k">"status"</span><span class="p">:</span> <span class="s">"created"</span><span class="p">}</span></span>
+              </div>
+              <div class="ledger-row">
+                <span class="ledger-addr">8 411</span>
+                <span class="ledger-cell"><span class="p">{</span><span class="k">"orderId"</span><span class="p">:</span> <span class="n">8411</span><span class="p">,</span> <span class="k">"status"</span><span class="p">:</span> <span class="s">"paid"</span><span class="p">}</span></span>
+              </div>
+              <div class="ledger-row">
+                <span class="ledger-addr">8 412</span>
+                <span class="ledger-cell"><span class="p">{</span><span class="k">"orderId"</span><span class="p">:</span> <span class="n">8412</span><span class="p">,</span> <span class="k">"status"</span><span class="p">:</span> <span class="s">"failed"</span><span class="p">}</span></span>
+              </div>
+              <div class="ledger-row">
+                <span class="ledger-addr">8 413</span>
+                <span class="ledger-cell"><span class="p">{</span><span class="k">"orderId"</span><span class="p">:</span> <span class="n">8413</span><span class="p">,</span> <span class="k">"status"</span><span class="p">:</span> <span class="s">"shipped"</span><span class="p">}</span></span>
+              </div>
+              <div class="ledger-row">
+                <span class="ledger-addr">8 414</span>
+                <span class="ledger-cell">∅ tombstone</span>
+              </div>
+              <div class="ledger-row">
+                <span class="ledger-addr">8 415</span>
+                <span class="ledger-cell"><span class="p">{</span><span class="k">"orderId"</span><span class="p">:</span> <span class="n">8415</span><span class="p">,</span> <span class="k">"status"</span><span class="p">:</span> <span class="s">"created"</span><span class="p">}</span></span>
+              </div>
+            </div>
+            <p class="ledger-caption">
+              The offset lives in a fixed gutter, then a rule, then the payload.
+              On a production cluster that rule turns coral — in every table in
+              the app, without a single banner.
+            </p>
+          </div>
+        </section>
+
+        <!-- ── FEATURES ──────────────────────────────────────────────── -->
+        <section class="section" id="features">
+          <div class="section-gutter">01</div>
+          <div class="section-body">
+            <h2 class="section-title">Everything, in the free app</h2>
+            <p class="section-lede">
+              There is no paid tier to compare this against, so the list below
+              is simply the list. It mirrors the repository's README, which
+              mirrors <code>docs/FEATURES.md</code> — one specification, three
+              places it is quoted.
+            </p>
+
+            <div class="features">
+              <div class="feature">
+                <span class="feature-eyebrow">Connect</span>
+                <h3>The whole auth matrix</h3>
+                <p>
+                  PLAINTEXT, TLS and mTLS from PEM files with no keystore
+                  conversion, SASL PLAIN and SCRAM, OAUTHBEARER/OIDC, AWS MSK
+                  IAM, Kerberos. Secrets go to the OS keychain; per-connection
+                  read-only mode is enforced in the core, not the UI.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Browse</span>
+                <h3>Search a whole topic</h3>
+                <p>
+                  Streaming search across every partition with raw-byte
+                  prefilters and CEL push-down, progressive results and
+                  cancellation. It never silently truncates: it says what it
+                  scanned, what it could not evaluate and where it stopped.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Decode</span>
+                <h3>Serdes that just work</h3>
+                <p>
+                  Avro, Protobuf and JSON Schema through Schema Registry
+                  (Confluent, Apicurio, Glue), plus XML, MessagePack, CBOR and
+                  hex. Every message shows the subject, version and id it was
+                  decoded with — or says plainly that nothing matched.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Operate</span>
+                <h3>The whole admin surface</h3>
+                <p>
+                  Consumer-group lag and every offset-reset mode, ACLs, client
+                  quotas, partition reassignment with throttles, preferred
+                  leader election, broker configs, the KRaft quorum, Kafka
+                  Connect CRUD and Schema Registry management.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Monitor</span>
+                <h3>Lag history that survives restarts</h3>
+                <p>
+                  A local sampler writes lag to an embedded store, so the charts
+                  cover last week rather than since you opened the window. Alert
+                  rules fire OS notifications and webhooks. Kafka Streams
+                  topologies render; KIP-932 share groups are visible.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Power</span>
+                <h3>SQL, replay and diff</h3>
+                <p>
+                  SQL over a bounded scan of a topic. Cross-cluster copy and
+                  replay with transforms, config diff between environments,
+                  consumer-offset migration and DLQ workflows. Custom decoders
+                  as sandboxed WebAssembly plugins.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Guardrails</span>
+                <h3>Production is visible everywhere</h3>
+                <p>
+                  Nine independent layers, starting with the ledger rule turning
+                  coral in every table and a 2px bar across the top of the
+                  window. Destructive actions on production ask you to type the
+                  name. Most incidents are right-action-wrong-cluster.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Access</span>
+                <h3>Built to WCAG 2.2 AA</h3>
+                <p>
+                  Zero contrast failures across every surface, no state encoded
+                  by colour alone, a 24px minimum hit target, full keyboard
+                  navigation and a command palette that is the real navigation.
+                  Verified in Windows high-contrast mode.
+                </p>
+              </div>
+            </div>
+
+            <!-- TODO — screenshot: the message browser on a busy topic, live
+                 tail running, inspector open on a JSON payload, dev cluster.
+                 Replace this whole <figure> with:
+                   <figure class="shot">
+                     <img src="screenshots/messages.png" width="1440" height="900"
+                          alt="Kavka's message browser: a virtualized table of
+                               offsets and JSON payloads with the inspector open." />
+                     <figcaption>…</figcaption>
+                   </figure>
+                 Capture at 1440×900, 2× DPI, dark theme, density "default". -->
+            <figure class="shot">
+              <div class="shot-frame">
+                <span class="shot-todo">TODO — screenshot</span>
+                <pre class="shot-skeleton">
+OFFSET   TIMESTAMP     KEY        VALUE
+8 410  │ 12:04:19.204  order-8410  {"orderId": 8410, "status": "created"}
+8 411  │ 12:04:19.887  order-8411  {"orderId": 8411, "status": "paid"}
+8 412  │ 12:04:20.113  order-8412  {"orderId": 8412, "status": "failed"}
+8 413  │ 12:04:20.902  order-8413  {"orderId": 8413, "status": "shipped"}
+8 414  │ 12:04:21.455  order-8414  ∅ tombstone
+8 415  │ 12:04:21.980  order-8415  {"orderId": 8415, "status": "created"}</pre>
+              </div>
+              <figcaption>
+                The message browser — virtualized, live-tailing, with the
+                payload inspector docked on the right.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <!-- ── DOWNLOAD ──────────────────────────────────────────────── -->
+        <section class="section" id="download">
+          <div class="section-gutter">02</div>
+          <div class="section-body">
+            <h2 class="section-title">Download</h2>
+            <p class="section-lede">
+              Installers are attached to every
+              <a href="https://github.com/sahilhirani/kavka/releases">GitHub
+              release</a>, built by CI from the tag. Pick the one for your
+              machine — there is nothing to sign up for and nothing to activate.
+            </p>
+
+            <div class="downloads">
+              <div class="download">
+                <h3>macOS</h3>
+                <ul>
+                  <li>Apple Silicon — <code>Kavka_&lt;version&gt;_aarch64.dmg</code></li>
+                  <li>Intel — <code>Kavka_&lt;version&gt;_x64.dmg</code></li>
+                  <li>macOS 12 Monterey or newer</li>
+                </ul>
+                <a class="btn" href="https://github.com/sahilhirani/kavka/releases/latest">
+                  Latest release
+                </a>
+              </div>
+
+              <div class="download">
+                <h3>Windows</h3>
+                <ul>
+                  <li>Installer — <code>Kavka_&lt;version&gt;_x64-setup.exe</code></li>
+                  <li>MSI, for fleets — <code>Kavka_&lt;version&gt;_x64_en-US.msi</code></li>
+                  <li>Windows 10 1809 or newer, x64</li>
+                </ul>
+                <a class="btn" href="https://github.com/sahilhirani/kavka/releases/latest">
+                  Latest release
+                </a>
+              </div>
+
+              <div class="download">
+                <h3>From source</h3>
+                <ul>
+                  <li>Rust stable, Node 20+, CMake</li>
+                  <li>Everything CI builds, you can build</li>
+                  <li>AGPL-3.0 — the source is the product</li>
+                </ul>
+                <a class="btn" href="https://github.com/sahilhirani/kavka#development-setup">
+                  Build instructions
+                </a>
+              </div>
+            </div>
+
+            <p class="download-note">
+              <strong>The binaries are not code-signed yet.</strong> On macOS,
+              right-click the app and choose <em>Open</em> the first time; on
+              Windows, SmartScreen will warn you and you will need
+              <em>More info → Run anyway</em>. That is what an unsigned build
+              from an independent developer looks like, and saying so here is
+              better than letting the operating system say it first. Every
+              release ships a <code>SHA256SUMS.txt</code> so you can check what
+              you downloaded against what CI built.
+            </p>
+
+            <h3 class="sr-only">Package managers</h3>
+            <ul class="pm-list">
+              <li>
+                <span class="pm-name">Homebrew</span>
+                <code class="pm-cmd">brew install --cask kavka</code>
+                <span class="pm-when">after notarization — see the repo's packaging/README.md</span>
+              </li>
+              <li>
+                <span class="pm-name">winget</span>
+                <code class="pm-cmd">winget install SahilHirani.Kavka</code>
+                <span class="pm-when">after code signing</span>
+              </li>
+              <li>
+                <span class="pm-name">Chocolatey</span>
+                <code class="pm-cmd">choco install kavka</code>
+                <span class="pm-when">after the first release is moderated</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- ── NO CLUSTER ────────────────────────────────────────────── -->
+        <section class="section" id="playground">
+          <div class="section-gutter">03</div>
+          <div class="section-body">
+            <h2 class="section-title">No cluster to point it at?</h2>
+            <p class="section-lede">
+              Kavka's first-run screen offers to start one for you. It runs a
+              single-node Kafka in Docker on <code>localhost:19092</code>, seeds
+              a few topics with records and a consumer group with real lag, and
+              saves a connection called <em>Playground</em> — about thirty
+              seconds, one click.
+            </p>
+            <p class="section-lede">
+              <strong>Kavka does not bundle a broker</strong>, and it says so on
+              that screen rather than here only. Apache Kafka is a JVM
+              application: bundling one would mean shipping a Java runtime, and
+              a 300 MB download is precisely the thing this app exists not to
+              be. If you have Docker, the button works. If you do not, you get
+              one honest sentence instead of a button that cannot.
+            </p>
+          </div>
+        </section>
+
+        <!-- ── AI / MCP ──────────────────────────────────────────────── -->
+        <section class="section" id="ai">
+          <div class="section-gutter">04</div>
+          <div class="section-body">
+            <h2 class="section-title">Your clusters, in Claude and Cursor</h2>
+            <p class="section-lede">
+              Kavka ships a second binary that speaks the Model Context
+              Protocol over stdio and reads the same connections and the same
+              keychain the app does. Point an assistant at it and it can look at
+              your clusters with exactly the credentials you already trust —
+              nothing listens on a port, and nothing leaves the machine unless
+              your assistant sends it.
+            </p>
+
+            <pre class="code">claude mcp add kavka -- "/Applications/Kavka.app/Contents/MacOS/kavka-mcp"</pre>
+
+            <p class="section-lede" style="margin-top: 20px">
+              <strong>It is read-only until you say otherwise.</strong> The two
+              tools that write — produce a record, reset a group's offsets —
+              only exist if the client starts the server with
+              <code>KAVKA_MCP_ALLOW_WRITES=1</code>, and a production connection
+              needs <code>KAVKA_MCP_ALLOW_PROD=1</code> as well. A connection
+              you marked read-only refuses regardless. There is no delete, no
+              create, no ACL change and no config change over MCP at all.
+            </p>
+
+            <ul class="tools">
+              <li><code>kavka_list_topics</code><span>Every topic, with partitions and replication.</span></li>
+              <li><code>kavka_fetch_messages</code><span>Records from a seek point — at most 500.</span></li>
+              <li><code>kavka_search</code><span>A bounded scan; matches and counts, never a whole topic.</span></li>
+              <li><code>kavka_sql</code><span>SQL over a bounded scan of one topic.</span></li>
+              <li><code>kavka_group_detail</code><span>One group's members, offsets and lag.</span></li>
+            </ul>
+
+            <p class="section-lede" style="margin-top: 20px">
+              Session masking rules travel to it. Redactions you configure in
+              the app are stored beside the connection file the server reads, so
+              they apply to what an assistant is handed — not just to what is on
+              your screen. An assistant's context is logged, replayed and sent
+              to somebody else's server, which is exactly why that direction
+              matters.
+            </p>
+
+            <!-- TODO — screenshot: the About dialog's MCP section with the
+                 Cursor snippet visible, or a Claude Code transcript browsing a
+                 topic through the server. The second is the better story.
+                 Replace with an <img> as in the features section. -->
+            <figure class="shot">
+              <div class="shot-frame">
+                <span class="shot-todo">TODO — screenshot</span>
+                <pre class="shot-skeleton">
+&gt; which orders failed in the last hour?
+
+  kavka_search(topic: "orders", cel: 'value.status == "failed"')
+  → scanned 412 000 · matched 37 · 0 unevaluated
+
+  37 records, all on partitions 2 and 5, between 12:04 and 12:41.
+  Every one has "reason": "payment_declined".</pre>
+              </div>
+              <figcaption>
+                Claude Code reading a topic through Kavka's MCP server — the
+                same connection, the same keychain, no second set of
+                credentials.
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <!-- ── SUPPORT ───────────────────────────────────────────────── -->
+        <section class="section" id="support">
+          <div class="section-gutter">05</div>
+          <div class="section-body">
+            <h2 class="section-title">Supporting Kavka</h2>
+            <p class="section-lede">
+              Kavka is free and will stay free — no paid tier, no feature gate,
+              no "enterprise edition" holding the ACL screen hostage. It is
+              funded by people who found it useful. There is no nag screen: the
+              only mention inside the app is one quiet line in the About panel
+              and one entry in the command palette.
+            </p>
+
+            <div class="support-line">
+              <a class="btn btn-primary" href="https://buymeacoffee.com/sahilhirani">
+                Buy me a coffee ☕
+              </a>
+              <a class="btn" href="https://github.com/sahilhirani/kavka/issues">
+                Report a bug
+              </a>
+              <a class="btn" href="https://github.com/sahilhirani/kavka">
+                Star it on GitHub
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── LICENCE ───────────────────────────────────────────────── -->
+        <section class="section licence" id="licence">
+          <div class="section-gutter">06</div>
+          <div class="section-body">
+            <h2 class="section-title">AGPL-3.0, and what that means for you</h2>
+            <p class="section-lede">
+              The GNU Affero General Public License, version 3. In practice,
+              for the four situations people actually ask about:
+            </p>
+
+            <dl>
+              <dt>Using it</dt>
+              <dd>
+                Free, forever, for anything — at home, at work, at a company of
+                any size, against production clusters. No registration, no seat
+                count, no phone-home. Nothing is asked of you.
+              </dd>
+
+              <dt>Modifying it</dt>
+              <dd>
+                Go ahead. If you keep the changes to yourself, that is the end
+                of it — the licence only has something to say when you
+                distribute.
+              </dd>
+
+              <dt>Distributing it</dt>
+              <dd>
+                If you ship a modified Kavka to anyone, you publish your source
+                under the same licence. This is the clause that means there can
+                be no closed-source fork with the good bits behind a paywall,
+                which is the failure mode this project exists in response to.
+              </dd>
+
+              <dt>Hosting it</dt>
+              <dd>
+                The "Affero" part: offering a modified Kavka as a network
+                service counts as distributing it. Kavka is a desktop app with
+                no server component, so this is unlikely to come up — it is here
+                so it cannot be routed around later.
+              </dd>
+            </dl>
+
+            <p class="section-lede" style="margin-top: 24px">
+              The full text is in
+              <a href="https://github.com/sahilhirani/kavka/blob/main/LICENSE">LICENSE</a>.
+              Kavka is not affiliated with or endorsed by the Apache Software
+              Foundation; Apache Kafka is a trademark of the ASF.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>
+          Kavka — free and open source under AGPL-3.0. Built by
+          <a href="https://github.com/sahilhirani">Sahil Hirani</a>.
+        </span>
+        <nav aria-label="Footer">
+          <a href="https://github.com/sahilhirani/kavka">Source</a>
+          <a href="https://github.com/sahilhirani/kavka/issues">Issues</a>
+          <a href="https://github.com/sahilhirani/kavka/releases">Releases</a>
+          <a href="https://buymeacoffee.com/sahilhirani">Support ☕</a>
+        </nav>
+      </footer>
+    </div>
+  </body>
+</html>

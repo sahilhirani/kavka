@@ -1040,6 +1040,35 @@ Anything not on that list — charts, config diff, topology, reassignment —
    row has the indicator", which looks fine in a screenshot of a single row.
 6. **`index.html`** hard-codes the anti-flash background. It must stay in sync
    with `--bg-canvas`, or the app flashes the old theme on every cold start.
+7. **WCAG 2.2 AA** — the full audit, finding by finding with SC references, is
+   `docs/A11Y-AUDIT.md`. It is the procurement deliverable, so it is kept
+   current rather than dated: **a PR that changes a control changes that file
+   too.** Five things in it are cheap to break and expensive to notice, so
+   check them by hand before merging anything that touches a widget:
+   1. **A declared role is a promise about the keyboard.** `role="tablist"`
+      means one tab stop plus ←/→/Home/End; `role="radiogroup"` means the same
+      with selection following focus. Four widgets shipped the role without the
+      model. If you add either, copy `ClusterView`'s strip — it is the
+      reference implementation — and give every tab an `aria-controls` that
+      actually resolves.
+   2. **Nothing operable may be a `<div>` or a `<tr>`.** A row that responds to
+      Enter has the role `row`, which says nothing about being operable
+      (SC 4.1.2). The pattern is a real `<button>` in the affordance cell
+      (`.row-affordance`), the row's `onClick` kept for the pointer, and
+      `stopPropagation` on the button so one click is not two.
+   3. **A message that appears without focus moving needs a live region.**
+      Validation the *form* owns focuses its control and needs nothing;
+      validation a *caller* owns (`SeekBar`) and anything raised on blur needs
+      `role="alert"`.
+   4. **Reduced motion is per animation, not one blanket.** The blanket at the
+      top of the sheet is right for an animation whose resting state is the
+      answer, and it **deletes** an indeterminate one. See §11.
+   5. **`--hit-min` is 24px in BOTH dimensions.** `height: auto` on a button
+      and a bare glyph in narrow padding are the two ways it gets missed.
+
+   Add to the manual sweep in gate 3: 400% zoom at the window's 960px minimum,
+   `prefers-reduced-motion: reduce` with a fetch in flight and a toast up, and
+   one keyboard-only pass end to end with no pointer at all.
 
 ---
 
@@ -1129,6 +1158,82 @@ These are deliberate. Do not "fix" them without reading the reason.
 
 - **Static tables carry no `role="grid"` / `aria-rowcount` / `aria-rowindex`.**
   Those land with the virtualizer, in the same PR. See §5.2.
+
+- **The row affordance is a `<button>`, not a `<span>`, and the row is not
+  focusable.** §5.2 says "on hover the last column reveals a ghost
+  `View messages →`. The whole row is also clickable." That shipped as a
+  focusable `<tr>` with an Enter/Space handler and a decorative span — and a
+  `<tr>` has the implicit role `row`, which never tells assistive technology
+  the element is operable (SC 4.1.2, and `role="button"` is not available to a
+  row). So the affordance carries the role and a name that says which row it
+  opens, the row keeps its `onClick` for the pointer, and the row's `tabIndex`
+  is gone: **still exactly one tab stop per row**, on an element that can
+  describe itself. Two consequences worth knowing before touching it:
+  `.row-affordance` is `opacity: 0` rather than `visibility: hidden`, because a
+  hidden element cannot be focused, and it repaints at `:focus-visible` so it
+  is never an invisible tab stop; and it calls `stopPropagation`, because the
+  row's handler would otherwise run twice per click — harmless on five of the
+  six tables, and on Share groups a **toggle**, where twice is the same as
+  never.
+
+- **A tab strip and a radio group are one tab stop, not N.** `role="tablist"`
+  and `role="radiogroup"` are promises about the keyboard, and four widgets
+  shipped the role without the model. Every strip in the app now carries a
+  roving `tabIndex` plus ←/→/Home/End with selection following focus, and every
+  tab's `aria-controls` names a panel that is actually mounted. `ClusterView`'s
+  is the one to copy.
+
+- **`Overlay`'s focusable selector excludes `[tabindex="-1"]` on every branch,
+  and includes `details > summary`.** `button:not([disabled])` matches
+  `<button tabindex="-1">`, which the roving strips above would have fed
+  straight into the focus trap's first/last calculation; and a `<summary>` —
+  which every in-dialog error banner ends in — is Tab-focusable while matching
+  none of the original selectors, so `last` was sometimes not the last thing
+  Tab reaches and the trap leaked.
+
+- **Reduced motion is a per-animation pass, not only the blanket rule.** The
+  block at the top of the sheet (`animation-duration: 1ms`,
+  `animation-iteration-count: 1`) is right for an animation whose RESTING STATE
+  is what the user should see — an arrived toast, a drawn chart. It is exactly
+  wrong for an indeterminate one, whose resting state is the end of a loop that
+  was supposed to repeat: `.table-loading`'s bar landed at `translateX(430%)`,
+  i.e. off the end of its own box, so §5.2's "never a spinner over data"
+  indicator **disappeared** for the users who asked for less motion; and
+  `.toast-progress` drained to zero in 1ms and then contradicted its own 5s
+  dismiss timer for five seconds. Both are now `animation: none` with a static
+  appearance, in a block at the END of `styles.css` — the rules it overrides are
+  declared hundreds of lines below the top block, and at equal specificity the
+  later declaration wins.
+
+- **18px checkboxes pass SC 2.5.8 on the SPACING exception, not the size
+  test.** §5.3 reads as though 18px cleared the criterion. It does not — the
+  floor is 24px — and it passes because a 24px-diameter circle centred on each
+  box does not intersect another target's: stacked check-fields sit ≥30px
+  apart, being the 18px box plus at least `--s-5` of fieldset gap. Measured,
+  not assumed. **The thing that would break this is tightening a fieldset gap,
+  not the checkbox.** Full working in `docs/A11Y-AUDIT.md` (A11Y-27).
+
+- **The glossary popover takes pointer events while it is open.** §7 specced it
+  `pointer-events: none`, which made it unreachable by the pointer — and SC
+  1.4.13's *hoverable* clause requires the pointer to be able to rest on it. It
+  sits 6px from its term, so moving towards it fired `mouseleave` and closed
+  the thing being moved towards, which is the manoeuvre a magnifier user makes
+  constantly. `.term-pop-open` now takes `pointer-events: auto` (only while
+  open, so a hidden 260px panel can never swallow a click on the row beneath
+  it) and `Glossary.tsx` holds a 120ms grace timer to carry the pointer across
+  the gap — `mouseleave` on the term fires *before* `mouseenter` on the
+  popover, so the close has to be cancellable rather than immediate.
+
+- **The inspector dock has a `max-width: 60%`, which §5.10 already specified.**
+  It shipped as a flat 480px with `flex-shrink: 0`, so at the window's own
+  960px minimum the message table was left about 200px and the payload column —
+  the loudest pixels on screen, by Law 1 — vanished before any chrome did.
+
+- **The tab strip scrolls horizontally.** Ten cluster tabs in a non-wrapping
+  flex row inside `.workspace { overflow: hidden }` were clipped out of
+  existence past about 900px of workspace — and not merely hidden: a roving
+  `tabIndex` cannot focus what a clip has removed, so the last four views were
+  unreachable by keyboard too (SC 1.4.10).
 
 - **Light-theme prod sidebar rows fail AA and ship anyway — because the light
   theme itself doesn't ship.** On `--bg-row-prod-selected` `#F2D8D4` and

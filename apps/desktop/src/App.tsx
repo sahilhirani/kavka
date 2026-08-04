@@ -7,6 +7,7 @@ import {
   profilesList,
   type ConnectionProfile,
   type ConnState,
+  type ConnStatus,
 } from "./api";
 import { maskingChipLabel, maskingChipTitle, useMasking } from "./masking";
 import Sidebar from "./Sidebar";
@@ -19,6 +20,8 @@ import Palette, {
 } from "./Palette";
 import AboutDialog from "./AboutDialog";
 import ImportExportDialog, { type TransferTab } from "./ImportExportDialog";
+import Playground from "./Playground";
+import { useI18n, type MessageKey } from "./i18n";
 import type { TopicActions } from "./TopicsTab";
 
 const SELECTED_KEY = "kavka.selectedProfileId";
@@ -47,13 +50,14 @@ function lsRemove(key: string) {
   }
 }
 
-const STATUS_WORD = {
-  disconnected: "Not connected",
-  connecting: "Connecting…",
-  connected: "Connected",
-} as const;
+const STATUS_KEY: Record<ConnStatus, MessageKey> = {
+  disconnected: "app.status.disconnected",
+  connecting: "app.status.connecting",
+  connected: "app.status.connected",
+};
 
 export default function App() {
+  const { t, tx } = useI18n();
   // null = still loading
   const [profiles, setProfiles] = useState<ConnectionProfile[] | null>(null);
   const [version, setVersion] = useState<string>("");
@@ -258,9 +262,7 @@ export default function App() {
       stageTopic(profileId, topic);
       const target = profilesRef.current?.find((p) => p.id === profileId) ?? null;
       if (target === null) {
-        setError(
-          "That connection isn't on this machine any more. It may have been deleted in another window.",
-        );
+        setError(t("app.error.unknownProfile"));
         return;
       }
       const already = connectionsRef.current[profileId]?.status === "connected";
@@ -270,7 +272,34 @@ export default function App() {
       lsSet(SELECTED_KEY, profileId);
       if (!already) void connect(target);
     },
-    [connect],
+    [connect, t],
+  );
+
+  /**
+   * The playground finished and there is a connection for it.
+   *
+   * The profile was written by the shell, so the list has to be re-read before
+   * anything selects it — `connect` looks the profile up in `profilesRef` and
+   * would find nothing. Connecting is left to the same path every other
+   * connection takes, with the same status dot: a panel that opened a cluster
+   * by itself would be teaching that connections happen unasked.
+   */
+  const openPlayground = useCallback(
+    async (profileId: string) => {
+      const list = await reloadProfiles();
+      const target =
+        (list ?? profilesRef.current)?.find((p) => p.id === profileId) ?? null;
+      setCreating(false);
+      setSelectedId(profileId);
+      lsSet(SELECTED_KEY, profileId);
+      if (
+        target !== null &&
+        connectionsRef.current[profileId]?.status !== "connected"
+      ) {
+        void connect(target);
+      }
+    },
+    [reloadProfiles, connect],
   );
 
   const openAbout = useCallback(() => setAboutOpen(true), []);
@@ -317,7 +346,7 @@ export default function App() {
     main = (
       <div className="empty-state">
         <div className="empty-block">
-          <p className="empty-hint">Reading your saved connections…</p>
+          <p className="empty-hint">{t("common.readingConnections")}</p>
         </div>
       </div>
     );
@@ -366,18 +395,15 @@ export default function App() {
     main = (
       <div className="empty-state">
         <div className="empty-block">
-          <h1 className="empty-title">Kavka couldn't read its connection file</h1>
-          <p className="empty-hint">
-            Your connections are still on disk — nothing was lost. Kavka stores
-            them in its config directory, alongside this app's settings.
-          </p>
+          <h1 className="empty-title">{t("app.profilesFailed.title")}</h1>
+          <p className="empty-hint">{t("app.profilesFailed.hint")}</p>
           <div className="empty-actions">
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => void reloadProfiles()}
             >
-              Try again
+              {t("common.tryAgain")}
             </button>
           </div>
         </div>
@@ -388,16 +414,17 @@ export default function App() {
     main = (
       <div className="empty-state">
         <div className="empty-block">
-          <h1 className="empty-title">Point Kavka at a broker</h1>
+          <h1 className="empty-title">{t("app.firstRun.title")}</h1>
+          <p className="empty-hint">{t("app.firstRun.what")}</p>
+          {/* `tx`, not `t`: the two example addresses are <code> elements
+              spliced into the sentence as PARAMS, so a translator gets one
+              whole sentence with two slots instead of three fragments whose
+              word order they cannot change. */}
           <p className="empty-hint">
-            A connection is a saved address for one Kafka cluster — a name, one
-            broker to start from, and how to sign in. Kavka finds the rest of
-            the cluster from there.
-          </p>
-          <p className="empty-hint">
-            A bootstrap server usually looks like{" "}
-            <code>kafka-1.internal:9092</code>. Running this repo's dev cluster?
-            Use <code>localhost:9092</code>.
+            {tx("app.firstRun.example", {
+              example: <code>kafka-1.internal:9092</code>,
+              local: <code>localhost:9092</code>,
+            })}
           </p>
           <div className="empty-actions">
             <button
@@ -405,13 +432,17 @@ export default function App() {
               className="btn btn-primary"
               onClick={startCreating}
             >
-              Add connection
+              {t("common.addConnection")}
             </button>
           </div>
-          <p className="empty-footnote">
-            Passwords go to your operating system's keychain. Nothing about your
-            clusters leaves this machine.
-          </p>
+          <p className="empty-footnote">{t("app.firstRun.footnote")}</p>
+
+          {/* The second path off screen one, and the one for somebody who has
+              no broker to point at yet. It is BELOW the primary action and
+              carries no primary button of its own: the empty state is allowed
+              exactly one (docs/DESIGN.md §5.5), and "add your cluster" is the
+              thing most people came here to do. */}
+          <Playground onReady={(id) => void openPlayground(id)} />
         </div>
       </div>
     );
@@ -419,16 +450,20 @@ export default function App() {
     main = (
       <div className="empty-state">
         <div className="empty-block">
-          <h1 className="empty-title">Pick a connection</h1>
-          <p className="empty-hint">
-            Choose a cluster on the left to see its brokers and topics, or add
-            another connection.
-          </p>
+          <h1 className="empty-title">{t("app.pick.title")}</h1>
+          <p className="empty-hint">{t("app.pick.hint")}</p>
           <div className="empty-actions">
             <button type="button" className="btn" onClick={startCreating}>
-              Add connection
+              {t("common.addConnection")}
             </button>
           </div>
+
+          {/* Here as well as on screen one, and for a reason that only shows up
+              on the second launch: once the Playground connection exists, the
+              first-run state never renders again — and the STOP button lives in
+              this panel. Without this the only way to shut the container down
+              would be the terminal, from an app that started it with a button. */}
+          <Playground onReady={(id) => void openPlayground(id)} />
         </div>
       </div>
     );
@@ -447,37 +482,39 @@ export default function App() {
       {
         id: "topic-search",
         glyph: "⌕",
-        label: `Search in ${topicActions.topic}`,
+        label: t("app.cmd.search", { topic: topicActions.topic }),
         context: selected.name,
-        keywords: "find filter cel scan query messages grep",
+        keywords: t("app.cmd.search.kw"),
         env: selected.environment,
         run: topicActions.search,
       },
       {
         id: "topic-sql",
         glyph: "∑",
-        label: `Query ${topicActions.topic} with SQL`,
+        label: t("app.cmd.sql", { topic: topicActions.topic }),
         context: selected.name,
-        keywords: "sql select query aggregate count group datafusion analyse",
+        keywords: t("app.cmd.sql.kw"),
         env: selected.environment,
         run: topicActions.sql,
       },
       {
         id: "topic-produce",
         glyph: "↑",
-        label: `Produce to ${topicActions.topic}`,
+        label: t("app.cmd.produce", { topic: topicActions.topic }),
         context:
           selected.environment === "prod"
-            ? `${selected.name} · asks for confirmation`
+            ? t("app.cmd.produce.confirmContext", { cluster: selected.name })
             : selected.name,
-        keywords: "send write publish message record bulk producer",
+        keywords: t("app.cmd.produce.kw"),
         env: selected.environment,
         danger: selected.environment === "prod",
         disabledReason: topicActions.produceBlocked,
         run: topicActions.produce,
       },
     ];
-  }, [topicActions, selected]);
+    // `t` is memoized on the locale, so this rebuilds when the language
+    // changes and on no other render — see the identity rule in i18n/index.ts.
+  }, [topicActions, selected, t]);
 
   return (
     <div
@@ -536,7 +573,7 @@ export default function App() {
                   />
                   {/* Law 2: the dot never carries the meaning on its own. */}
                   <span className="statusbar-item">
-                    {STATUS_WORD[conn.status]}
+                    {t(STATUS_KEY[conn.status])}
                   </span>
                   <span className="statusbar-sep" aria-hidden="true">
                     ·
@@ -556,9 +593,9 @@ export default function App() {
                   {selected.read_only && (
                     <span
                       className="readonly-chip"
-                      title="This connection is read-only. Turn that off in the connection's settings to produce or edit."
+                      title={t("app.readonlyTitle")}
                     >
-                      read-only
+                      {t("app.readonlyChip")}
                     </span>
                   )}
                   {/* Masking, said out loud wherever data is. A payload that
@@ -577,7 +614,7 @@ export default function App() {
                 </>
               ) : (
                 <span className="statusbar-item">
-                  {creating ? "New connection — not saved yet" : "No connection selected"}
+                  {creating ? t("app.statusbar.draft") : t("app.statusbar.none")}
                 </span>
               )}
             </div>
@@ -587,17 +624,17 @@ export default function App() {
               <button
                 type="button"
                 className="statusbar-hint"
-                title="Search commands and clusters"
+                title={t("palette.searchLabel")}
                 onClick={() => setPaletteOpen(true)}
               >
                 <span className="kbd">{paletteKeyLabel()}</span>
-                commands
+                {t("app.statusbar.commands")}
               </button>
               <span className="statusbar-sep" aria-hidden="true">
                 ·
               </span>
               <span className="statusbar-item statusbar-mono">
-                core v{version || "…"}
+                {t("app.statusbar.coreVersion", { version: version || "…" })}
               </span>
             </div>
           </footer>

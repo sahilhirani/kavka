@@ -1319,14 +1319,7 @@ export default function TopicsTab({
                       <tr
                         key={t.name}
                         className={`row-click${isInternal(t) ? " row-internal" : ""}`}
-                        tabIndex={0}
                         onClick={() => onSelectTopic(t.name)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            onSelectTopic(t.name);
-                          }
-                        }}
                         title={
                           isInternal(t)
                             ? `${t.name} is one of Kafka's own internal topics — Kafka uses it for bookkeeping, not for your messages. It is shown greyed rather than hidden so you can see it exists.`
@@ -1344,9 +1337,29 @@ export default function TopicsTab({
                           {t.replication_factor}
                         </td>
                         {/* Row affordance for novices: the whole row is
-                            clickable, and the last column says so on hover. */}
+                            clickable, and the last column says so on hover.
+
+                            IT IS THE ROW'S KEYBOARD PATH TOO. A <tr> with
+                            tabIndex and an Enter handler has the role "row",
+                            which never tells assistive technology it is
+                            operable (SC 4.1.2) — so the affordance is a real
+                            button carrying the role and a name that says
+                            which topic it opens, and the row keeps its click
+                            for the pointer. */}
                         <td className="col-affordance">
-                          <span className="row-affordance">View messages →</span>
+                          <button
+                            type="button"
+                            className="row-affordance"
+                            aria-label={`View messages in ${t.name}`}
+                            // The row is still clickable for the pointer;
+                            // without this the handler runs twice per click.
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectTopic(t.name);
+                            }}
+                          >
+                            View messages →
+                          </button>
                         </td>
                       </tr>
                     ))

@@ -8,6 +8,11 @@ dist/
 # Tauri
 apps/desktop/src-tauri/gen/
 
+# Rendered package-manager manifests. The TEMPLATES are the source; the output
+# carries a version and four checksums that are only true for one release, so
+# committing it would guarantee a stale copy in the tree within a day.
+packaging/out/
+
 # OS / editor
 .DS_Store
 Thumbs.db

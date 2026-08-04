@@ -1,0 +1,150 @@
+# THE PLAYGROUND — the broker Kavka starts for you when you have no cluster.
+#
+# This file SHIPS INSIDE THE APP (tauri.conf.json → bundle.resources), so it is
+# read from the installed Resources directory, not from a checkout. Kavka runs
+# it as:
+#
+#   docker compose -p kavka-playground -f <this file> up -d --wait
+#   docker compose -p kavka-playground -f <this file> down
+#
+# ── Why 19092 and not 9092 ────────────────────────────────────────────────
+# 9092 is the port a Kafka a person already runs is listening on — this repo's
+# own dev cluster (dev/docker-compose.yml), a Homebrew install, a colleague's
+# stack. A playground that refuses to start because "the port is allocated" is
+# a worse first run than no playground at all, and the failure reads as *Kavka*
+# being broken. So the playground takes a port nothing else claims, and the app
+# says which one on screen. It is also why the project name is pinned with
+# `-p`: without it Compose derives the project from the parent directory, which
+# differs between a dev build and an installed app, and `down` would then not
+# find what `up` created.
+#
+# ── Why this is not dev/docker-compose.yml ────────────────────────────────
+# The dev cluster is a TEST FIXTURE: it loads StandardAuthorizer so the ACL
+# integration tests have something to talk to, and it upgrades a KRaft feature
+# so the Share Groups suite has something to read. None of that belongs in a
+# first-run experience — it is slower to come up and it has more ways to fail
+# in front of somebody who has had the app open for ninety seconds. This one
+# does the smallest possible thing: one broker, PLAINTEXT, five topics, some
+# records to look at.
+#
+# ── What it leaves behind ─────────────────────────────────────────────────
+# One named volume, `kafka-data` (Compose prefixes it, so on disk it is
+# `kavka-playground_kafka-data`). `down` keeps it, so stopping and starting the
+# playground picks up where it left off. To remove it as well:
+#
+#   docker compose -p kavka-playground down -v
+#
+# Kavka never runs that itself: deleting somebody's data is not a button this
+# app presses on their behalf.
+services:
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: kavka-playground-kafka
+    restart: unless-stopped
+    ports:
+      - "19092:19092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:19092
+      # EXTERNAL advertises localhost:19092 because that is the address the app
+      # on this machine dials. The broker hands its advertised listener back in
+      # metadata, and a client that connected to localhost but is then told to
+      # talk to `kafka` cannot resolve it — the "connected, but the cluster
+      # didn't answer in time" error in docs/DESIGN.md §7 is usually this.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+
+  # Creates the topics and seeds a few records, so the first thing the app
+  # shows is a topic list with messages in it rather than an empty cluster and
+  # a second empty state.
+  #
+  # ── WHY THIS CONTAINER IDLES INSTEAD OF EXITING ─────────────────────────
+  # `compose up --wait` treats a RUNNING container with no healthcheck as
+  # ready. A seeder that exits when it is finished is therefore exactly the
+  # shape `--wait` cannot observe: it reports the service ready the instant the
+  # process *starts*, so `up --wait` returns while the topics are still being
+  # created — and Kavka would tell somebody "the playground is ready" and open
+  # an empty cluster. (Measured, not theorised: the first version of this file
+  # did exactly that.)
+  #
+  # So the seeder writes a marker when it is genuinely done, idles, and carries
+  # a healthcheck that looks for the marker. `--wait` then blocks until the
+  # data is there, which is the only definition of "ready" worth reporting.
+  # `stop_grace_period` keeps `down` prompt in case the trap below is ever
+  # bypassed — a teardown that takes Docker's default ten seconds to kill a
+  # sleeping shell reads as the app hanging.
+  playground-init:
+    image: apache/kafka:4.1.0
+    container_name: kavka-playground-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    stop_grace_period: 2s
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/playground-ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        BS=kafka:29092
+        for t in orders payments customers inventory dead-letter; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$BS --create --if-not-exists \
+            --topic $$t --partitions 6 --replication-factor 1
+        done
+        # Idempotent: a restart on an existing volume finds records already
+        # there and adds none, so the offsets a person was reading stay put.
+        SEEDED=$(/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server $$BS --topic orders --time -1 | awk -F: '{sum += $$3} END {print sum+0}')
+        if [ "$$SEEDED" = "0" ]; then
+          for i in $(seq 1 200); do
+            echo "order-$$i:{\"orderId\":$$i,\"status\":\"created\",\"amount\":$$((i * 7)).50,\"customer\":\"cust-$$((i % 17))\"}"
+          done | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server $$BS --topic orders \
+                   --property parse.key=true --property key.separator=:
+          for i in $(seq 1 60); do
+            echo "pay-$$i:{\"paymentId\":$$i,\"orderId\":$$i,\"status\":\"settled\"}"
+          done | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server $$BS --topic payments \
+                   --property parse.key=true --property key.separator=:
+        fi
+        # A consumer group with committed offsets, so the Groups view and the
+        # lag column have something real in them on first look. It reads 120 of
+        # the 200 records and stops, which leaves visible, non-zero lag.
+        # `|| true` because a group that already exists from a previous run
+        # makes this a no-op that can exit non-zero, and `set -e` would then
+        # take the whole seeding down over a nicety.
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server $$BS --topic orders \
+          --group playground-orders --from-beginning --max-messages 120 --timeout-ms 20000 >/dev/null 2>&1 || true
+        # LAST. The healthcheck above is looking for this file, and `up --wait`
+        # is looking at the healthcheck — so nothing may create it before the
+        # data a person is about to browse actually exists.
+        touch /tmp/playground-ready
+        echo "playground ready"
+        # Idle, and exit promptly when Compose asks. `sleep` alone would be
+        # PID 1 with no SIGTERM handler, which Docker answers by waiting out
+        # the grace period and then killing it; the trap makes `down` instant.
+        trap 'exit 0' TERM INT
+        sleep infinity &
+        wait $!
+
+volumes:
+  kafka-data:

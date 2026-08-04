@@ -832,14 +832,7 @@ export default function ConnectTab({
                     <tr
                       key={c.name}
                       className="row-click"
-                      tabIndex={0}
                       onClick={() => onSelectConnector(c.name)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onSelectConnector(c.name);
-                        }
-                      }}
                     >
                       <td className="cell-mono">{c.name}</td>
                       <td>
@@ -864,8 +857,23 @@ export default function ConnectTab({
                           <span className="cell-tag"> · {counts.paused} paused</span>
                         )}
                       </td>
+                      {/* The row's keyboard path, and the only element here
+                          with a role that says it opens something (SC
+                          4.1.2). */}
                       <td className="col-affordance">
-                        <span className="row-affordance">View tasks →</span>
+                        <button
+                          type="button"
+                          className="row-affordance"
+                          aria-label={`View tasks for ${c.name}`}
+                          // The row is still clickable for the pointer;
+                          // without this the handler runs twice per click.
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectConnector(c.name);
+                          }}
+                        >
+                          View tasks →
+                        </button>
                       </td>
                     </tr>
                   );

@@ -178,9 +178,20 @@ export default function SeekBar({
   disabled = false,
   children,
 }: SeekBarProps) {
+  // `role="alert"`, because this is the one validation message in the app
+  // that appears WITHOUT focus moving to the control it is about: the caller
+  // owns the button that failed, and both callers leave the caret on it
+  // (§5.3 puts focus on the offending control only where the form owns it).
+  // Without a live region the message is silent for a screen reader —
+  // SC 4.1.3. `aria-describedby` still carries it on the control itself, so
+  // it is also there for anyone who tabs back into the field.
   const message = (field: SeekField) =>
     error?.field === field ? (
-      <span className="field-error" id={`${idPrefix}-${field}-error`}>
+      <span
+        className="field-error"
+        id={`${idPrefix}-${field}-error`}
+        role="alert"
+      >
         {error.message}
       </span>
     ) : null;

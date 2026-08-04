@@ -1,7 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import DiagnosticsSection from "./DiagnosticsSection";
 import McpSection from "./McpSection";
 import Overlay from "./Overlay";
+import { LOCALES, useI18n, type Locale } from "./i18n";
 
 /**
  * The two links Kavka is allowed to open. They live here — the one component
@@ -22,6 +24,7 @@ interface AboutDialogProps {
 }
 
 export default function AboutDialog({ version, onClose }: AboutDialogProps) {
+  const { t, tx, locale, setLocale } = useI18n();
   const closeRef = useRef<HTMLButtonElement>(null);
   // A link that does nothing is a dead end, and `openUrl` can genuinely fail
   // (no browser registered, or the capability allowlist doesn't cover the
@@ -37,6 +40,9 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
   // the same helper rather than calling `openUrl` itself, so the capability
   // allowlist still has exactly two literals to match.
   const openRepo = useCallback(() => open(REPO_URL), [open]);
+
+  /** The row in LOCALES for what is on screen — it carries the `machine` flag. */
+  const active = LOCALES.find((info) => info.code === locale);
 
   const link = (url: string, text: string) => (
     <a
@@ -62,47 +68,87 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
       onClose={onClose}
     >
       <h2 className="modal-title" id="about-title">
-        About Kavka
+        {t("about.title")}
       </h2>
 
-      <p className="modal-body">
-        A desktop client for Apache Kafka. Kavka runs entirely on this machine:
-        passwords go to your operating system's keychain, and nothing about your
-        clusters leaves this computer.
-      </p>
+      <p className="modal-body">{t("about.body")}</p>
 
       <dl className="about-facts">
         <div className="about-fact">
-          <dt className="about-fact-label">Core version</dt>
+          <dt className="about-fact-label">{t("about.coreVersion")}</dt>
           <dd className="about-fact-value">
-            {version ? <code>{version}</code> : "Reading it now…"}
+            {version ? <code>{version}</code> : t("about.versionLoading")}
           </dd>
         </div>
         <div className="about-fact">
-          <dt className="about-fact-label">Licence</dt>
+          <dt className="about-fact-label">{t("about.licence")}</dt>
+          <dd className="about-fact-value">{t("about.licenceValue")}</dd>
+        </div>
+
+        {/* The language picker lives here rather than in a settings screen the
+            app doesn't have, and it is a third about-fact rather than a
+            section of its own: "Language: Deutsch" is the same kind of
+            statement as "Licence: AGPL-3.0", it just happens to be editable.
+            A plain <select> so it inherits every control token — §5.3's
+            sunken fill and the --border-control edge that is the only thing
+            satisfying SC 1.4.11 on it.
+
+            The honesty line is the point of the whole feature: five of the
+            six catalogs came out of a machine, and someone deciding whether
+            to trust a translated warning about a prod cluster is entitled to
+            know that before they read one. It is stated in the language being
+            offered rather than in English, because the person who needs it is
+            the person who has just switched away from English. */}
+        <div className="about-fact">
+          <dt className="about-fact-label">
+            <label htmlFor="about-locale">{t("about.language")}</label>
+          </dt>
           <dd className="about-fact-value">
-            Free and open source under AGPL-3.0
+            <select
+              id="about-locale"
+              value={locale}
+              aria-describedby="about-locale-hint"
+              onChange={(e) => setLocale(e.target.value as Locale)}
+            >
+              {LOCALES.map((info) => (
+                <option key={info.code} value={info.code}>
+                  {info.endonym}
+                </option>
+              ))}
+            </select>
+            <span className="field-hint" id="about-locale-hint">
+              {t("about.language.hint")}
+              {active?.machine
+                ? ` ${t("about.language.machine", { language: active.endonym })}`
+                : ""}
+            </span>
           </dd>
         </div>
       </dl>
 
       <McpSection onOpenRepo={openRepo} />
 
+      {/* After MCP, because the two sections answer the same question from
+          opposite directions — "what can leave this machine" — and this is the
+          one whose answer is "nothing, and here is the file". */}
+      <DiagnosticsSection />
+
       <div className="about-links">
+        {/* The repository address is a literal, not prose: it stays verbatim
+            in every locale, like a bootstrap host or a topic name (§4). */}
         {link(REPO_URL, "github.com/sahilhirani/kavka")}
-        {link(SUPPORT_URL, "Support Kavka ☕")}
+        {link(SUPPORT_URL, t("common.support"))}
       </div>
 
       {unopened && (
         <p className="dialog-note" role="status">
-          Kavka couldn't hand that link to your browser. The address is{" "}
-          <code>{unopened}</code> — copy it from here.
+          {tx("common.linkFailed", { url: <code>{unopened}</code> })}
         </p>
       )}
 
       <div className="modal-actions">
         <button ref={closeRef} type="button" className="btn" onClick={onClose}>
-          Close
+          {t("common.close")}
         </button>
       </div>
     </Overlay>

@@ -1537,9 +1537,16 @@ select option:disabled { color: var(--text-disabled); }
               visibility var(--dur-fast) var(--ease);
 }
 
+/* `pointer-events: auto` ONLY while it is open — SC 1.4.13's "hoverable"
+   clause needs the pointer to be able to rest on the gloss without it
+   vanishing, and a `pointer-events: none` box is one the pointer can never
+   be over. Closed, it stays inert, so a hidden 260px panel can never eat a
+   click on the table row underneath it. Glossary.tsx owns the grace timer
+   that carries the pointer across the 6px gap. */
 .term-pop-open {
   visibility: visible;
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1647,6 +1654,15 @@ select option:disabled { color: var(--text-disabled); }
 .banner-details {
   max-width: var(--measure);
   color: var(--text-tertiary);
+}
+
+/* A `<summary>` is a target, and one line of --t-sm prose is 18.6px tall —
+   under SC 2.5.8's 24px floor. `min-height` on a list-item box is the whole
+   fix and keeps the disclosure marker, which changing `display` would eat. */
+.banner-details > summary,
+.sql-surface > summary,
+.chart-table > summary {
+  min-height: var(--hit-min);
 }
 
 .banner-details > summary {
@@ -1837,6 +1853,17 @@ select option:disabled { color: var(--text-disabled); }
   font-family: var(--font-mono);
   font-size: var(--t-sm);
   color: var(--text-tertiary);
+}
+
+/* The tabs' panel. It exists so `aria-controls` has one stable target for
+   all four tabs, and it has to be transparent to the layout: it takes the
+   column's remaining height and passes it straight to the body, so the
+   payload still scrolls in its own well and the foot stays pinned. */
+.inspector-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .inspector-body {
@@ -2526,8 +2553,13 @@ select.input-invalid { border-color: var(--danger); }
 
 /* A breadcrumb is a ghost button that has to sit on the type baseline of
    the title it precedes, not float above it as a control. */
+/* `height: auto` put it at one 17px line box, which is under the 24px floor
+   in both directions that SC 2.5.8 asks for. The min-height restores the
+   target without moving the baseline — `.btn` is an inline-flex box that
+   centres its own line. */
 .crumb-btn {
   height: auto;
+  min-height: var(--hit-min);
   padding: 0 var(--s-3) 0 0;
   font-size: var(--t-sm);
   font-weight: var(--w-normal);
@@ -2552,15 +2584,41 @@ select.input-invalid { border-color: var(--danger); }
 }
 
 /* Row affordance for novices: the whole row is clickable, and the last
-   column says so on hover. NO transition — law 3. */
+   column says so on hover. NO transition — law 3.
+
+   IT IS A REAL BUTTON, and that is an accessibility contract rather than a
+   style choice. A <tr> carrying tabIndex + Enter/Space has the implicit role
+   `row`, which tells assistive technology nothing about being operable — SC
+   4.1.2 wants a name AND a role, and "row" is the wrong one. The button
+   carries both; the row keeps its click for the pointer.
+
+   Which is why it is `opacity: 0` and not `visibility: hidden`: a hidden
+   element is not focusable, and the one control that names the row's action
+   has to be reachable by Tab. It paints itself the moment it takes focus, so
+   nothing is ever an invisible tab stop (SC 2.4.7). */
 .row-affordance {
-  visibility: hidden;
+  height: 24px;
+  min-height: var(--hit-min);   /* SC 2.5.8 */
+  padding: 0 var(--s-3);
+  border: 0;
+  background: transparent;
   color: var(--text-tertiary);
+  font: inherit;
   font-size: var(--t-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  /* SC 2.4.11: the table header is `position: sticky`, and the browser's
+     scroll-into-view does not know that — so tabbing down a long list
+     parked the control it had just focused UNDER 28px of opaque
+     --bg-canvas. The margin is the header's own height, so the row arrives
+     below it. */
+  scroll-margin-top: calc(var(--row-h-head) + 4px);
+  scroll-margin-bottom: 4px;
 }
 
 .data-table tbody tr:hover .row-affordance,
-.data-table tbody tr:focus-visible .row-affordance { visibility: visible; }
+.row-affordance:focus-visible { opacity: 1; }
 
 /* ── Partition + config detail ────────────────────────────────────── */
 
@@ -2994,6 +3052,45 @@ select.input-invalid { border-color: var(--danger); }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+   REFLOW (SC 1.4.10) — Phase 1 additions
+   Rules that are no-ops at the sizes Kavka normally runs at, and that stop
+   controls being clipped out of reach when the window is narrow or the
+   webview is zoomed. Nothing here changes a layout that already fits.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Ten tabs in a strip that could neither wrap nor scroll: `.workspace` is
+   `overflow: hidden`, so past about 900px of workspace the last tabs were
+   simply unreachable — by pointer AND by keyboard, because a roving
+   tabindex still cannot focus what the clip has removed. `min-height` so a
+   horizontal scrollbar cannot squeeze the tabs it appears for. */
+.tabstrip {
+  min-height: var(--tabstrip-h);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Scoped to the cluster strip: `.modal-tabs` reuses `.tab` and holds two of
+   them inside a dialog that is already width-capped, so it has nothing to
+   scroll and nothing to protect from shrinking. */
+.tabstrip > .tab { flex: 0 0 auto; }
+
+/* A panel head carries up to seven controls (the topic detail's). They wrap
+   under the title rather than running off the edge of the workspace. */
+.panel-head,
+.panel-tools,
+.view-title-row,
+.editor-actions,
+.editor-actions-left,
+.editor-actions-right,
+.modal-actions { flex-wrap: wrap; }
+
+/* §5.10 already says "resizable 320–60%". The dock was a flat 480px that
+   could not shrink, so at the window's own 960px minimum the message table
+   was left about 200px — the payload column, which is the loudest thing in
+   the app, disappeared before the chrome did. */
+.inspector { max-width: 60%; }
+
+/* ══════════════════════════════════════════════════════════════════════
    PHASE 2 — SEARCH · PRODUCE · EXPORT · TOASTS
    Additions only. Everything here composes the primitives above: the
    search bar, the table, the banner, the modal, the chip and the form.
@@ -3089,7 +3186,12 @@ select.input-invalid { border-color: var(--danger); }
 .saved-chip-active .saved-chip-apply,
 .saved-chip-active .saved-chip-del { color: var(--accent); }
 
+/* A 7px glyph in 12px of padding is a 19px-wide target, and it sits flush
+   against Apply — so SC 2.5.8's spacing exception cannot rescue it either.
+   The min-width is the whole fix; a button centres its own text, so the ×
+   stays where it was. */
 .saved-chip-del {
+  min-width: var(--hit-min);
   padding: 0 var(--s-3);
   border-left: 1px solid var(--hairline-strong);
   color: var(--text-tertiary);
@@ -5356,4 +5458,134 @@ select.input-invalid { border-color: var(--danger); }
 
   /* The preview is a positive indicator — the thing you asked to see. */
   .mask-preview { border-left-color: Highlight; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   REDUCED MOTION — the per-animation pass
+   The block at the top of this file is the blanket: 1ms durations, one
+   iteration, no smooth scrolling. That is right for an animation whose
+   RESTING STATE is what the user should see — a toast that has finished
+   sliding in is a toast in place, and a chart wipe that has finished is a
+   drawn chart.
+   It is exactly WRONG for the two indeterminate animations, whose resting
+   state is the end of a loop that is supposed to repeat: collapsing them to
+   1ms does not calm them down, it deletes the indicator. Each one is turned
+   off and given a static appearance instead.
+
+   THE INVARIANT, not the position: every rule below is at the same
+   specificity as the one it overrides, so it only wins by being LATER in
+   the sheet. Anything that adds an animation must either sit above this
+   block or bring its own reduced-motion rule — see §9 gate 7.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  /* The indeterminate table bar slides a 30% sliver from -100% to 430%. At
+     1ms it lands at 430% — off the end of its own overflow-hidden box — so
+     the ONE signal that a fetch is in flight over live data (§5.2: never a
+     spinner over data) vanished for exactly the users who asked for less
+     motion. A full-width static bar says "busy" without moving. */
+  .table-loading::after {
+    animation: none;
+    width: 100%;
+  }
+
+  /* Same failure, opposite direction: the toast's progress hairline drains
+     scaleX(1) → 0 over the 5s the dismiss timer runs. At 1ms it is empty
+     immediately and then sits there for five seconds contradicting the
+     toast it belongs to. It is a progress indicator with no progress to
+     show under this setting, so it holds full width and stays honest. */
+  .toast-progress {
+    animation: none;
+    transform: scaleX(1);
+  }
+
+  /* A 1ms pulse is a dot that flickers once. `--warn` plus the word
+     "connecting…" beside it (Law 2) is the whole signal either way. */
+  .status-connecting { animation: none; }
+
+  /* Entrances: the resting state IS the answer, so they are simply not
+     played rather than played imperceptibly. */
+  .toast,
+  .palette { animation: none; }
+
+  /* Belt and braces with the top block's `transition-duration: 1ms`: the
+     gloss and the disclosure appear and disappear outright. */
+  .term-pop { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE PLAYGROUND — "try Kavka without a cluster"
+   A second block inside an empty state, separated by whitespace and one
+   top hairline. Zero cards: this is a section of the same page, not a
+   panel that arrived on top of it.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.playground {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--hairline);
+}
+
+/* One step below `.empty-title`: the empty state's headline is the thing
+   this page is about, and the playground is the alternative to it. Same
+   weight, smaller, no radius, no background. */
+.playground-title {
+  margin: 0;
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+/* The checklist, indented under the button that started it. `.ladder`
+   already carries the rule, the mono family and the fixed --row-h steps;
+   this only removes the list's own furniture and gives the block room. */
+.playground-ladder {
+  margin: var(--s-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The one thing on this panel that must read as an error. Not a global
+   banner: a playground that would not start is this panel's condition,
+   not the app's, and it renders exactly where its fix is (§7). */
+.playground-failed {
+  margin: 0;
+  max-width: var(--measure);
+  padding-left: var(--s-4);
+  border-left: 2px solid var(--danger);
+  color: var(--text-primary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  white-space: pre-wrap;
+}
+
+.playground-footnote {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.playground-footnote code,
+.playground .empty-hint code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+/* `Show details ▾` for whatever Docker actually said. A button wearing a
+   link's clothes, like `.mcp-repo-link` — same reason, same shape. */
+.playground-details-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
 }

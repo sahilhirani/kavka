@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+#
+# The version manifest — the smallest of winget's three files. It exists only to
+# point at the other two, and it is the file the ecosystem keys on.
+#
+# TEMPLATE. `{{VERSION}}` is filled by packaging/render.mjs; see packaging/README.md.
+PackageIdentifier: SahilHirani.Kavka
+PackageVersion: "{{VERSION}}"
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

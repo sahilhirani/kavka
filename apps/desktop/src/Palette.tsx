@@ -4,6 +4,7 @@ import type { ConnectionProfile, ConnState, Environment } from "./api";
 import { EnvChip } from "./Sidebar";
 import { SUPPORT_URL } from "./AboutDialog";
 import Overlay from "./Overlay";
+import { useI18n } from "./i18n";
 
 /**
  * The command palette — DESIGN.md §5.9.
@@ -110,6 +111,7 @@ export default function Palette({
   contextual,
   onClose,
 }: PaletteProps) {
+  const { t, tx } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const [query, setQuery] = useState("");
@@ -127,12 +129,13 @@ export default function Palette({
     for (const p of profiles) {
       const status = connections[p.id]?.status ?? "disconnected";
       const address = p.bootstrap_servers.join(", ");
-      const state =
-        status === "connected"
-          ? " · connected"
-          : status === "connecting"
-            ? " · connecting…"
-            : "";
+      // Built as parts and joined, rather than as one sentence with three
+      // optional fragments: a translator gets whole words to translate and
+      // the " · " separator stays punctuation the catalog never sees.
+      const bits = [address];
+      if (status === "connected") bits.push(t("palette.state.connected"));
+      else if (status === "connecting") bits.push(t("palette.state.connecting"));
+      if (p.environment === "prod") bits.push(t("palette.prodCluster"));
       list.push({
         id: `profile:${p.id}`,
         glyph: "→",
@@ -140,11 +143,16 @@ export default function Palette({
         // already up is somewhere you GO, not something you connect.
         label:
           status === "connected"
-            ? `Go to ${p.name}`
-            : `Connect to ${p.name}`,
+            ? t("palette.goTo", { name: p.name })
+            : t("palette.connectTo", { name: p.name }),
         // Prod guardrail layer 3: the address is on screen before you commit.
-        context: `${address}${state}${p.environment === "prod" ? " · prod cluster" : ""}`,
-        keywords: `connect open switch cluster broker bootstrap ${p.environment} ${address}`,
+        context: bits.join(" · "),
+        // §5.9's bilingual matching, and the reason every `*.kw` catalog entry
+        // KEEPS the English words and appends the local ones rather than
+        // replacing them: `bootstrap` and `broker` are Kafka's vocabulary in
+        // every language, and an operator who learned Kafka in English must
+        // still be able to type them.
+        keywords: `${t("palette.profile.kw")} ${p.environment} ${address}`,
         env: p.environment,
         danger: p.environment === "prod",
         run: () =>
@@ -155,9 +163,9 @@ export default function Palette({
     list.push({
       id: "add",
       glyph: "+",
-      label: "Add connection",
-      context: "A name, one broker, and how to sign in",
-      keywords: "new connection profile cluster create bootstrap broker",
+      label: t("common.addConnection"),
+      context: t("palette.add.context"),
+      keywords: t("palette.add.kw"),
       run: commands.addConnection,
     });
 
@@ -178,17 +186,17 @@ export default function Palette({
     list.push({
       id: "disconnect",
       glyph: "×",
-      label: "Disconnect",
+      label: t("palette.disconnect"),
       context: target ? target.name : undefined,
-      keywords: "close leave cluster session",
+      keywords: t("palette.disconnect.kw"),
       env: target?.environment,
       danger: target?.environment === "prod",
       disabledReason:
         target !== null
           ? undefined
           : connected.length === 0
-            ? "Nothing is connected right now"
-            : "Pick the cluster you want to disconnect in the sidebar first",
+            ? t("palette.disconnect.none")
+            : t("palette.disconnect.ambiguous"),
       run: () => {
         if (target) commands.disconnect(target.id);
       },
@@ -200,9 +208,9 @@ export default function Palette({
       list.push({
         id: "refresh",
         glyph: "↻",
-        label: "Refresh topics",
+        label: t("palette.refresh"),
         context: selected.name,
-        keywords: "reload metadata list topics partitions cluster",
+        keywords: t("palette.refresh.kw"),
         run: commands.refreshTopics,
       });
     }
@@ -211,33 +219,33 @@ export default function Palette({
       {
         id: "export",
         glyph: "↑",
-        label: "Export connections…",
-        context: "Every connection on this machine, as JSON",
-        keywords: "backup save copy share json profiles",
+        label: t("palette.export"),
+        context: t("palette.export.context"),
+        keywords: t("palette.export.kw"),
         run: commands.exportConnections,
       },
       {
         id: "import",
         glyph: "↓",
-        label: "Import connections…",
-        context: "Paste JSON from another copy of Kavka",
-        keywords: "restore paste load json profiles",
+        label: t("palette.import"),
+        context: t("palette.import.context"),
+        keywords: t("palette.import.kw"),
         run: commands.importConnections,
       },
       {
         id: "about",
         glyph: "?",
-        label: "About Kavka",
-        context: "Version and licence",
-        keywords: "version licence license agpl source github help",
+        label: t("about.title"),
+        context: t("palette.about.context"),
+        keywords: t("palette.about.kw"),
         run: commands.about,
       },
       {
         id: "support",
         glyph: "☕",
-        label: "Support Kavka ☕",
-        context: "Kavka is free — donations keep it that way",
-        keywords: "donate coffee sponsor fund open source",
+        label: t("common.support"),
+        context: t("palette.support.context"),
+        keywords: t("palette.support.kw"),
         keepOpen: true,
         run: () => {
           openUrl(SUPPORT_URL)
@@ -248,7 +256,9 @@ export default function Palette({
     );
 
     return list;
-  }, [profiles, connections, selectedId, commands, contextual, onClose]);
+    // `t` is in here on purpose: it is memoized on the locale, so this list
+    // rebuilds the moment the language changes and never on any other render.
+  }, [profiles, connections, selectedId, commands, contextual, onClose, t]);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -307,7 +317,7 @@ export default function Palette({
   return (
     <Overlay
       surfaceClass="palette"
-      label="Commands"
+      label={t("palette.label")}
       initialFocus={inputRef}
       onClose={onClose}
     >
@@ -325,8 +335,8 @@ export default function Palette({
           aria-activedescendant={
             shown.length > 0 ? `palette-opt-${activeIdx}` : undefined
           }
-          aria-label="Search commands and clusters"
-          placeholder="Search commands and clusters…"
+          aria-label={t("palette.searchLabel")}
+          placeholder={t("palette.searchPlaceholder")}
           spellCheck={false}
           autoComplete="off"
           value={query}
@@ -343,8 +353,7 @@ export default function Palette({
 
       {shown.length === 0 ? (
         <p className="palette-empty" role="status">
-          Nothing matches “{query.trim()}”. Try a cluster name, or clear the box
-          to see everything Kavka can do.
+          {t("palette.empty", { query: query.trim() })}
         </p>
       ) : (
         <ul
@@ -352,7 +361,7 @@ export default function Palette({
           className="palette-list"
           id="palette-list"
           role="listbox"
-          aria-label="Commands"
+          aria-label={t("palette.label")}
         >
           {shown.map((a, idx) => (
             <li
@@ -398,18 +407,17 @@ export default function Palette({
 
       {unopened && (
         <p className="dialog-note" role="status">
-          Kavka couldn't hand that link to your browser. The address is{" "}
-          <code>{unopened}</code> — copy it from here.
+          {tx("common.linkFailed", { url: <code>{unopened}</code> })}
         </p>
       )}
 
       <div className="palette-foot" aria-hidden="true">
         <span className="kbd">↑</span>
-        <span className="kbd">↓</span> move
+        <span className="kbd">↓</span> {t("palette.foot.move")}
         <span className="palette-foot-sep">·</span>
-        <span className="kbd">⏎</span> run
+        <span className="kbd">⏎</span> {t("palette.foot.run")}
         <span className="palette-foot-sep">·</span>
-        <span className="kbd">Esc</span> close
+        <span className="kbd">Esc</span> {t("palette.foot.close")}
       </div>
     </Overlay>
   );

@@ -416,7 +416,12 @@ export default function ClusterView({
             role="tab"
             id={`clustertab-${tab.key}`}
             aria-selected={place.tab === tab.key}
-            aria-controls={`clusterpanel-${tab.key}`}
+            // Only ONE panel is mounted, so only the selected tab has a
+            // panel to point at. An `aria-controls` naming an id that is not
+            // in the document is a broken reference on nine tabs out of ten.
+            aria-controls={
+              place.tab === tab.key ? `clusterpanel-${tab.key}` : undefined
+            }
             tabIndex={place.tab === tab.key ? 0 : -1}
             ref={(el) => {
               tabRefs.current[tab.key] = el;

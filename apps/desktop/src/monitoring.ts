@@ -73,6 +73,20 @@ export const MAX_POINTS = 240;
  * Used for bucket widths and alert dwells, both of which are read inside a
  * sentence — so this rounds, per §7 rule 5, and nothing that anyone acts on
  * digit-by-digit goes through it.
+ *
+ * # There is a second copy of these thresholds, and it is deliberate
+ *
+ * `ProfileEditor.tsx`'s `spanText(t, ms)` is the same four branches at the same
+ * four boundaries, written against the `unit.*` catalog keys instead of English
+ * literals. It exists because this function hard-codes English pluralisation
+ * (`1 second` / `2 seconds`), and the connection form needs two spans *inside a
+ * translated paragraph* — one raw English fragment in the middle of a German
+ * sentence is worse than four catalog keys (docs/I18N.md §1).
+ *
+ * **Change both or neither.** A threshold moved here and not there makes the
+ * sampler hint disagree with every chart axis about what "a minute" starts at,
+ * in five languages and not in English — which is the hardest kind of drift to
+ * notice.
  */
 export function formatSpan(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "no time at all";

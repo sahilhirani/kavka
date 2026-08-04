@@ -528,14 +528,7 @@ export default function GroupsTab({
                   <tr
                     key={g.group_id}
                     className="row-click"
-                    tabIndex={0}
                     onClick={() => onSelectGroup(g.group_id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onSelectGroup(g.group_id);
-                      }
-                    }}
                   >
                     <td className="cell-mono">{g.group_id}</td>
                     <td>
@@ -549,8 +542,22 @@ export default function GroupsTab({
                       )}
                     </td>
                     <td className="col-num cell-num">{g.member_count}</td>
+                    {/* The row's keyboard path, and the only element here
+                        with a role that says it opens something (SC 4.1.2). */}
                     <td className="col-affordance">
-                      <span className="row-affordance">View lag →</span>
+                      <button
+                        type="button"
+                        className="row-affordance"
+                        aria-label={`View lag for ${g.group_id}`}
+                        // The row is still clickable for the pointer;
+                        // without this the handler runs twice per click.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectGroup(g.group_id);
+                        }}
+                      >
+                        View lag →
+                      </button>
                     </td>
                   </tr>
                 ))}

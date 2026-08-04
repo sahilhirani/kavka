@@ -98,6 +98,21 @@ export function Term({ name, children }: TermProps) {
     top: -9999,
     left: -9999,
   });
+  /**
+   * SC 1.4.13 HOVERABLE: the pointer has to be able to reach the gloss
+   * without it disappearing. It could not — `.term-pop` was
+   * `pointer-events: none` and sits 6px away from the term, so moving
+   * towards it left the term, fired `mouseleave` and closed the thing you
+   * were moving towards. That is the one manoeuvre a magnifier user makes
+   * constantly, because at 300% the gloss and its term are never both on
+   * screen.
+   *
+   * The grace timer is what bridges the gap: `mouseleave` on the term fires
+   * BEFORE `mouseenter` on the popover, so a close has to be schedulable and
+   * cancellable rather than immediate. Focus and Esc still close outright —
+   * neither of them is crossing a gap.
+   */
+  const closeTimer = useRef<number | null>(null);
 
   const place = useCallback(() => {
     const el = anchor.current;
@@ -114,11 +129,36 @@ export function Term({ name, children }: TermProps) {
     setPos({ top, left });
   }, []);
 
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+
   const show = useCallback(() => {
+    cancelClose();
     place();
     setOpen(true);
-  }, [place]);
-  const hide = useCallback(() => setOpen(false), []);
+  }, [cancelClose, place]);
+
+  /** Immediately — for blur and Esc, which never cross the gap. */
+  const hide = useCallback(() => {
+    cancelClose();
+    setOpen(false);
+  }, [cancelClose]);
+
+  /** After the grace period — for the pointer, which does. */
+  const hideSoon = useCallback(() => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setOpen(false);
+    }, 120);
+  }, [cancelClose]);
+
+  // A pending close must not outlive the term it belongs to.
+  useEffect(() => cancelClose, [cancelClose]);
 
   // A popover anchored to a viewport coordinate has to close (or move) when
   // that coordinate stops meaning anything. Capture phase, so a scroll inside
@@ -147,7 +187,7 @@ export function Term({ name, children }: TermProps) {
         tabIndex={0}
         aria-describedby={id}
         onMouseEnter={show}
-        onMouseLeave={hide}
+        onMouseLeave={hideSoon}
         onFocus={show}
         onBlur={hide}
       >
@@ -159,6 +199,13 @@ export function Term({ name, children }: TermProps) {
           id={id}
           role="tooltip"
           style={{ top: pos.top, left: pos.left }}
+          // The other half of Hoverable: entering the gloss cancels the
+          // close the term scheduled on the way out, and leaving it
+          // schedules one again. It only takes pointer events while it is
+          // open (see `.term-pop-open` in styles.css), so a hidden gloss can
+          // never swallow a click on the row underneath it.
+          onMouseEnter={cancelClose}
+          onMouseLeave={hideSoon}
         >
           {GLOSSARY[name]}
         </span>,

@@ -1,0 +1,817 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   KAVKA — the site. Hand-rolled CSS on the Ledger tokens (docs/DESIGN.md).
+
+   NO BUILD SYSTEM, ON PURPOSE. One HTML file, one stylesheet, no fonts to
+   fetch, no script to run, no npm install and nothing to keep up to date. A
+   marketing page for a desktop app that needs a toolchain to publish is a page
+   that stops getting published.
+
+   NO CARDS — Law 1. Grouping is whitespace plus a top hairline, everywhere,
+   including the feature grid. The loudest pixels on the page are words, not
+   chrome. If a rule here looks like it is reaching for a box shadow, it is
+   wrong; the tokens do not even define a third shadow.
+
+   THE LEDGER RULE IS THE SIGNATURE (§2). Every section carries a mono label in
+   a fixed left gutter, then a 1px vertical rule, then the content — the same
+   device the app uses for offsets, broker ids and line numbers. It collapses
+   below 900px, exactly as the app's does when the table runs out of width.
+
+   TOKENS ARE COPIED, NOT IMPORTED, and the copy is deliberate: this file must
+   render from a static host with no relationship to the app's build. The
+   values are the audited ones from apps/desktop/src/styles.css — if they are
+   ever re-derived there, this block is the second place to change.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+
+  --bg-canvas: #0f1317;
+  --bg-rail: #090b0d;
+  --bg-sunken: #0a0d10;
+  --bg-raised: #161b20;
+
+  --text-primary: #e6ebf0;
+  --text-secondary: #a2aebb;
+  --text-tertiary: #808d9a;
+  --text-absent: #7e8a97;
+  --text-mono: #c9d4df;
+  --text-inverse: #0b0e11;
+
+  --hairline: #1b2127;
+  --hairline-strong: #262e36;
+  --border-control: #636f7c;
+
+  --accent: #4fc3b0;
+  --accent-quiet: #3c9788;
+  --accent-tint: #12241f;
+  --focus: #6fe3cd;
+  --fill-primary-hover: #ffffff;
+
+  --ok: #56c08a;
+  --warn: #d9a441;
+  --danger: #e5786b;
+
+  --rule: #242b33;
+
+  --syn-key: #8fa6bc;
+  --syn-string: #9fd5a8;
+  --syn-number: #e0b36a;
+  --syn-punct: #7b8899;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo,
+    Consolas, monospace;
+
+  --t-micro: 10.5px;
+  --lh-micro: 14px;
+  --t-xs: 11px;
+  --t-sm: 12px;
+  --t-base: 13px;
+  --t-md: 15px;
+  --t-lg: 19px;
+  --t-xl: 24px;
+  --t-display: 30px;
+  --lh-prose: 1.6;
+
+  --w-normal: 400;
+  --w-medium: 500;
+  --w-semi: 600;
+  --w-bold: 700;
+  --track-eyebrow: 0.08em;
+  --track-tight: -0.011em;
+
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 12px;
+  --s-6: 16px;
+  --s-7: 20px;
+  --s-8: 24px;
+  --s-9: 32px;
+  --s-10: 40px;
+  --s-11: 56px;
+  --s-12: 72px;
+
+  --r-control: 4px;
+  --measure: 62ch;
+  --hit-min: 24px;
+
+  --control-h: 28px;
+  --control-h-lg: 32px;
+  --gutter-w: 96px;
+  --page-w: 1040px;
+
+  --dur-fast: 120ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* ── Reset, as small as it can be ─────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-md);
+  line-height: var(--lh-prose);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+dl,
+figure {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Every <code> is a literal somebody may need to copy. */
+code,
+pre {
+  font-family: var(--font-mono);
+  user-select: text;
+}
+
+a {
+  color: var(--text-primary);
+  text-decoration-color: var(--accent-quiet);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--accent);
+}
+
+/* SC 2.4.11: always offset, so the ring never sits on a light fill. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(79, 195, 176, 0.28);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s-6);
+  top: -100px;
+  z-index: 10;
+  padding: var(--s-3) var(--s-5);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  font-size: var(--t-sm);
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: var(--s-6);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── The wire, the app's guardrail layer 2 at site scale ──────────────── */
+
+.wire {
+  height: 2px;
+  background: var(--accent);
+}
+
+/* ── Shell ────────────────────────────────────────────────────────────── */
+
+.page {
+  max-width: var(--page-w);
+  margin: 0 auto;
+  padding: 0 var(--s-8);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+  padding: var(--s-7) 0;
+}
+
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  font-size: var(--t-lg);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.wordmark-note {
+  font-size: var(--t-xs);
+  font-weight: var(--w-normal);
+  letter-spacing: 0;
+  color: var(--text-tertiary);
+}
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: var(--s-7);
+  flex-wrap: wrap;
+}
+
+.topnav a {
+  min-height: var(--hit-min);
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.topnav a:hover {
+  color: var(--text-primary);
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-12);
+  align-items: start;
+  padding: var(--s-11) 0 var(--s-12);
+}
+
+.hero-title {
+  margin: 0 0 var(--s-6);
+  font-size: 44px;
+  line-height: 1.12;
+  font-weight: var(--w-bold);
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+/* The one place the accent is allowed to carry a word. It means live
+   everywhere else in the product; here it is the same promise — the app is
+   alive and free — and it appears exactly once on the page. */
+.hero-title em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.hero-lede {
+  max-width: 46ch;
+  font-size: var(--t-md);
+  color: var(--text-secondary);
+}
+
+.hero-lede + .hero-lede {
+  margin-top: var(--s-5);
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  flex-wrap: wrap;
+  margin-top: var(--s-8);
+}
+
+.hero-footnote {
+  margin-top: var(--s-6);
+  max-width: 44ch;
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+/* ── Buttons — §5.5. Exactly one primary per surface ─────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  min-height: var(--control-h-lg);
+  padding: 0 var(--s-6);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--t-sm);
+  font-weight: var(--w-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn:hover {
+  background: var(--bg-raised);
+}
+
+.btn-primary {
+  border-color: transparent;
+  background: var(--text-primary);
+  color: var(--text-inverse);
+}
+
+.btn-primary:hover {
+  background: var(--fill-primary-hover);
+}
+
+.btn-sub {
+  font-weight: var(--w-normal);
+  opacity: 0.75;
+}
+
+/* ── The ledger motif — the site's signature (§2) ─────────────────────── */
+
+.ledger {
+  font-family: var(--font-mono);
+  font-size: var(--t-base);
+  line-height: 26px;
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: var(--s-6) 0;
+  overflow-x: auto;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  min-width: 460px;
+}
+
+.ledger-addr {
+  padding-right: var(--s-5);
+  text-align: right;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+}
+
+.ledger-cell {
+  padding-left: var(--s-5);
+  white-space: nowrap;
+}
+
+.ledger-caption {
+  margin-top: var(--s-4);
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+.k {
+  color: var(--syn-key);
+}
+.s {
+  color: var(--syn-string);
+}
+.n {
+  color: var(--syn-number);
+}
+.p {
+  color: var(--syn-punct);
+}
+
+/* ── Sections, on the ledger grid ─────────────────────────────────────── */
+
+.section {
+  display: grid;
+  grid-template-columns: var(--gutter-w) minmax(0, 1fr);
+  gap: 0;
+  padding-top: var(--s-10);
+  margin-top: var(--s-10);
+  border-top: 1px solid var(--hairline);
+}
+
+/* The gutter carries the section's address, in the app's own vocabulary. */
+.section-gutter {
+  padding-right: var(--s-6);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--rule);
+}
+
+.section-body {
+  padding-left: var(--s-8);
+  min-width: 0;
+}
+
+.section-title {
+  margin: 0 0 var(--s-5);
+  font-size: var(--t-xl);
+  line-height: 1.25;
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+}
+
+.section-lede {
+  max-width: var(--measure);
+  color: var(--text-secondary);
+}
+
+.section-lede + .section-lede {
+  margin-top: var(--s-5);
+}
+
+.section-lede code,
+.feature p code,
+.download-note code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 5px;
+  border-radius: var(--r-control);
+  font-size: 0.92em;
+}
+
+/* ── Feature grid — no cards. A top hairline and space, nothing else ──── */
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--s-9) var(--s-8);
+  margin-top: var(--s-9);
+}
+
+.feature {
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline-strong);
+}
+
+.feature h3 {
+  margin: 0 0 var(--s-3);
+  font-size: var(--t-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.feature p {
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+}
+
+.feature-eyebrow {
+  display: block;
+  margin-bottom: var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--accent-quiet);
+}
+
+/* ── Screenshot placeholders ──────────────────────────────────────────── */
+
+/* A 6-line mono skeleton of the thing that will be here, in --text-absent —
+   docs/DESIGN.md §7's rule for empty states, applied to a page that has no
+   screenshots yet. It renders correctly with no image files present, which is
+   the point: a broken <img> would be a worse placeholder than none. */
+.shot {
+  margin-top: var(--s-8);
+}
+
+.shot-frame {
+  background: var(--bg-sunken);
+  border-top: 1px solid var(--hairline-strong);
+  padding: var(--s-8);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  line-height: 22px;
+  color: var(--text-absent);
+  overflow-x: auto;
+}
+
+.shot-todo {
+  display: inline-block;
+  margin-bottom: var(--s-5);
+  padding: 1px var(--s-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-control);
+  color: var(--warn);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.shot-skeleton {
+  white-space: pre;
+  margin: 0;
+}
+
+.shot figcaption {
+  margin-top: var(--s-4);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+/* ── Downloads ────────────────────────────────────────────────────────── */
+
+.downloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s-8);
+  margin-top: var(--s-8);
+}
+
+.download {
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline-strong);
+}
+
+.download h3 {
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-md);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.download ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+}
+
+.download li {
+  font-size: var(--t-sm);
+}
+
+.download li code {
+  color: var(--text-mono);
+  font-size: var(--t-xs);
+}
+
+.download-note {
+  margin-top: var(--s-8);
+  padding-left: var(--s-5);
+  border-left: 2px solid var(--warn);
+  max-width: var(--measure);
+  font-size: var(--t-sm);
+  color: var(--text-secondary);
+}
+
+.pm-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+}
+
+.pm-list li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  flex-wrap: wrap;
+  font-size: var(--t-sm);
+}
+
+.pm-name {
+  flex: 0 0 96px;
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.pm-cmd {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 2px var(--s-4);
+  border-radius: var(--r-control);
+  font-size: var(--t-sm);
+}
+
+.pm-when {
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+}
+
+/* ── Code block ───────────────────────────────────────────────────────── */
+
+.code {
+  margin-top: var(--s-6);
+  padding: var(--s-6);
+  background: var(--bg-sunken);
+  color: var(--text-mono);
+  font-size: var(--t-sm);
+  line-height: 20px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ── Tool list ────────────────────────────────────────────────────────── */
+
+.tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin-top: var(--s-7);
+}
+
+.tools li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  flex-wrap: wrap;
+  font-size: var(--t-sm);
+}
+
+.tools code {
+  flex: 0 0 auto;
+  color: var(--text-mono);
+}
+
+.tools span {
+  color: var(--text-secondary);
+}
+
+/* ── Support ──────────────────────────────────────────────────────────── */
+
+.support-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+  margin-top: var(--s-7);
+}
+
+/* ── Licence ──────────────────────────────────────────────────────────── */
+
+.licence dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s-4) var(--s-7);
+  margin-top: var(--s-7);
+  font-size: var(--t-sm);
+}
+
+.licence dt {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  padding-top: 3px;
+}
+
+.licence dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+
+.site-footer {
+  margin-top: var(--s-12);
+  padding: var(--s-8) 0 var(--s-11);
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+  font-size: var(--t-xs);
+  color: var(--text-tertiary);
+}
+
+.site-footer nav {
+  display: flex;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+}
+
+.site-footer a {
+  color: var(--text-tertiary);
+  min-height: var(--hit-min);
+  display: inline-flex;
+  align-items: center;
+}
+
+.site-footer a:hover {
+  color: var(--text-primary);
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-9);
+    padding: var(--s-9) 0 var(--s-10);
+  }
+
+  .hero-title {
+    font-size: 34px;
+  }
+
+  /* The gutter collapses and the rule stays — the app does exactly this when
+     a table runs out of width (§2). The section's address moves above its
+     title rather than disappearing. */
+  .section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .section-gutter {
+    text-align: left;
+    padding: 0 0 var(--s-4);
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: var(--s-6);
+  }
+
+  .section-body {
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .page {
+    padding: 0 var(--s-6);
+  }
+
+  .hero-title {
+    font-size: 28px;
+  }
+
+  .licence dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-2) 0;
+  }
+}
+
+/* ── Print, because somebody will ─────────────────────────────────────── */
+
+@media print {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .wire,
+  .topnav,
+  .hero-actions,
+  .shot-frame {
+    display: none;
+  }
+}
+
+/* Nothing on this page animates except two colour transitions, and both are
+   comfort rather than information. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

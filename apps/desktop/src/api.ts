@@ -3064,3 +3064,188 @@ export const WASM_MEMORY_CAP_BYTES = 10 * 1024 * 1024;
  */
 export const WASM_FUEL_PER_RECORD = 100_000_000;
 export const WASM_FUEL_MS_APPROX = "2–20 ms";
+
+// ---------------------------------------------------------------------------
+// Phase 6 — the local playground, and opt-in diagnostics
+//
+// Two features that have nothing to do with each other except that both are
+// about the first and last five minutes somebody spends with the app: getting
+// a broker to point it at, and having something to attach to an issue when it
+// breaks.
+// ---------------------------------------------------------------------------
+
+// ── "Try Kavka without a cluster" ──────────────────────────────────────────
+
+/**
+ * What Kavka found when it looked for Docker.
+ *
+ * A plain string, not a `{ kind: … }` union: the Rust side is a unit enum, so
+ * it carries no data to tag. Five values rather than a boolean because each one
+ * has a different sentence and a different next click — see `dockerTrouble` in
+ * `Playground.tsx`, which is the only place they are turned into prose.
+ *
+ * `remote` is the one that is a refusal rather than a shortcoming: Docker
+ * answered, but it is pointing at another machine (a `tcp://`/`ssh://` context,
+ * or `DOCKER_HOST`), and the playground starts containers on THIS machine only.
+ * `detail` carries the endpoint for that state.
+ */
+export type DockerState =
+  | "absent"
+  | "stopped"
+  | "remote"
+  | "no_compose"
+  | "ready";
+
+/**
+ * KAVKA DOES NOT BUNDLE A BROKER, and this type is shaped by that fact.
+ *
+ * Apache Kafka is a JVM application; bundling one would mean bundling a JRE,
+ * which is the exact thing the product exists not to be. So the playground
+ * drives Docker if the user has it, and when they don't, the UI says so in one
+ * honest sentence instead of showing a button that cannot work.
+ *
+ * `docker` and `compose_file` are two separate failure signals on purpose: the
+ * first is a condition of the user's machine, the second is a condition of
+ * Kavka's own packaging, and they need different sentences and different
+ * people to fix them.
+ */
+export interface SandboxStatus {
+  docker: DockerState;
+  /** Whether the playground's containers are up. Always false unless `ready`. */
+  running: boolean;
+  /** The bundled compose file, or null when this build has no such resource. */
+  compose_file: string | null;
+  /** `localhost:19092` — mirrored so nothing in the UI hard-codes a port. */
+  bootstrap: string;
+  /** The Playground connection's id, if it is already on this machine. */
+  profile_id: string | null;
+  /**
+   * What Docker actually said, when Kavka doesn't recognise it — and, for
+   * `remote`, the endpoint itself, which the panel puts in the sentence rather
+   * than behind `Show details ▾`.
+   */
+  detail: string | null;
+}
+
+/** One line of the start/stop checklist (docs/DESIGN.md §5.4). */
+export interface SandboxStep {
+  /** Stable across every emission of the same step — the UI upserts by it. */
+  id: string;
+  /** Kavka's wording, sent with every emission so the UI holds no copy. */
+  label: string;
+  state: "running" | "ok" | "fail" | "skipped";
+  note: string | null;
+}
+
+export function sandboxStatus(): Promise<SandboxStatus> {
+  return invoke<SandboxStatus>("sandbox_status");
+}
+
+/** Resolves with the id of the connection to open. */
+export function sandboxStart(): Promise<string> {
+  return invoke<string>("sandbox_start");
+}
+
+export function sandboxStop(): Promise<void> {
+  return invoke<void>("sandbox_stop");
+}
+
+/**
+ * A FIXED event name, unlike every other stream in this file.
+ *
+ * The session commands mint an id and address their events to it, which opens
+ * a race the `sessionReady` handshake exists to close. There is exactly one
+ * playground per machine, so there is nothing to address: the panel subscribes
+ * before it calls `sandboxStart`, and the subscription is already up by the
+ * time the first step is emitted. No id, no handshake, no race.
+ */
+export function sandboxStepEventName(): string {
+  return "kavka://sandbox/step";
+}
+
+/**
+ * Subscribe to the checklist. Returns a SYNCHRONOUS cancel that works whether
+ * or not the listener has finished registering — the same shape as
+ * `tailSubscribe`, and for the same unmount reason.
+ */
+export function sandboxSubscribe(
+  cb: (step: SandboxStep) => void,
+  onError?: (message: string) => void,
+): () => void {
+  let cancelled = false;
+  let unlisten: UnlistenFn | null = null;
+  void listen<SandboxStep>(sandboxStepEventName(), (event) => {
+    if (!cancelled) cb(event.payload);
+  })
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    })
+    .catch((err: unknown) => {
+      if (!cancelled) onError?.(errorMessage(err));
+    });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = null;
+  };
+}
+
+// ── Diagnostics ────────────────────────────────────────────────────────────
+
+/**
+ * WHAT THIS IS: a panic hook and a webview error handler that append lines to
+ * rotating files in this app's data directory.
+ *
+ * WHAT THIS IS NOT: telemetry. **There is no endpoint.** Not a disabled one,
+ * not one behind a flag — there is no code in Kavka that sends a report
+ * anywhere, which is why the About section can make that claim without asking
+ * anybody to trust it. The file is on disk, the user opens the folder, reads
+ * it, and decides whether to paste it into a GitHub issue.
+ *
+ * `enabled` ships `false`. That costs the first crash, and it is still right: a
+ * log line can carry a topic name or a bootstrap address, and a Kafka GUI's
+ * users are routinely inside a network where that matters.
+ */
+export interface DiagnosticsStatus {
+  enabled: boolean;
+  /** Reported even when empty — you are entitled to know where they'd go. */
+  dir: string;
+  files: number;
+  bytes: number;
+}
+
+export function diagnosticsStatus(): Promise<DiagnosticsStatus> {
+  return invoke<DiagnosticsStatus>("diagnostics_status");
+}
+
+/** Returns the status afterwards, so the panel never has to re-ask. */
+export function diagnosticsSetEnabled(
+  enabled: boolean,
+): Promise<DiagnosticsStatus> {
+  return invoke<DiagnosticsStatus>("diagnostics_set_enabled", { enabled });
+}
+
+/**
+ * Records one line from the webview. Resolves with whether anything was
+ * actually written — `false` means diagnostics is off, and the UI must not
+ * imply a file exists.
+ */
+export function diagnosticsRecord(
+  kind: "error" | "rejection" | "note",
+  message: string,
+): Promise<boolean> {
+  return invoke<boolean>("diagnostics_record", { kind, message });
+}
+
+export function diagnosticsOpenLogs(): Promise<void> {
+  return invoke<void>("diagnostics_open_logs");
+}
+
+/** Deletes every log file. Returns the status afterwards. */
+export function diagnosticsClear(): Promise<DiagnosticsStatus> {
+  return invoke<DiagnosticsStatus>("diagnostics_clear");
+}
+
+/** The app's total log ceiling — 5 files × 512 KB, mirrored from the shell. */
+export const DIAGNOSTICS_MAX_BYTES = 5 * 512 * 1024;

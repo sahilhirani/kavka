@@ -18,7 +18,7 @@ import {
 } from "./api";
 import { classifyError } from "./errors";
 import { Term } from "./Glossary";
-import { formatSpan } from "./monitoring";
+import { useI18n, type TFunction } from "./i18n";
 import WasmSerdesFields from "./WasmSerdesFields";
 
 /**
@@ -34,6 +34,10 @@ export function ErrorBanner({
   raw: string;
   onDismiss?: () => void;
 }) {
+  const { t } = useI18n();
+  // `classifyError` is `errors.ts`, outside this wave's extraction boundary:
+  // the error library is still English in every locale. Said out loud in
+  // docs/I18N.md rather than papered over.
   const { title, detail } = classifyError(raw);
   return (
     <div className="banner banner-danger" role="alert">
@@ -47,20 +51,26 @@ export function ErrorBanner({
             it. Unconditional: even an unrecognized error's title is only its
             first line, so the full text must stay reachable. */}
         <details className="banner-details">
-          <summary>Show details</summary>
+          <summary>{t("common.showDetails")}</summary>
           <pre className="banner-raw">{raw}</pre>
         </details>
       </div>
       {onDismiss && (
         <div className="banner-actions">
           <button type="button" className="btn btn-ghost" onClick={onDismiss}>
-            Dismiss
+            {t("common.dismiss")}
           </button>
         </div>
       )}
     </div>
   );
 }
+
+/**
+ * The environment segments, in order, so the radio group's arrow keys and its
+ * rendering read from one list.
+ */
+const ENVIRONMENTS = ["dev", "staging", "prod"] as const;
 
 /** Auth kinds the form can create and edit. Everything except Kerberos. */
 type EditableAuthKind =
@@ -107,9 +117,26 @@ interface FieldError {
   row?: number;
 }
 
-/** Why Kerberos is disabled. Never a dead option. */
-const NOT_YET =
-  "Kavka can't set this up yet. A connection that already uses it keeps working and is preserved exactly as it is when you save.";
+/**
+ * How long a span reads, in the active language.
+ *
+ * The thresholds are `formatSpan` in `monitoring.ts` — change both or neither.
+ * It is duplicated rather than imported because that function hard-codes
+ * English pluralisation ("1 second" / "2 seconds"), and the sampler sentence
+ * is the one place in this form where a raw English fragment would land in
+ * the middle of a translated paragraph. Four catalog keys and four branches
+ * is a smaller price than that.
+ */
+function spanText(t: TFunction, ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return t("unit.seconds", { count: 0 });
+  if (ms < 60_000)
+    return t("unit.seconds", { count: Math.max(1, Math.round(ms / 1000)) });
+  if (ms < 3_600_000)
+    return t("unit.minutes", { count: Math.round(ms / 60_000) });
+  if (ms < 86_400_000)
+    return t("unit.hours", { count: Math.round(ms / 3_600_000) });
+  return t("unit.days", { count: Math.round(ms / 86_400_000) });
+}
 
 /**
  * One row of the Connect list, while it is being edited.
@@ -349,6 +376,7 @@ export default function ProfileEditor({
   onCancelNew,
   onError,
 }: ProfileEditorProps) {
+  const { t, tx } = useI18n();
   const isNew = profile === null;
   const [form, setForm] = useState<FormState>(() => initialForm(profile));
   const [busy, setBusy] = useState(false);
@@ -392,6 +420,36 @@ export default function ProfileEditor({
   const patch = useCallback((partial: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...partial }));
   }, []);
+
+  /**
+   * The environment picker's keyboard model.
+   *
+   * `role="radiogroup"` is a promise, and it was one nothing kept: three
+   * buttons all in the tab order and arrow keys that did nothing. A radio
+   * group is ONE tab stop whose members are walked with the arrows, and
+   * selection follows focus — so the roving `tabIndex` below and this
+   * handler are two halves of the same fix (SC 2.1.1, SC 4.1.2).
+   */
+  const envRefs = useRef<Partial<Record<Environment, HTMLButtonElement | null>>>(
+    {},
+  );
+  const onEnvKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      let next: number | null = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown")
+        next = (index + 1) % ENVIRONMENTS.length;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
+        next = (index - 1 + ENVIRONMENTS.length) % ENVIRONMENTS.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = ENVIRONMENTS.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      const target = ENVIRONMENTS[next];
+      patch({ environment: target });
+      envRefs.current[target]?.focus();
+    },
+    [patch],
+  );
 
   /** Editing a field clears its own error. Never adds one — see §5.3. */
   const edit = useCallback(
@@ -580,12 +638,12 @@ export default function ProfileEditor({
       return {
         field: "name",
         message:
-          "Give this connection a name so you can find it in the sidebar.",
+          t("editor.err.name"),
       };
     if (parseBootstrap(form.bootstrap).length === 0)
       return {
         field: "bootstrap",
-        message: "Add at least one broker, as host:port — e.g. broker-1:9092",
+        message: t("editor.err.bootstrap"),
       };
 
     // The registry is independent of the sign-in method, so it is checked
@@ -595,13 +653,13 @@ export default function ProfileEditor({
       return {
         field: "srUrl",
         message:
-          "Use the whole URL, starting with http:// or https:// — e.g. http://localhost:8081",
+          t("editor.err.srUrl"),
       };
     if (srUrl.length === 0 && form.srUsername.trim().length > 0)
       return {
         field: "srUrl",
         message:
-          "Add the registry's address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
+          t("editor.err.srUserNoUrl"),
       };
 
     // The metrics endpoint is independent of everything else here too — it is a
@@ -612,13 +670,13 @@ export default function ProfileEditor({
       return {
         field: "metricsUrl",
         message:
-          "Use the whole URL, starting with http:// or https:// — e.g. http://broker-1.internal:7071/metrics",
+          t("editor.err.metricsUrl"),
       };
     if (metricsUrl.length === 0 && form.metricsUsername.trim().length > 0)
       return {
         field: "metricsUrl",
         message:
-          "Add the metrics address, or clear the username — a sign-in with nothing to sign in to can't be saved.",
+          t("editor.err.metricsUserNoUrl"),
       };
 
     // The sampler interval has a floor in the core, so the form refuses the
@@ -632,9 +690,9 @@ export default function ProfileEditor({
     )
       return {
         field: "samplerSeconds",
-        message: `Sample at least every ${
-          SAMPLER_MIN_MS / 1000
-        } seconds. Anything faster asks the brokers for offsets more often than they change.`,
+        message: t("editor.err.sampler", {
+          seconds: SAMPLER_MIN_MS / 1000,
+        }),
       };
 
     // Connect is independent of the sign-in method too — the workers have their
@@ -660,14 +718,14 @@ export default function ProfileEditor({
           field: "connectName",
           row,
           message:
-            "Give this Connect cluster a name — every action Kavka sends names the cluster it goes to.",
+            t("editor.err.connectName"),
         };
       if (seen.has(clusterName))
         return {
           field: "connectName",
           row,
           message:
-            "Two Connect clusters on one connection can't share a name — Kavka stores their passwords under it.",
+            t("editor.err.connectDuplicate"),
         };
       seen.add(clusterName);
       if (url.length === 0)
@@ -675,14 +733,14 @@ export default function ProfileEditor({
           field: "connectUrl",
           row,
           message:
-            "Add the workers' REST address — e.g. http://connect-1.internal:8083",
+            t("editor.err.connectUrlMissing"),
         };
       if (!isHttpUrl(url))
         return {
           field: "connectUrl",
           row,
           message:
-            "Use the whole URL, starting with http:// or https:// — e.g. http://connect-1.internal:8083",
+            t("editor.err.connectUrl"),
         };
     }
 
@@ -693,12 +751,12 @@ export default function ProfileEditor({
       if (form.username.trim().length === 0)
         return {
           field: "username",
-          message: "This sign-in method needs the username the broker knows you by.",
+          message: t("editor.err.username"),
         };
       if (needsPassword && form.password.length === 0)
         return {
           field: "password",
-          message: "This sign-in method needs a password.",
+          message: t("editor.err.password"),
         };
     }
 
@@ -711,13 +769,13 @@ export default function ProfileEditor({
         return {
           field: "clientKey",
           message:
-            "Paste the private key that goes with that certificate — Kavka needs both halves.",
+            t("editor.err.clientKey"),
         };
       if (certPath.length === 0 && typedKey.length > 0)
         return {
           field: "clientCert",
           message:
-            "Add the path to the certificate this key belongs to — Kavka needs both halves.",
+            t("editor.err.clientCert"),
         };
     }
 
@@ -725,7 +783,7 @@ export default function ProfileEditor({
       if (form.region.trim().length === 0)
         return {
           field: "region",
-          message: "Name the region the cluster runs in — e.g. eu-west-1",
+          message: t("editor.err.region"),
         };
     }
 
@@ -734,34 +792,37 @@ export default function ProfileEditor({
         return {
           field: "tokenEndpoint",
           message:
-            "Add the URL your identity provider issues tokens at — e.g. https://login.example.com/oauth2/token",
+            t("editor.err.tokenEndpoint"),
         };
       if (!isHttpUrl(form.tokenEndpoint.trim()))
         return {
           field: "tokenEndpoint",
           message:
-            "Use the whole URL, starting with https:// — e.g. https://login.example.com/oauth2/token",
+            t("editor.err.tokenEndpointUrl"),
         };
       if (form.clientId.trim().length === 0)
         return {
           field: "clientId",
           message:
-            "Add the client id your identity provider issued for this application.",
+            t("editor.err.clientId"),
         };
       if (needsClientSecret && form.clientSecret.length === 0)
         return {
           field: "clientSecret",
-          message: "This sign-in method needs the secret that goes with that client id.",
+          message: t("editor.err.clientSecret"),
         };
     }
 
     return null;
+    // `t` is memoized on the locale (see i18n/index.ts), so validation
+    // re-derives when the language changes and on no other render.
   }, [
     form,
     needsPassword,
     needsClientSecret,
     hasStoredClientKey,
     unsupportedAuth,
+    t,
   ]);
 
   /**
@@ -1128,11 +1189,11 @@ export default function ProfileEditor({
   const showAws = form.authKind === "aws_msk_iam";
   const showOauth = form.authKind === "oauth_bearer";
   const waitReason = connecting
-    ? "Wait for the connection attempt to finish"
+    ? t("editor.busy.connecting")
     : busy
-      ? "Kavka is saving this connection"
+      ? t("editor.busy.saving")
       : undefined;
-  const savingReason = busy ? "Kavka is saving this connection" : undefined;
+  const savingReason = busy ? t("editor.busy.saving") : undefined;
 
   /** aria-describedby that keeps the hint AND adds the error when there is one. */
   const describe = (field: FieldKey, hintId?: string) =>
@@ -1187,18 +1248,16 @@ export default function ProfileEditor({
     >
       <div className="view-header">
         <h1 className="view-title">
-          {isNew ? "Add a connection" : profile.name}
+          {isNew ? t("editor.new.title") : profile.name}
         </h1>
         <span className="view-subtitle">
-          {isNew
-            ? "One broker is enough to start — Kavka discovers the rest of the cluster from there."
-            : "Not connected. Check the details below, then connect."}
+          {isNew ? t("editor.new.subtitle") : t("editor.saved.subtitle")}
         </span>
       </div>
 
       <div className="field">
         <label className="field-label" htmlFor="pe-name">
-          Connection name
+          {t("editor.name.label")}
         </label>
         <input
           id="pe-name"
@@ -1206,7 +1265,7 @@ export default function ProfileEditor({
           type="text"
           className={cls("name")}
           value={form.name}
-          placeholder="orders — local"
+          placeholder={t("editor.name.placeholder")}
           autoFocus={isNew}
           aria-invalid={invalid("name")}
           aria-describedby={describe("name", "pe-name-hint")}
@@ -1214,38 +1273,52 @@ export default function ProfileEditor({
         />
         {fieldMessage("name")}
         <span className="field-hint" id="pe-name-hint">
-          Whatever you'll recognise in the sidebar. Only Kavka sees it.
+          {t("editor.name.hint")}
         </span>
       </div>
 
       <div className="field">
-        <span className="field-label">Environment</span>
-        <div className="env-picker" role="radiogroup" aria-label="Environment">
-          {(["dev", "staging", "prod"] as const).map((env) => (
+        <span className="field-label">{t("editor.env.label")}</span>
+        <div
+          className="env-picker"
+          role="radiogroup"
+          aria-label={t("editor.env.label")}
+        >
+          {ENVIRONMENTS.map((env, index) => (
             <button
               key={env}
               type="button"
               role="radio"
               aria-checked={form.environment === env}
+              // One tab stop for the group; the arrows walk it (onEnvKeyDown).
+              tabIndex={form.environment === env ? 0 : -1}
+              ref={(el) => {
+                envRefs.current[env] = el;
+              }}
               className={`env-option ${
                 form.environment === env ? "env-option-active" : ""
               }`}
               onClick={() => patch({ environment: env })}
+              onKeyDown={(e) => onEnvKeyDown(e, index)}
             >
               {env}
             </button>
           ))}
         </div>
+        {/* The three segment labels are NOT translated — see Sidebar's
+            ENV_LABEL. `dev`/`staging`/`prod` are the same tokens as `data-env`
+            and the forced-colors PROD wire, and the guardrail has to read the
+            same in every locale. */}
         <span className="field-hint">
           {form.environment === "prod"
-            ? "Prod turns the ledger rule coral in every table, marks this cluster in the sidebar and puts a warning bar across the top of the window. Turn on read-only below unless you actually need to write."
-            : "Kavka colours every view by environment, so you can't mistake one cluster for another."}
+            ? t("editor.env.hint.prod")
+            : t("editor.env.hint.other")}
         </span>
       </div>
 
       <div className="field">
         <label className="field-label" htmlFor="pe-bootstrap">
-          <Term name="bootstrap-server">Bootstrap servers</Term>
+          <Term name="bootstrap-server">{t("editor.bootstrap.label")}</Term>
         </label>
         <textarea
           id="pe-bootstrap"
@@ -1261,29 +1334,26 @@ export default function ProfileEditor({
         />
         {fieldMessage("bootstrap")}
         <span className="field-hint" id="pe-bootstrap-hint">
-          Any single broker in your cluster — Kavka finds the rest from there.
-          One per line, or comma separated. Running this repo's dev cluster?
-          Use <code>localhost:9092</code>.
+          {tx("editor.bootstrap.hint", { local: <code>localhost:9092</code> })}
         </span>
       </div>
 
       <fieldset className="fieldset">
-        <legend className="eyebrow">Sign-in</legend>
+        <legend className="eyebrow">{t("editor.auth.legend")}</legend>
 
         {unsupportedAuth && (
           <span className="field-hint">
-            This connection signs in with Kerberos (
-            <code>{unsupportedAuth.service_name}</code> as{" "}
-            <code>{unsupportedAuth.principal}</code>), which Kavka can't set up
-            yet. Saving keeps it exactly as it is; every other field here still
-            works.
+            {tx("editor.auth.kerberos", {
+              service: <code>{unsupportedAuth.service_name}</code>,
+              principal: <code>{unsupportedAuth.principal}</code>,
+            })}
           </span>
         )}
 
         {!unsupportedAuth && (
           <div className="field">
             <label className="field-label" htmlFor="pe-auth-kind">
-              How does this cluster check who you are?
+              {t("editor.auth.label")}
             </label>
             <select
               id="pe-auth-kind"
@@ -1292,41 +1362,29 @@ export default function ProfileEditor({
                 changeAuthKind(e.target.value as EditableAuthKind)
               }
             >
-              <option value="plaintext">
-                It doesn't — anyone can connect (PLAINTEXT)
-              </option>
-              <option value="sasl_plain">
-                Username and password — SASL/PLAIN
-              </option>
-              <option value="sasl_scram">
-                Username and password — SASL/SCRAM
-              </option>
-              <option value="tls">
-                A certificate this machine presents — mTLS
-              </option>
-              <option value="aws_msk_iam">
-                The AWS credentials on this machine — MSK IAM
-              </option>
-              <option value="oauth_bearer">
-                A token from your identity provider — OAuth 2.0 / OIDC
-              </option>
+              <option value="plaintext">{t("editor.auth.plaintext")}</option>
+              <option value="sasl_plain">{t("editor.auth.saslPlain")}</option>
+              <option value="sasl_scram">{t("editor.auth.saslScram")}</option>
+              <option value="tls">{t("editor.auth.mtls")}</option>
+              <option value="aws_msk_iam">{t("editor.auth.mskIam")}</option>
+              <option value="oauth_bearer">{t("editor.auth.oauth")}</option>
               {/* Every disabled control says why. No dead ends. */}
-              <option value="kerberos" disabled title={NOT_YET}>
-                A Kerberos ticket — GSSAPI (not yet)
+              <option
+                value="kerberos"
+                disabled
+                title={t("editor.auth.notYet")}
+              >
+                {t("editor.auth.kerberosOption")}
               </option>
             </select>
-            <span className="field-hint">
-              Managed Kafka usually wants SASL/SCRAM with TLS on. A local
-              broker usually wants nothing at all. Kerberos is the one method
-              Kavka can't set up yet.
-            </span>
+            <span className="field-hint">{t("editor.auth.hint")}</span>
           </div>
         )}
 
         {!unsupportedAuth && form.authKind === "sasl_scram" && (
           <div className="field">
             <label className="field-label" htmlFor="pe-mechanism">
-              SCRAM mechanism
+              {t("editor.mechanism.label")}
             </label>
             <select
               id="pe-mechanism"
@@ -1338,9 +1396,7 @@ export default function ProfileEditor({
               <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
               <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
             </select>
-            <span className="field-hint">
-              If the broker rejects one, it will tell you which it wants.
-            </span>
+            <span className="field-hint">{t("editor.mechanism.hint")}</span>
           </div>
         )}
 
@@ -1348,7 +1404,7 @@ export default function ProfileEditor({
           <>
             <div className="field">
               <label className="field-label" htmlFor="pe-username">
-                Username
+                {t("editor.username.label")}
               </label>
               <input
                 id="pe-username"
@@ -1367,7 +1423,7 @@ export default function ProfileEditor({
 
             <div className="field">
               <label className="field-label" htmlFor="pe-password">
-                Password
+                {t("editor.password.label")}
               </label>
               <input
                 id="pe-password"
@@ -1377,7 +1433,9 @@ export default function ProfileEditor({
                 value={form.password}
                 autoComplete="new-password"
                 placeholder={
-                  hasStoredPassword ? "••••••••  (unchanged)" : "Password"
+                  hasStoredPassword
+                    ? t("editor.secret.unchanged")
+                    : t("editor.password.placeholder")
                 }
                 aria-invalid={invalid("password")}
                 aria-describedby={describe("password", "pe-password-hint")}
@@ -1385,8 +1443,7 @@ export default function ProfileEditor({
               />
               {fieldMessage("password")}
               <span className="field-hint" id="pe-password-hint">
-                Goes to your operating system's keychain — never into the
-                connection file, and never off this machine.
+                {t("editor.password.hint")}
               </span>
             </div>
 
@@ -1402,12 +1459,10 @@ export default function ProfileEditor({
                 onChange={(e) => patch({ tls: e.target.checked })}
               />
               <label className="check-label" htmlFor="pe-tls">
-                Encrypt the connection (TLS)
+                {t("editor.tls.label")}
               </label>
               <span className="field-hint" id="pe-tls-hint">
-                Managed Kafka almost always needs this on. If the broker
-                answers but the handshake fails, this is the first thing to
-                try.
+                {t("editor.tls.hint")}
               </span>
             </div>
           </>
@@ -1415,14 +1470,11 @@ export default function ProfileEditor({
 
         {!unsupportedAuth && showMtls && (
           <>
-            <span className="field-hint">
-              Kavka reads PEM files exactly as they are — there is no JKS or
-              PKCS#12 keystore to convert first.
-            </span>
+            <span className="field-hint">{t("editor.mtls.hint")}</span>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-ca-path">
-                CA certificate
+                {t("editor.caPath.label")}
               </label>
               <input
                 id="pe-ca-path"
@@ -1439,14 +1491,13 @@ export default function ProfileEditor({
               />
               {fieldMessage("caPath")}
               <span className="field-hint" id="pe-ca-path-hint">
-                Path to the CA .pem — leave empty to use the system trust
-                store.
+                {t("editor.caPath.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-client-cert">
-                Client certificate
+                {t("editor.clientCert.label")}
               </label>
               <input
                 id="pe-client-cert"
@@ -1468,14 +1519,13 @@ export default function ProfileEditor({
               />
               {fieldMessage("clientCert")}
               <span className="field-hint" id="pe-client-cert-hint">
-                Path to the certificate this machine shows the broker — leave
-                empty if the broker doesn't ask for one.
+                {t("editor.clientCert.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-client-key">
-                Client private key
+                {t("editor.clientKey.label")}
               </label>
               <textarea
                 id="pe-client-key"
@@ -1485,8 +1535,10 @@ export default function ProfileEditor({
                 value={form.clientKey}
                 placeholder={
                   hasStoredClientKey
-                    ? "••••••••  (unchanged)"
-                    : "-----BEGIN PRIVATE KEY-----\n…"
+                    ? t("editor.secret.unchanged")
+                    : // A PEM header is a literal, not prose: it stays
+                      // verbatim in every locale (§4).
+                      "-----BEGIN PRIVATE KEY-----\n…"
                 }
                 autoComplete="off"
                 spellCheck={false}
@@ -1498,12 +1550,8 @@ export default function ProfileEditor({
               />
               {fieldMessage("clientKey")}
               <span className="field-hint" id="pe-client-key-hint">
-                Paste the key itself, not a path to it. It goes to your
-                operating system's keychain — never into the connection file,
-                and never off this machine.
-                {hasStoredClientKey
-                  ? " Leave it empty to keep the stored key; clearing the certificate path above removes it."
-                  : ""}
+                {t("editor.clientKey.hint")}
+                {hasStoredClientKey ? ` ${t("editor.clientKey.storedHint")}` : ""}
               </span>
             </div>
           </>
@@ -1512,15 +1560,14 @@ export default function ProfileEditor({
         {!unsupportedAuth && showAws && (
           <>
             <span className="field-hint">
-              Kavka signs each request with the AWS credentials already on this
-              machine. The bootstrap servers above have to be this cluster's
-              IAM endpoint — the <code>.amazonaws.com</code> hosts from the MSK
-              console, usually on port 9098.
+              {tx("editor.aws.hint", {
+                host: <code>.amazonaws.com</code>,
+              })}
             </span>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-region">
-                Region
+                {t("editor.region.label")}
               </label>
               <input
                 id="pe-region"
@@ -1537,14 +1584,13 @@ export default function ProfileEditor({
               />
               {fieldMessage("region")}
               <span className="field-hint" id="pe-region-hint">
-                The AWS region the cluster runs in. It has to match the
-                bootstrap hosts, or the signature won't be accepted.
+                {t("editor.region.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-aws-profile">
-                AWS profile name
+                {t("editor.awsProfile.label")}
               </label>
               <input
                 id="pe-aws-profile"
@@ -1563,9 +1609,10 @@ export default function ProfileEditor({
               />
               {fieldMessage("awsProfile")}
               <span className="field-hint" id="pe-aws-profile-hint">
-                A named profile from <code>~/.aws/config</code>. Leave empty to
-                use the default credential chain — environment variables, then{" "}
-                <code>~/.aws</code>, then SSO.
+                {tx("editor.awsProfile.hint", {
+                  config: <code>~/.aws/config</code>,
+                  dir: <code>~/.aws</code>,
+                })}
               </span>
             </div>
           </>
@@ -1573,15 +1620,11 @@ export default function ProfileEditor({
 
         {!unsupportedAuth && showOauth && (
           <>
-            <span className="field-hint">
-              Kavka asks your identity provider for a token with the client
-              credentials grant, then presents it to the broker as
-              SASL/OAUTHBEARER.
-            </span>
+            <span className="field-hint">{t("editor.oauth.hint")}</span>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-token-endpoint">
-                Token endpoint
+                {t("editor.tokenEndpoint.label")}
               </label>
               <input
                 id="pe-token-endpoint"
@@ -1603,14 +1646,13 @@ export default function ProfileEditor({
               />
               {fieldMessage("tokenEndpoint")}
               <span className="field-hint" id="pe-token-endpoint-hint">
-                The URL that issues the token, not the sign-in page a browser
-                would use.
+                {t("editor.tokenEndpoint.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-client-id">
-                Client id
+                {t("editor.clientId.label")}
               </label>
               <input
                 id="pe-client-id"
@@ -1626,14 +1668,13 @@ export default function ProfileEditor({
               />
               {fieldMessage("clientId")}
               <span className="field-hint" id="pe-client-id-hint">
-                The application your identity provider registered for Kafka —
-                not your own user account.
+                {t("editor.clientId.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor="pe-client-secret">
-                Client secret
+                {t("editor.clientSecret.label")}
               </label>
               <input
                 id="pe-client-secret"
@@ -1644,8 +1685,8 @@ export default function ProfileEditor({
                 autoComplete="new-password"
                 placeholder={
                   hasStoredClientSecret
-                    ? "••••••••  (unchanged)"
-                    : "Client secret"
+                    ? t("editor.secret.unchanged")
+                    : t("editor.clientSecret.placeholder")
                 }
                 aria-invalid={invalid("clientSecret")}
                 aria-describedby={describe(
@@ -1658,8 +1699,7 @@ export default function ProfileEditor({
               />
               {fieldMessage("clientSecret")}
               <span className="field-hint" id="pe-client-secret-hint">
-                Goes to your operating system's keychain — never into the
-                connection file, and never off this machine.
+                {t("editor.clientSecret.hint")}
               </span>
             </div>
           </>
@@ -1671,18 +1711,13 @@ export default function ProfileEditor({
           basic auth. Leaving the address empty is the same as having no
           registry, and clearing it removes the stored password with it. */}
       <fieldset className="fieldset">
-        <legend className="eyebrow">Schema Registry (optional)</legend>
+        <legend className="eyebrow">{t("editor.sr.legend")}</legend>
 
-        <span className="field-hint">
-          If this cluster's messages are Avro, Protobuf or JSON Schema, Kavka
-          reads the schema from here to decode them — and shows the subject,
-          version and id beside each message. Without it those payloads are
-          shown as raw bytes.
-        </span>
+        <span className="field-hint">{t("editor.sr.hint")}</span>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-sr-url">
-            Registry address
+            {t("editor.srUrl.label")}
           </label>
           <input
             id="pe-sr-url"
@@ -1699,15 +1734,13 @@ export default function ProfileEditor({
           />
           {fieldMessage("srUrl")}
           <span className="field-hint" id="pe-sr-url-hint">
-            The whole URL, including the scheme. Confluent, Apicurio and Glue
-            all speak the same read API here. Leave it empty if this cluster
-            has no registry.
+            {t("editor.srUrl.hint")}
           </span>
         </div>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-sr-username">
-            Registry username
+            {t("editor.srUsername.label")}
           </label>
           <input
             id="pe-sr-username"
@@ -1723,14 +1756,13 @@ export default function ProfileEditor({
           />
           {fieldMessage("srUsername")}
           <span className="field-hint" id="pe-sr-username-hint">
-            Only if the registry asks for one. Managed registries usually do;
-            a registry inside your own network usually doesn't.
+            {t("editor.srUsername.hint")}
           </span>
         </div>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-sr-password">
-            Registry password
+            {t("editor.srPassword.label")}
           </label>
           <input
             id="pe-sr-password"
@@ -1740,7 +1772,9 @@ export default function ProfileEditor({
             value={form.srPassword}
             autoComplete="new-password"
             placeholder={
-              hasStoredSrPassword ? "••••••••  (unchanged)" : "Password"
+              hasStoredSrPassword
+                ? t("editor.secret.unchanged")
+                : t("editor.password.placeholder")
             }
             aria-invalid={invalid("srPassword")}
             aria-describedby={describe("srPassword", "pe-sr-password-hint")}
@@ -1748,11 +1782,8 @@ export default function ProfileEditor({
           />
           {fieldMessage("srPassword")}
           <span className="field-hint" id="pe-sr-password-hint">
-            Goes to your operating system's keychain — never into the
-            connection file, and never off this machine.
-            {hasStoredSrPassword
-              ? " Leave it empty to keep the stored one; clearing the address above removes it."
-              : ""}
+            {t("editor.password.hint")}
+            {hasStoredSrPassword ? ` ${t("editor.srPassword.storedHint")}` : ""}
           </span>
         </div>
       </fieldset>
@@ -1763,14 +1794,9 @@ export default function ProfileEditor({
           here takes its keychain entry with it, exactly like clearing the
           registry's address does. */}
       <fieldset className="fieldset">
-        <legend className="eyebrow">Kafka Connect clusters (optional)</legend>
+        <legend className="eyebrow">{t("editor.connect.legend")}</legend>
 
-        <span className="field-hint">
-          Kafka Connect runs source and sink connectors, and it answers on its
-          own REST port rather than through the brokers — so Kavka has to be
-          told where the workers are. Add one per worker group; the name is how
-          you'll pick between them in the Connect tab.
-        </span>
+        <span className="field-hint">{t("editor.connect.hint")}</span>
 
         {form.connect.map((cluster, row) => (
           <div className="connect-cluster" key={cluster.key}>
@@ -1778,15 +1804,25 @@ export default function ProfileEditor({
               <span className="eyebrow">
                 {cluster.name.trim().length > 0
                   ? cluster.name
-                  : `Cluster ${row + 1}`}
+                  : t("editor.connect.unnamed", { number: row + 1 })}
               </span>
+              {/* Every Connect row has a Remove button, so "Remove" on its
+                  own is N identically-named controls in one form. The label
+                  says which row it belongs to; the visible word does not
+                  change (SC 2.4.6). */}
               <button
                 type="button"
                 className="btn btn-ghost"
-                title="Remove this Connect cluster from the connection"
+                aria-label={t("editor.connect.removeLabel", {
+                  name:
+                    cluster.name.trim().length > 0
+                      ? cluster.name
+                      : t("editor.connect.unnamedLong", { number: row + 1 }),
+                })}
+                title={t("editor.connect.remove")}
                 onClick={() => removeConnect(row)}
               >
-                Remove
+                {t("common.remove")}
               </button>
             </div>
 
@@ -1795,7 +1831,7 @@ export default function ProfileEditor({
                 className="field-label"
                 htmlFor={`pe-connect-${row}-name`}
               >
-                Name
+                {t("editor.connect.name.label")}
               </label>
               <input
                 id={`pe-connect-${row}-name`}
@@ -1803,7 +1839,7 @@ export default function ProfileEditor({
                 type="text"
                 className={connCls(row, "connectName")}
                 value={cluster.name}
-                placeholder="orders connect"
+                placeholder={t("editor.connect.name.placeholder")}
                 autoComplete="off"
                 aria-invalid={connInvalid(row, "connectName")}
                 aria-describedby={connDescribe(
@@ -1818,14 +1854,13 @@ export default function ProfileEditor({
                 className="field-hint"
                 id={`pe-connect-${row}-name-hint`}
               >
-                Whatever you'll recognise. Renaming it later keeps its stored
-                password.
+                {t("editor.connect.name.hint")}
               </span>
             </div>
 
             <div className="field">
               <label className="field-label" htmlFor={`pe-connect-${row}-url`}>
-                Workers' address
+                {t("editor.connect.url.label")}
               </label>
               <input
                 id={`pe-connect-${row}-url`}
@@ -1846,9 +1881,7 @@ export default function ProfileEditor({
               />
               {connMessage(row, "connectUrl")}
               <span className="field-hint" id={`pe-connect-${row}-url-hint`}>
-                The REST endpoint of any worker in the group — they all answer
-                for the whole cluster. Usually port 8083, and not the same host
-                or port as the brokers.
+                {t("editor.connect.url.hint")}
               </span>
             </div>
 
@@ -1857,7 +1890,7 @@ export default function ProfileEditor({
                 className="field-label"
                 htmlFor={`pe-connect-${row}-user`}
               >
-                Username
+                {t("editor.username.label")}
               </label>
               <input
                 id={`pe-connect-${row}-user`}
@@ -1870,7 +1903,7 @@ export default function ProfileEditor({
                 onChange={(e) => editConnect(row, { username: e.target.value })}
               />
               <span className="field-hint" id={`pe-connect-${row}-user-hint`}>
-                Only if the workers sit behind basic auth. Most don't.
+                {t("editor.connect.username.hint")}
               </span>
             </div>
 
@@ -1879,7 +1912,7 @@ export default function ProfileEditor({
                 className="field-label"
                 htmlFor={`pe-connect-${row}-password`}
               >
-                Password
+                {t("editor.password.label")}
               </label>
               <input
                 id={`pe-connect-${row}-password`}
@@ -1888,8 +1921,8 @@ export default function ProfileEditor({
                 autoComplete="new-password"
                 placeholder={
                   cluster.entry !== null && connectStored[cluster.entry]
-                    ? "••••••••  (unchanged)"
-                    : "Password"
+                    ? t("editor.secret.unchanged")
+                    : t("editor.password.placeholder")
                 }
                 aria-describedby={`pe-connect-${row}-password-hint`}
                 onChange={(e) => editConnect(row, { password: e.target.value })}
@@ -1898,10 +1931,9 @@ export default function ProfileEditor({
                 className="field-hint"
                 id={`pe-connect-${row}-password-hint`}
               >
-                Goes to your operating system's keychain — never into the
-                connection file, and never off this machine.
+                {t("editor.password.hint")}
                 {cluster.entry !== null && connectStored[cluster.entry]
-                  ? " Leave it empty to keep the stored one; removing this cluster removes it."
+                  ? ` ${t("editor.connect.password.storedHint")}`
                   : ""}
               </span>
             </div>
@@ -1909,7 +1941,7 @@ export default function ProfileEditor({
         ))}
 
         <button type="button" className="btn" onClick={addConnect}>
-          Add a Connect cluster
+          {t("editor.connect.add")}
         </button>
       </fieldset>
 
@@ -1918,19 +1950,13 @@ export default function ProfileEditor({
           sampler is Kavka's own clock. Neither has anything to do with how the
           cluster checks who you are. */}
       <fieldset className="fieldset">
-        <legend className="eyebrow">Monitoring (optional)</legend>
+        <legend className="eyebrow">{t("editor.monitoring.legend")}</legend>
 
-        <span className="field-hint">
-          Kafka's brokers don't serve throughput, storage or replication figures
-          over the Kafka protocol — they publish them as JMX, and almost everyone
-          puts a Prometheus exporter in front of that. Point Kavka at the
-          exporter and the Monitoring tab fills in. Lag history needs none of
-          this: Kavka reads that from the brokers itself.
-        </span>
+        <span className="field-hint">{t("editor.monitoring.hint")}</span>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-metrics-url">
-            Metrics address
+            {t("editor.metricsUrl.label")}
           </label>
           <input
             id="pe-metrics-url"
@@ -1947,18 +1973,20 @@ export default function ProfileEditor({
           />
           {fieldMessage("metricsUrl")}
           <span className="field-hint" id="pe-metrics-url-hint">
-            The whole URL, including the path. If you run the brokers, this is
-            usually the <code>jmx_exporter</code> Java agent on one of them (
-            <code>-javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml</code>).
-            A Prometheus server that already scrapes those brokers works too —
-            give Kavka its address instead. Leave it empty if this cluster has
-            no exporter.
+            {tx("editor.metricsUrl.hint", {
+              agent: <code>jmx_exporter</code>,
+              flag: (
+                <code>
+                  -javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml
+                </code>
+              ),
+            })}
           </span>
         </div>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-metrics-user">
-            Metrics username
+            {t("editor.metricsUsername.label")}
           </label>
           <input
             id="pe-metrics-user"
@@ -1979,14 +2007,13 @@ export default function ProfileEditor({
           />
           {fieldMessage("metricsUsername")}
           <span className="field-hint" id="pe-metrics-user-hint">
-            Only if the endpoint sits behind basic auth. A jmx_exporter usually
-            doesn't; a shared Prometheus usually does.
+            {t("editor.metricsUsername.hint")}
           </span>
         </div>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-metrics-password">
-            Metrics password
+            {t("editor.metricsPassword.label")}
           </label>
           <input
             id="pe-metrics-password"
@@ -1996,7 +2023,9 @@ export default function ProfileEditor({
             value={form.metricsPassword}
             autoComplete="new-password"
             placeholder={
-              hasStoredMetricsPassword ? "••••••••  (unchanged)" : "Password"
+              hasStoredMetricsPassword
+                ? t("editor.secret.unchanged")
+                : t("editor.password.placeholder")
             }
             aria-invalid={invalid("metricsPassword")}
             aria-describedby={describe(
@@ -2009,17 +2038,16 @@ export default function ProfileEditor({
           />
           {fieldMessage("metricsPassword")}
           <span className="field-hint" id="pe-metrics-password-hint">
-            Goes to your operating system's keychain — never into the connection
-            file, and never off this machine.
+            {t("editor.password.hint")}
             {hasStoredMetricsPassword
-              ? " Leave it empty to keep the stored one; clearing the address above removes it."
+              ? ` ${t("editor.metricsPassword.storedHint")}`
               : ""}
           </span>
         </div>
 
         <div className="field">
           <label className="field-label" htmlFor="pe-sampler">
-            Take a lag reading every
+            {t("editor.sampler.label")}
           </label>
           <input
             id="pe-sampler"
@@ -2037,17 +2065,15 @@ export default function ProfileEditor({
           />
           {fieldMessage("samplerSeconds")}
           <span className="field-hint" id="pe-sampler-hint">
-            Seconds. Kafka doesn't remember lag, so Kavka takes its own reading
-            on this interval and keeps {HISTORY_RETENTION_DAYS} days of it in a
-            file on this machine.{" "}
-            <strong>
-              Readings only happen while this connection is up — nothing is
-              collected while Kavka is closed or this cluster is disconnected,
-              and a gap in the chart means exactly that.
-            </strong>{" "}
-            The floor is {formatSpan(SAMPLER_MIN_MS)}; the default is{" "}
-            {formatSpan(SAMPLER_DEFAULT_MS)}, which costs one small request per
-            group per reading.
+            {tx("editor.sampler.hint", {
+              days: t("unit.days", { count: HISTORY_RETENTION_DAYS }),
+              // The <strong> is a param, so the emphasis travels with the
+              // sentence rather than a translator having to guess which
+              // clause it wrapped.
+              warning: <strong>{t("editor.sampler.warning")}</strong>,
+              floor: spanText(t, SAMPLER_MIN_MS),
+              default: spanText(t, SAMPLER_DEFAULT_MS),
+            })}
           </span>
         </div>
       </fieldset>
@@ -2066,11 +2092,10 @@ export default function ProfileEditor({
           onChange={(e) => patch({ readOnly: e.target.checked })}
         />
         <label className="check-label" htmlFor="pe-readonly">
-          Read-only connection
+          {t("editor.readonly.label")}
         </label>
         <span className="field-hint" id="pe-readonly-hint">
-          Kavka will still browse everything, but it won't produce messages,
-          change topics or commit offsets over this connection.
+          {t("editor.readonly.hint")}
         </span>
       </div>
 
@@ -2089,7 +2114,7 @@ export default function ProfileEditor({
             title={waitReason}
             onClick={() => void handleSave()}
           >
-            Save
+            {t("common.save")}
           </button>
           {/* The busy slot is a fixed 16px and always present, so the button
               never resizes mid-click and shifts everything after it. */}
@@ -2103,7 +2128,7 @@ export default function ProfileEditor({
             <span className="btn-busy-slot" aria-hidden="true">
               {connecting ? <span className="spinner" /> : null}
             </span>
-            Connect
+            {t("common.connect")}
           </button>
           {isNew && (
             <button
@@ -2113,7 +2138,7 @@ export default function ProfileEditor({
               title={savingReason}
               onClick={onCancelNew}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           )}
         </div>
@@ -2124,8 +2149,7 @@ export default function ProfileEditor({
                 {/* Destructive copy states the blast radius before the button,
                     and the confirm restates the verb — never "OK". */}
                 <span className="confirm-text">
-                  Remove {profile.name} from this machine? The cluster itself
-                  isn't touched.
+                  {t("editor.delete.confirm", { name: profile.name })}
                 </span>
                 <button
                   type="button"
@@ -2134,7 +2158,7 @@ export default function ProfileEditor({
                   title={savingReason}
                   onClick={() => setConfirmingDelete(false)}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
                 <button
                   type="button"
@@ -2143,7 +2167,7 @@ export default function ProfileEditor({
                   title={waitReason}
                   onClick={() => void handleDelete()}
                 >
-                  Delete connection
+                  {t("editor.delete")}
                 </button>
               </span>
             ) : (
@@ -2154,7 +2178,7 @@ export default function ProfileEditor({
                 title={waitReason}
                 onClick={() => setConfirmingDelete(true)}
               >
-                Delete connection
+                {t("editor.delete")}
               </button>
             )}
           </div>
@@ -2162,9 +2186,10 @@ export default function ProfileEditor({
       </div>
 
       <span className="editor-kbd-hint">
-        <span className="kbd">Enter</span> connect
+        <span className="kbd">Enter</span> {t("editor.kbd.connect")}
         <span aria-hidden="true">·</span>
-        <span className="kbd">Esc</span> {isNew ? "cancel" : "undo edits"}
+        <span className="kbd">Esc</span>{" "}
+        {isNew ? t("editor.kbd.cancel") : t("editor.kbd.undo")}
       </span>
     </form>
   );

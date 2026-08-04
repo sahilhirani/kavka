@@ -199,7 +199,14 @@ export default function WasmSerdesFields({ profileId }: WasmSerdesFieldsProps) {
         </p>
       ) : (
         <>
-          {error !== null && <span className="field-error">{error}</span>}
+          {/* This section writes as you type, so its failures arrive on a
+              blur rather than on a button press — nothing moves focus, and
+              without a live region the message is silent (SC 4.1.3). */}
+          {error !== null && (
+            <span className="field-error" role="alert">
+              {error}
+            </span>
+          )}
 
           {loaded && rows.length === 0 && (
             <p className="table-note">
@@ -220,9 +227,16 @@ export default function WasmSerdesFields({ profileId }: WasmSerdesFieldsProps) {
                     ? row.name
                     : `Decoder ${index + 1}`}
                 </span>
+                {/* One Remove per row, so the accessible name says which
+                    row — the visible word stays "Remove" (SC 2.4.6). */}
                 <button
                   type="button"
                   className="btn btn-ghost"
+                  aria-label={`Remove ${
+                    row.name.trim().length > 0
+                      ? row.name
+                      : `decoder ${index + 1}`
+                  }`}
                   title="Remove this decoder from the connection"
                   onClick={() => void remove(index)}
                 >

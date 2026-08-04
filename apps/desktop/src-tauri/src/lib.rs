@@ -21,8 +21,8 @@ use kavka_core::metrics::{MetricPoint, MetricsCollector, MetricsStatus};
 use kavka_core::nlq::{self, SchemaHint, Translation};
 use kavka_core::produce::{self, BulkSession, BulkSpec, Delivery, ProduceRecordSpec};
 use kavka_core::profiles::{
-    export_json, import_json, ConnectionProfile, ImportReport, ImportStrategy, ProfileStore,
-    WasmSerdeConfig,
+    export_json, import_json, AuthConfig, ConnectionProfile, Environment, ImportReport,
+    ImportStrategy, ProfileStore, WasmSerdeConfig,
 };
 // `TopicPartition` here is the protocol module's — `admin` has an
 // identically-shaped one for group assignments, which is why it is reached
@@ -42,13 +42,15 @@ use kavka_core::xcluster::{
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// How long a tail's reader waits for records before looking at the world
 /// again. Also the worst-case latency of `tail_stop` and of the `ended`
@@ -1644,6 +1646,1206 @@ fn mcp_snippets(binary: &str) -> (String, String) {
     }))
     .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
     (claude, cursor)
+}
+
+// ── The local playground — "try Kavka without a cluster" ───────────────────
+//
+// KAVKA DOES NOT BUNDLE A BROKER, and this feature is built around saying so.
+// Apache Kafka is a JVM application: shipping one inside the app would mean
+// shipping a JRE, which is the single thing the product's positioning is
+// against (README — "no-Docker, no-JVM desktop client"). What Kavka *can* do
+// is drive a container runtime the user already has. So the whole feature is
+// three commands over `docker compose`, and when Docker is absent the UI gets
+// one honest sentence instead of a button that cannot work.
+//
+// NOTHING HERE CAN TOUCH A SAVED CONNECTION. Look at the signatures: not one
+// of these commands takes a `profile_id`, and none of them opens a
+// `ClusterConnection`. That is what makes them safe to offer on a machine with
+// production connections in the sidebar — not a check somebody has to remember
+// to write, but an API with nothing to point at a cluster with. `read_only` is
+// irrelevant for the same reason: that flag is about what Kavka sends to *your*
+// brokers, and the playground is not one of them.
+//
+// The one thing they do write is a NEW dev profile called "Playground", and
+// they refuse to touch one that is not still `dev` — see `save_playground`.
+
+/// Pinned so `up`, `ps` and `down` are always talking about the same thing.
+///
+/// Without `-p`, Compose derives the project name from the compose file's
+/// PARENT DIRECTORY, which is `playground` beside a dev build's binary and
+/// `Resources` inside an installed `.app`. `down` would then look for a
+/// project `up` never created, and the user would be left with a container the
+/// app claims it stopped.
+const PLAYGROUND_PROJECT: &str = "kavka-playground";
+
+/// Where the compose file sits inside the bundle — see `tauri.conf.json`'s
+/// `bundle.resources`, and `playground/docker-compose.yml` for why it is a
+/// second file rather than `dev/docker-compose.yml`.
+const PLAYGROUND_COMPOSE: &str = "playground/docker-compose.yml";
+
+/// The playground's address. **Not 9092**, and that is deliberate: 9092 is the
+/// port whatever Kafka the user already runs is on, and "port is already
+/// allocated" is a first run that reads as Kavka being broken. See the header
+/// of `playground/docker-compose.yml`.
+const PLAYGROUND_BOOTSTRAP: &str = "localhost:19092";
+
+/// A fixed id, so starting the playground twice finds the connection it made
+/// last time instead of filling the sidebar with copies of it.
+const PLAYGROUND_PROFILE_ID: &str = "kavka-playground";
+
+/// The 3-second ceiling the brief asks for, and the right one: this runs on
+/// first paint, and a probe that can hang is a first-run empty state that can
+/// hang. Docker answers `info` in well under a second when it is up, and when
+/// it is not, three seconds is already longer than anybody will wait.
+const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The ceiling on `compose up --wait`. Generous because the first run pulls
+/// roughly 400 MB of Kafka image over whatever connection the user has, and a
+/// timeout that fires mid-pull would leave a half-downloaded layer and a
+/// message blaming Kavka.
+const PLAYGROUND_START_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// `down` has nothing to download and should be quick; if it is not, the user
+/// needs to hear that rather than watch a button spin.
+const PLAYGROUND_STOP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How often a bounded run looks at its child.
+const CHILD_POLL: Duration = Duration::from_millis(120);
+
+/// How often a bounded run is allowed to tell the UI where it is. Same trade as
+/// [`PROGRESS_EVERY`], one order of magnitude slower: nothing here changes
+/// faster than a Docker layer.
+const CHILD_TICK: Duration = Duration::from_secs(1);
+
+/// How many output lines a bounded run keeps. Compose can print a hundred lines
+/// of pull progress and the one that explains a failure is always at the end.
+const OUTPUT_KEEP: usize = 64;
+
+fn sandbox_step_event() -> &'static str {
+    "kavka://sandbox/step"
+}
+
+/// What Kavka found when it looked for Docker.
+///
+/// Four states rather than a bool because each one has a different sentence and
+/// a different next click, and "Docker isn't working" is exactly the kind of
+/// message docs/DESIGN.md §7 exists to prevent. Serialises as a plain string
+/// (`"absent"`, `"stopped"`, …): a unit enum carries no data, so it is not
+/// `{ "kind": … }`-tagged like the payload enums in the IPC contract.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DockerState {
+    /// No `docker` on PATH at all.
+    Absent,
+    /// The CLI is there; the daemon did not answer.
+    Stopped,
+    /// The daemon answered, but it is **somebody else's machine** — a `tcp://`
+    /// or `ssh://` context, or a `DOCKER_HOST` pointing off-box. See
+    /// [`resolve_endpoint`].
+    Remote,
+    /// The daemon answered, but `docker compose` is not a thing on this
+    /// machine — an old Docker with the standalone `docker-compose` script.
+    NoCompose,
+    /// Everything the playground needs.
+    Ready,
+}
+
+#[derive(Serialize)]
+struct SandboxStatus {
+    docker: DockerState,
+    /// Whether the playground's own containers are up, as Compose reports
+    /// them. Always `false` when `docker` is anything but `Ready` — there is
+    /// nothing to ask.
+    running: bool,
+    /// The bundled compose file, or `None` when this build has no such
+    /// resource. A separate signal from Docker's state because it is a
+    /// different failure with a different owner: that one is the user's
+    /// machine, this one is Kavka's packaging.
+    compose_file: Option<String>,
+    /// `localhost:19092`, mirrored so the UI never hard-codes it.
+    bootstrap: String,
+    /// The Playground connection's id, if it is already on this machine.
+    profile_id: Option<String>,
+    /// What Docker actually said, when it said something Kavka does not
+    /// recognise. The `Show details ▾` half of docs/DESIGN.md §7's error
+    /// doctrine — verbatim, never the title.
+    ///
+    /// The one state where it is not a broker-style reply is
+    /// [`DockerState::Remote`], where it is **the endpoint itself** — the UI
+    /// puts that in the sentence rather than behind a disclosure, because it
+    /// is the only part of that refusal anybody can act on.
+    detail: Option<String>,
+}
+
+/// One line of the streaming checklist (docs/DESIGN.md §5.4).
+///
+/// The label rides along on every emission so the UI can upsert by `id` and
+/// never has to hold a copy of Kavka's own wording.
+#[derive(Serialize, Clone)]
+struct SandboxStep {
+    id: &'static str,
+    label: &'static str,
+    /// `running` · `ok` · `fail` · `skipped`.
+    state: &'static str,
+    note: Option<String>,
+}
+
+/// The emitter for one run of the ladder.
+struct Ladder<'a> {
+    app: &'a AppHandle,
+}
+
+impl Ladder<'_> {
+    fn emit(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        state: &'static str,
+        note: Option<String>,
+    ) {
+        let _ = self.app.emit(
+            sandbox_step_event(),
+            SandboxStep {
+                id,
+                label,
+                state,
+                note,
+            },
+        );
+    }
+
+    fn running(&self, id: &'static str, label: &'static str, note: Option<String>) {
+        self.emit(id, label, "running", note);
+    }
+
+    fn ok(&self, id: &'static str, label: &'static str, note: Option<String>) {
+        self.emit(id, label, "ok", note);
+    }
+
+    fn fail(&self, id: &'static str, label: &'static str, note: String) {
+        self.emit(id, label, "fail", Some(note));
+    }
+
+    fn skipped(&self, id: &'static str, label: &'static str, note: &str) {
+        self.emit(id, label, "skipped", Some(note.to_string()));
+    }
+}
+
+/// One finished — or abandoned — child process.
+struct Ran {
+    /// It started, exited, and exited zero.
+    ok: bool,
+    /// It could not be started at all. The difference between "Docker isn't
+    /// installed" and "Docker said no", which is two different sentences.
+    spawn_failed: bool,
+    timed_out: bool,
+    out: Vec<String>,
+    err: Vec<String>,
+}
+
+impl Ran {
+    /// The last few lines, for a note or a `Show details` block. Prefers
+    /// stderr, which is where both Docker and Compose put everything that
+    /// explains a failure — and where Compose puts its progress, too.
+    fn tail(&self, lines: usize) -> String {
+        let from = if self.err.is_empty() {
+            &self.out
+        } else {
+            &self.err
+        };
+        let start = from.len().saturating_sub(lines);
+        from[start..].join("\n")
+    }
+}
+
+/// Runs a program with a hard ceiling, capturing its output and reporting
+/// progress while it works.
+///
+/// **Why not `Command::output()`.** That blocks until the child exits, with no
+/// ceiling and nothing to show: a `docker info` against a daemon that is
+/// starting up can sit there for a minute, and `compose up` legitimately takes
+/// several. This polls `try_wait`, kills on the timeout, and hands the caller
+/// the newest output line once a second so the ladder can say what is
+/// happening.
+///
+/// **Why the reader threads.** With `Stdio::piped()` and nobody reading, a
+/// child that prints more than the pipe buffer holds blocks forever — which is
+/// precisely `compose up` pulling an image. So each stream gets a thread that
+/// drains it into a bounded buffer, and the loop only ever looks at what they
+/// have collected.
+///
+/// Called only from the blocking pool.
+fn run_bounded(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    mut on_tick: impl FnMut(Option<&str>, Duration),
+) -> Ran {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_console(&mut command);
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            return Ran {
+                ok: false,
+                spawn_failed: true,
+                timed_out: false,
+                out: Vec::new(),
+                err: vec![e.to_string()],
+            }
+        }
+    };
+
+    // The newest line from EITHER stream, so the tick can report Compose's
+    // progress (stderr) and a plain command's answer (stdout) without the
+    // caller knowing which one it is reading.
+    let latest: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let out_lines = Arc::new(Mutex::new(Vec::new()));
+    let err_lines = Arc::new(Mutex::new(Vec::new()));
+    let pumps = [
+        pump(child.stdout.take(), &out_lines, &latest),
+        pump(child.stderr.take(), &err_lines, &latest),
+    ];
+
+    let started = Instant::now();
+    let mut last_tick = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            // The handle is unusable; treat it as a failure rather than
+            // spinning on a process we can no longer ask about.
+            Err(_) => break None,
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            timed_out = true;
+            break None;
+        }
+        if last_tick.elapsed() >= CHILD_TICK {
+            last_tick = Instant::now();
+            // Cloned out from under the lock: `on_tick` emits an IPC event, and
+            // holding the readers' mutex across that would stall them.
+            let line = latest.lock().unwrap().clone();
+            on_tick(line.as_deref(), started.elapsed());
+        }
+        std::thread::sleep(CHILD_POLL);
+    };
+
+    // Joined so the buffers are complete before they are read. Both threads see
+    // EOF the moment the child exits — or is killed — so this does not wait.
+    for pump in pumps.into_iter().flatten() {
+        let _ = pump.join();
+    }
+
+    // Bound to locals so the two `MutexGuard` temporaries are dropped before
+    // the `Arc`s they borrow from go out of scope at the end of the function.
+    let out = std::mem::take(&mut *out_lines.lock().unwrap());
+    let err = std::mem::take(&mut *err_lines.lock().unwrap());
+    Ran {
+        ok: status.is_some_and(|status| status.success()),
+        spawn_failed: false,
+        timed_out,
+        out,
+        err,
+    }
+}
+
+/// Drains one of a child's streams into a bounded buffer.
+fn pump<R: std::io::Read + Send + 'static>(
+    stream: Option<R>,
+    into: &Arc<Mutex<Vec<String>>>,
+    latest: &Arc<Mutex<Option<String>>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    let stream = stream?;
+    let into = Arc::clone(into);
+    let latest = Arc::clone(latest);
+    Some(std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            // A non-UTF-8 byte ends the read rather than the process: whatever
+            // came before it is still the useful part.
+            let Ok(line) = line else { break };
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            *latest.lock().unwrap() = Some(line.clone());
+            let mut lines = into.lock().unwrap();
+            // `remove(0)` on a 64-element Vec, at most once per line of Docker
+            // output: a VecDeque would be the same code with an import.
+            if lines.len() >= OUTPUT_KEEP {
+                lines.remove(0);
+            }
+            lines.push(line);
+        }
+    }))
+}
+
+/// Keeps a spawned process from flashing a console window on Windows.
+///
+/// `CREATE_NO_WINDOW`. Without it every probe — including the one that runs on
+/// first paint — pops a black rectangle in front of the app and takes focus
+/// with it.
+#[cfg(windows)]
+fn no_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn no_console(_command: &mut Command) {}
+
+/// Where the Docker CLI is actually pointing, once `DOCKER_HOST` and the
+/// active context have both had their say.
+///
+/// The remote arm carries the endpoint verbatim, because the whole point of
+/// this check is to be able to name it: "Docker isn't local" is a sentence
+/// nobody can act on, and `tcp://build-07.internal:2376` is one they can.
+#[derive(Debug, PartialEq, Eq)]
+enum Endpoint {
+    /// A pipe or a socket on this machine — or nothing at all, which means
+    /// the platform default, which is also on this machine.
+    Local,
+    /// Somebody else's daemon. The string is what Docker reported.
+    Remote(String),
+}
+
+/// The two inputs Docker resolves an endpoint from, resolved the way Docker
+/// resolves them — pure, so the policy can be tested without a daemon.
+///
+/// **`DOCKER_HOST` beats the context.** That is Docker's own precedence
+/// (`docker context inspect` reports the *context's* endpoint even when the
+/// environment has overridden it), and getting it backwards is exactly the
+/// case this guard exists for: a developer with `DOCKER_HOST=tcp://…` exported
+/// in their shell profile has a `default` context that still says
+/// `npipe://…`.
+///
+/// **Local is a pipe, a socket, or nothing.** `npipe://` on Windows,
+/// `unix://` everywhere else, and an unset/empty endpoint, which means the
+/// platform default and is therefore this machine. Everything else —
+/// `tcp://`, `ssh://`, `http(s)://`, `fd://` — is treated as remote. That
+/// includes `tcp://localhost:2375`, deliberately: a TCP daemon may be a
+/// tunnel to a build box, and this check refuses rather than guesses.
+///
+/// The one thing treated as "nothing" rather than as an endpoint is Go's
+/// `<no value>`, which is what a `docker context inspect --format` prints
+/// when the field is absent instead of failing. Refusing the playground over
+/// that would be a guardrail firing on its own instrumentation.
+fn resolve_endpoint(docker_host: Option<&str>, context_host: Option<&str>) -> Endpoint {
+    /// What a Go template prints for a field that is not there.
+    const NO_VALUE: &str = "<no value>";
+
+    let stated = [docker_host, context_host]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty() && *value != NO_VALUE);
+    let Some(endpoint) = stated else {
+        return Endpoint::Local;
+    };
+    let scheme = endpoint.to_ascii_lowercase();
+    if scheme.starts_with("npipe://") || scheme.starts_with("unix://") {
+        return Endpoint::Local;
+    }
+    Endpoint::Remote(endpoint.to_string())
+}
+
+/// What the active context says its Docker endpoint is, if it says anything.
+///
+/// One line of stdout. A failure here is `None` rather than an error: an old
+/// Docker without `context` support is a Docker with no context to be pointed
+/// away by, and refusing to start a playground because a *query about* the
+/// endpoint failed would be the wrong direction to fail in.
+fn docker_context_host() -> Option<String> {
+    let ran = run_bounded(
+        "docker",
+        &[
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ],
+        DOCKER_PROBE_TIMEOUT,
+        |_, _| {},
+    );
+    ran.ok.then(|| ran.out.first().cloned()).flatten()
+}
+
+/// Whether Docker is installed, running, **on this machine**, and has Compose.
+fn probe_docker() -> (DockerState, Option<String>) {
+    let info = run_bounded(
+        "docker",
+        &["info", "--format", "{{.ServerVersion}}"],
+        DOCKER_PROBE_TIMEOUT,
+        |_, _| {},
+    );
+    if info.spawn_failed {
+        return (DockerState::Absent, None);
+    }
+    if info.timed_out {
+        return (
+            DockerState::Stopped,
+            Some(format!(
+                "`docker info` didn't answer within {}s.",
+                DOCKER_PROBE_TIMEOUT.as_secs()
+            )),
+        );
+    }
+    if !info.ok {
+        return (DockerState::Stopped, Some(info.tail(4)));
+    }
+    // BEFORE anything else the daemon could be asked, and before `Ready` can be
+    // returned: a daemon that answered is not necessarily a daemon on this
+    // desk. `docker compose up` against a `tcp://` context creates containers,
+    // a volume and a published port on somebody else's host — silently, because
+    // the CLI is identical either way — and the connection Kavka would then
+    // save says `localhost:19092`, which is a port on the wrong machine.
+    let from_env = std::env::var("DOCKER_HOST").ok();
+    let from_context = docker_context_host();
+    if let Endpoint::Remote(endpoint) =
+        resolve_endpoint(from_env.as_deref(), from_context.as_deref())
+    {
+        return (DockerState::Remote, Some(endpoint));
+    }
+    let compose = run_bounded(
+        "docker",
+        &["compose", "version", "--short"],
+        DOCKER_PROBE_TIMEOUT,
+        |_, _| {},
+    );
+    if !compose.ok {
+        return (DockerState::NoCompose, Some(compose.tail(4)));
+    }
+    (DockerState::Ready, None)
+}
+
+/// Whether the playground's containers are up right now.
+fn playground_running(compose_file: &Path) -> bool {
+    let file = compose_file.to_string_lossy().into_owned();
+    let ran = run_bounded(
+        "docker",
+        &[
+            "compose",
+            "-p",
+            PLAYGROUND_PROJECT,
+            "-f",
+            &file,
+            "ps",
+            "--status",
+            "running",
+            "--quiet",
+        ],
+        DOCKER_PROBE_TIMEOUT,
+        |_, _| {},
+    );
+    // STDOUT only. Compose writes warnings to stderr, and a warning is not a
+    // container: reading the merged output would report a running playground
+    // to anybody whose Docker has something to complain about.
+    ran.ok && !ran.out.is_empty()
+}
+
+/// The bundled compose file, or `None` when this build does not carry one.
+///
+/// Resolves through Tauri's resource directory, which is the app bundle's
+/// `Resources` when installed and the cargo target directory in development —
+/// `tauri-build` copies `bundle.resources` there on every build, so one lookup
+/// covers `npm run tauri dev` and a signed installer.
+fn playground_compose(app: &AppHandle) -> Option<PathBuf> {
+    let path = app
+        .path()
+        .resolve(PLAYGROUND_COMPOSE, tauri::path::BaseDirectory::Resource)
+        .ok()?;
+    path.exists().then_some(path)
+}
+
+/// Where the playground command is, in Kafka's own vocabulary, so somebody who
+/// would rather run it themselves can.
+fn playground_cli_hint(compose_file: &Path) -> String {
+    format!(
+        "docker compose -p {PLAYGROUND_PROJECT} -f \"{}\" up -d --wait",
+        compose_file.display()
+    )
+}
+
+#[tauri::command]
+async fn sandbox_status(app: AppHandle, state: State<'_, AppState>) -> CmdResult<SandboxStatus> {
+    let compose = playground_compose(&app);
+    let store = Arc::clone(&state.store);
+    // On the blocking pool like everything else that leaves the process: this
+    // spawns up to three short-lived children.
+    blocking(move || {
+        let (docker, detail) = probe_docker();
+        let running = match (&compose, docker) {
+            (Some(file), DockerState::Ready) => playground_running(file),
+            _ => false,
+        };
+        Ok(SandboxStatus {
+            docker,
+            running,
+            compose_file: compose.map(|path| path.display().to_string()),
+            bootstrap: PLAYGROUND_BOOTSTRAP.to_string(),
+            // A profile store Kavka cannot read is already the subject of its
+            // own banner (docs/DESIGN.md §7, "Profiles failed to load"); it
+            // must not also take the playground panel down.
+            profile_id: store.list().ok().and_then(|profiles| {
+                profiles
+                    .into_iter()
+                    .find(|p| p.id == PLAYGROUND_PROFILE_ID)
+                    .map(|p| p.id)
+            }),
+            detail,
+        })
+    })
+    .await
+}
+
+/// Starts the playground and returns the id of the connection to open.
+///
+/// Streams a checklist on `kavka://sandbox/step` while it works. The UI
+/// subscribes to a FIXED event name **before** it calls this, so — unlike the
+/// session commands in this file — there is no id to hand out and therefore no
+/// subscribe race to close: there is exactly one playground per machine.
+#[tauri::command]
+async fn sandbox_start(app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
+    let compose = playground_compose(&app);
+    let store = Arc::clone(&state.store);
+    let handle = app.clone();
+    blocking(move || start_playground(&handle, &store, compose.as_deref())).await
+}
+
+fn start_playground(
+    app: &AppHandle,
+    store: &ProfileStore,
+    compose: Option<&Path>,
+) -> kavka_core::Result<String> {
+    let _busy = PlaygroundGuard::acquire()?;
+    let ladder = Ladder { app };
+
+    const DOCKER: (&str, &str) = ("docker", "Looking for Docker");
+    const FILE: (&str, &str) = ("compose-file", "Reading the bundled compose file");
+    const UP: (&str, &str) = ("up", "Starting a single-node Kafka");
+    const PROFILE: (&str, &str) = ("profile", "Saving a connection called Playground");
+
+    ladder.running(DOCKER.0, DOCKER.1, None);
+    let (docker, detail) = probe_docker();
+    if docker != DockerState::Ready {
+        // `detail` IS the endpoint for the remote state, so it is handed to the
+        // sentence rather than only appended to it as a broker reply would be.
+        let trouble = docker_trouble(docker, detail.as_deref());
+        ladder.fail(DOCKER.0, DOCKER.1, trouble.clone());
+        ladder.skipped(FILE.0, FILE.1, "skipped");
+        ladder.skipped(UP.0, UP.1, "skipped");
+        ladder.skipped(PROFILE.0, PROFILE.1, "skipped");
+        return Err(kavka_core::Error::Other(match detail {
+            // The remote endpoint is already in the sentence; quoting it a
+            // second time under "Docker said" would read as two problems.
+            Some(_) if docker == DockerState::Remote => trouble,
+            Some(detail) => format!("{trouble}\n\nDocker said:\n{detail}"),
+            None => trouble,
+        }));
+    }
+    ladder.ok(DOCKER.0, DOCKER.1, None);
+
+    ladder.running(FILE.0, FILE.1, None);
+    let Some(compose) = compose else {
+        let trouble = format!(
+            "Kavka couldn't find its own {PLAYGROUND_COMPOSE}. This build is missing that \
+             resource, which is a packaging fault rather than anything on this machine — \
+             please report it."
+        );
+        ladder.fail(FILE.0, FILE.1, trouble.clone());
+        ladder.skipped(UP.0, UP.1, "skipped");
+        ladder.skipped(PROFILE.0, PROFILE.1, "skipped");
+        return Err(kavka_core::Error::Other(trouble));
+    };
+    ladder.ok(FILE.0, FILE.1, None);
+
+    let file = compose.to_string_lossy().into_owned();
+    ladder.running(
+        UP.0,
+        UP.1,
+        Some("The first run pulls the Kafka image — about 400 MB.".to_string()),
+    );
+    let up = run_bounded(
+        "docker",
+        &[
+            "compose",
+            "-p",
+            PLAYGROUND_PROJECT,
+            "-f",
+            &file,
+            "up",
+            "-d",
+            "--wait",
+        ],
+        PLAYGROUND_START_TIMEOUT,
+        |line, elapsed| {
+            // Docker's own words plus the clock. A progress bar here would be a
+            // lie — Compose does not tell us how much of the pull is left — and
+            // docs/DESIGN.md §7 rule 6 asks for a sentence rather than a
+            // spinner anyway.
+            let secs = elapsed.as_secs();
+            ladder.running(
+                UP.0,
+                UP.1,
+                Some(match line {
+                    Some(line) => format!("{secs}s · {line}"),
+                    None => format!("{secs}s · waiting for Docker"),
+                }),
+            );
+        },
+    );
+    if up.timed_out {
+        let trouble = format!(
+            "Docker was still working after {} minutes, so Kavka stopped waiting. The \
+             containers may still be coming up — check Docker, or run it yourself:\n\n{}",
+            PLAYGROUND_START_TIMEOUT.as_secs() / 60,
+            playground_cli_hint(compose)
+        );
+        ladder.fail(UP.0, UP.1, trouble.clone());
+        ladder.skipped(PROFILE.0, PROFILE.1, "skipped");
+        return Err(kavka_core::Error::Other(trouble));
+    }
+    if !up.ok {
+        let said = up.tail(8);
+        ladder.fail(UP.0, UP.1, said.clone());
+        ladder.skipped(PROFILE.0, PROFILE.1, "skipped");
+        return Err(kavka_core::Error::Other(format!(
+            "Docker couldn't start the playground.\n\nIt said:\n{said}\n\nTo try it yourself:\n{}",
+            playground_cli_hint(compose)
+        )));
+    }
+    ladder.ok(
+        UP.0,
+        UP.1,
+        Some(format!("Listening on {PLAYGROUND_BOOTSTRAP}")),
+    );
+
+    ladder.running(PROFILE.0, PROFILE.1, None);
+    match save_playground(store) {
+        Ok(id) => {
+            ladder.ok(PROFILE.0, PROFILE.1, Some(PLAYGROUND_BOOTSTRAP.to_string()));
+            Ok(id)
+        }
+        Err(e) => {
+            // The broker IS up — that half succeeded and the ladder says so.
+            // Failing the command without that distinction would read as "the
+            // playground didn't start", and the user would press it again.
+            ladder.fail(PROFILE.0, PROFILE.1, e.to_string());
+            Err(e)
+        }
+    }
+}
+
+/// The Playground connection, created once and never overwritten.
+///
+/// **Why it refuses a profile that is no longer `dev`.** The id is fixed, so
+/// somebody can open this connection, retag it `prod` and point it at a real
+/// cluster — at which point "start the playground" would silently rewrite a
+/// production connection's address. Kavka would rather say no. This is the
+/// single place in the playground feature where a saved profile is written at
+/// all, which is why the whole guardrail fits in one function.
+fn save_playground(store: &ProfileStore) -> kavka_core::Result<String> {
+    if let Some(existing) = store
+        .list()?
+        .into_iter()
+        .find(|p| p.id == PLAYGROUND_PROFILE_ID)
+    {
+        if existing.environment != Environment::Dev {
+            return Err(kavka_core::Error::Other(format!(
+                "The connection called \"{}\" isn't tagged dev any more, so Kavka left it \
+                 alone. The playground is running on {PLAYGROUND_BOOTSTRAP} — point a \
+                 connection at that address yourself.",
+                existing.name
+            )));
+        }
+        // Already there and still a dev connection: keep whatever the user has
+        // done to it (a rename, a read-only flag, a masking rule) rather than
+        // resetting their work every time they press start.
+        return Ok(existing.id);
+    }
+
+    store.upsert(ConnectionProfile {
+        id: PLAYGROUND_PROFILE_ID.to_string(),
+        name: "Playground".to_string(),
+        environment: Environment::Dev,
+        bootstrap_servers: vec![PLAYGROUND_BOOTSTRAP.to_string()],
+        auth: AuthConfig::Plaintext,
+        read_only: false,
+        schema_registry: None,
+        connect_clusters: Vec::new(),
+        metrics_endpoint: None,
+        sampler_interval_ms: None,
+        wasm_serdes: Vec::new(),
+    })?;
+    Ok(PLAYGROUND_PROFILE_ID.to_string())
+}
+
+/// Stops the playground's containers.
+///
+/// `down`, not `down -v`: the named volume stays, so starting it again picks up
+/// where it left off, and Kavka never deletes somebody's data on their behalf.
+/// The Playground connection stays in the sidebar too — it works again the next
+/// time this runs, and a connection that vanishes when you press stop is a
+/// connection people stop trusting.
+#[tauri::command]
+async fn sandbox_stop(app: AppHandle) -> CmdResult<()> {
+    let compose = playground_compose(&app);
+    let handle = app.clone();
+    blocking(move || stop_playground(&handle, compose.as_deref())).await
+}
+
+fn stop_playground(app: &AppHandle, compose: Option<&Path>) -> kavka_core::Result<()> {
+    let _busy = PlaygroundGuard::acquire()?;
+    let ladder = Ladder { app };
+    const DOWN: (&str, &str) = ("down", "Stopping the playground");
+
+    let Some(compose) = compose else {
+        let trouble = format!("Kavka couldn't find its own {PLAYGROUND_COMPOSE}.");
+        ladder.fail(DOWN.0, DOWN.1, trouble.clone());
+        return Err(kavka_core::Error::Other(trouble));
+    };
+
+    let file = compose.to_string_lossy().into_owned();
+    ladder.running(DOWN.0, DOWN.1, None);
+    let down = run_bounded(
+        "docker",
+        &["compose", "-p", PLAYGROUND_PROJECT, "-f", &file, "down"],
+        PLAYGROUND_STOP_TIMEOUT,
+        |line, elapsed| {
+            let secs = elapsed.as_secs();
+            ladder.running(
+                DOWN.0,
+                DOWN.1,
+                Some(match line {
+                    Some(line) => format!("{secs}s · {line}"),
+                    None => format!("{secs}s · waiting for Docker"),
+                }),
+            );
+        },
+    );
+    if down.spawn_failed || down.timed_out || !down.ok {
+        let said = if down.spawn_failed {
+            docker_trouble(DockerState::Absent, None)
+        } else if down.timed_out {
+            "Docker didn't finish stopping the playground in time.".to_string()
+        } else {
+            down.tail(8)
+        };
+        ladder.fail(DOWN.0, DOWN.1, said.clone());
+        return Err(kavka_core::Error::Other(said));
+    }
+    ladder.ok(
+        DOWN.0,
+        DOWN.1,
+        Some(
+            "The containers are gone. Your playground data is still in its Docker volume."
+                .to_string(),
+        ),
+    );
+    Ok(())
+}
+
+/// What to say about Docker, in the shape docs/DESIGN.md §7 asks for: what
+/// happened, then the next click. The honest sentence about not bundling a
+/// broker lives in the UI, beside the button that would have started one —
+/// this is the machine-specific half.
+///
+/// `endpoint` is [`DockerState::Remote`]'s and is ignored by every other
+/// state: naming the host is the whole content of that refusal, and a message
+/// that says "somewhere else" teaches nobody which context to switch back.
+fn docker_trouble(state: DockerState, endpoint: Option<&str>) -> String {
+    match state {
+        DockerState::Remote => format!(
+            "Docker on this machine is pointing at {where_}, which isn't this computer. The \
+             playground starts containers — on THIS machine only — so Kavka won't create one on a \
+             host you'd then have to go and clean up, on a port it can't reach. Switch back with \
+             `docker context use default` (or clear DOCKER_HOST), then check again.",
+            where_ = endpoint.unwrap_or("another machine"),
+        ),
+        DockerState::Absent => {
+            "There's no `docker` command on this machine. Install Docker Desktop (or any \
+             Docker-compatible runtime with the `compose` plugin) and Kavka can start a broker \
+             for you."
+                .to_string()
+        }
+        DockerState::Stopped => {
+            "Docker is installed but its engine isn't answering. Start Docker Desktop, wait for \
+             it to say it's running, then try again."
+                .to_string()
+        }
+        DockerState::NoCompose => {
+            "This Docker doesn't have the `compose` plugin. Kavka needs `docker compose` — the \
+             standalone `docker-compose` script isn't the same command. Updating Docker Desktop \
+             installs it."
+                .to_string()
+        }
+        DockerState::Ready => "Docker is ready.".to_string(),
+    }
+}
+
+/// One playground operation at a time, process-wide.
+///
+/// Not in `AppState`: there is one Docker on this machine and one project name,
+/// so two windows racing `up` and `down` is the same collision as one window
+/// double-clicking. A `static` says that; a field on the app's state would
+/// quietly permit it per-window.
+static PLAYGROUND_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct PlaygroundGuard;
+
+impl PlaygroundGuard {
+    fn acquire() -> kavka_core::Result<Self> {
+        if PLAYGROUND_BUSY.swap(true, Ordering::SeqCst) {
+            return Err(kavka_core::Error::Other(
+                "Kavka is already starting or stopping the playground. Give it a moment."
+                    .to_string(),
+            ));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for PlaygroundGuard {
+    fn drop(&mut self) {
+        PLAYGROUND_BUSY.store(false, Ordering::SeqCst);
+    }
+}
+
+// ── Diagnostics — opt-in, local, and nothing else ──────────────────────────
+//
+// WHAT THIS IS: a panic hook and a webview error handler that append lines to
+// rotating files in the app's data directory, so that "Kavka closed itself and
+// I don't know why" can become a GitHub issue with something attached to it.
+//
+// WHAT THIS IS NOT, and the reason every sentence in the About section is
+// written the way it is: **there is no telemetry endpoint.** Not a disabled
+// one, not one behind a flag — Kavka has no code anywhere that sends a report,
+// so there is nothing to trust us about. The file is on the user's disk, they
+// open it with `Open logs folder`, they read it, and they decide whether to
+// paste it anywhere. That is the entire design, and it is why the toggle can
+// honestly default to OFF: nobody is being asked to opt into a transmission,
+// they are being asked whether Kavka may write a file.
+//
+// DEFAULT OFF is deliberate even though it costs the first crash. A log that
+// records a payload fragment, a topic name or a bootstrap address is a log that
+// can carry something out of a regulated network in a screenshot, and a Kafka
+// GUI's users are frequently inside one. So Kavka writes nothing until asked,
+// and says exactly what it will write before it is.
+
+/// Where the log files go. Set once, in `setup`. `None` before that — which is
+/// what makes the panic hook safe to install before the app exists.
+static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Whether anything is written at all. The shipped state is `false`; the only
+/// thing that sets it is the user's toggle, or reading back what the user's
+/// toggle wrote last time.
+static DIAGNOSTICS_ON: AtomicBool = AtomicBool::new(false);
+
+/// The current file. Older ones are `kavka.1.log` … `kavka.4.log`.
+const LOG_NAME: &str = "kavka.log";
+
+/// Five files, as the brief asks. Small enough that the whole set fits in a
+/// GitHub issue's attachment and old enough to cover more than one session.
+const LOG_KEEP: usize = 5;
+
+/// When the current file passes this, it rotates. 512 KB × 5 caps the feature's
+/// total disk cost at 2.5 MB, which is a number worth being able to state in
+/// the About panel.
+const LOG_MAX_BYTES: u64 = 512 * 1024;
+
+/// Longest single entry. A JavaScript stack trace is the thing most likely to
+/// arrive long, and past a couple of thousand characters it is noise.
+const LOG_MAX_ENTRY: usize = 2000;
+
+/// The file Kavka remembers the toggle in, beside `profiles.json`.
+const DIAGNOSTICS_FILE: &str = "diagnostics.json";
+
+#[derive(Serialize)]
+struct DiagnosticsStatus {
+    enabled: bool,
+    /// Always reported, even when nothing has been written — a person deciding
+    /// whether to turn this on is entitled to know where the files would go.
+    dir: String,
+    files: usize,
+    bytes: u64,
+}
+
+/// Appends one line, if the user has asked for that.
+///
+/// Every failure is swallowed on purpose. This is called from a panic hook: a
+/// diagnostics write that panics turns one crash into a recursive one, and a
+/// disk that is full is not a thing to report by writing to disk.
+fn diagnostics_write(kind: &str, message: &str) {
+    if !DIAGNOSTICS_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(dir) = LOG_DIR.get() else { return };
+    append_log(dir, kind, message);
+}
+
+fn append_log(dir: &Path, kind: &str, message: &str) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let file = dir.join(LOG_NAME);
+    if std::fs::metadata(&file).is_ok_and(|meta| meta.len() >= LOG_MAX_BYTES) {
+        rotate_logs(dir);
+    }
+    let Ok(mut handle) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+    else {
+        return;
+    };
+    // One entry is one line, whatever it contains: an embedded newline in a
+    // stack trace would otherwise turn one entry into fifteen and make the file
+    // impossible to skim.
+    let flat: String = message
+        .chars()
+        .take(LOG_MAX_ENTRY)
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    let _ = writeln!(handle, "{} {kind} {}", iso8601(now_ms()), flat.trim());
+}
+
+/// `kavka.log` → `kavka.1.log` → … → `kavka.4.log`, oldest dropped.
+fn rotate_logs(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(format!("kavka.{}.log", LOG_KEEP - 1)));
+    for n in (1..LOG_KEEP - 1).rev() {
+        let _ = std::fs::rename(
+            dir.join(format!("kavka.{n}.log")),
+            dir.join(format!("kavka.{}.log", n + 1)),
+        );
+    }
+    let _ = std::fs::rename(dir.join(LOG_NAME), dir.join("kavka.1.log"));
+}
+
+fn log_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = vec![dir.join(LOG_NAME)];
+    files.extend((1..LOG_KEEP).map(|n| dir.join(format!("kavka.{n}.log"))));
+    files.retain(|path| path.is_file());
+    files
+}
+
+fn read_diagnostics_status(dir: &Path) -> DiagnosticsStatus {
+    let files = log_files(dir);
+    DiagnosticsStatus {
+        enabled: DIAGNOSTICS_ON.load(Ordering::Relaxed),
+        dir: dir.display().to_string(),
+        files: files.len(),
+        bytes: files
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|meta| meta.len())
+            .sum(),
+    }
+}
+
+/// Reads the toggle back. Anything unreadable — missing file, truncated JSON,
+/// a value written by a future build — means OFF, because the safe answer to
+/// "should Kavka write a log?" is always no.
+fn read_diagnostics_pref(config_dir: &Path) -> bool {
+    std::fs::read_to_string(config_dir.join(DIAGNOSTICS_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("enabled").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn write_diagnostics_pref(config_dir: &Path, enabled: bool) -> kavka_core::Result<()> {
+    std::fs::create_dir_all(config_dir).map_err(|e| {
+        kavka_core::Error::Other(format!(
+            "Kavka couldn't create {}: {e}",
+            config_dir.display()
+        ))
+    })?;
+    let path = config_dir.join(DIAGNOSTICS_FILE);
+    std::fs::write(&path, format!("{{\n  \"enabled\": {enabled}\n}}\n")).map_err(|e| {
+        kavka_core::Error::Other(format!("Kavka couldn't write {}: {e}", path.display()))
+    })
+}
+
+/// Records a panic, then hands the payload to whatever hook was there before,
+/// so the terminal still gets Rust's own message and a `RUST_BACKTRACE=1` run
+/// still prints a backtrace.
+///
+/// Installed at the very top of [`run`], before the builder — a panic while
+/// Tauri is starting up is exactly the crash somebody would want a file for,
+/// and the hook is safe that early because it does nothing until `LOG_DIR` has
+/// been set and the user has opted in.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let what = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panicked with no message".to_string());
+        let at = info.location().map_or_else(
+            || "an unknown location".to_string(),
+            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+        );
+        diagnostics_write("panic", &format!("{what} — at {at}"));
+        previous(info);
+    }));
+}
+
+/// The one line every log starts with, so a file that then records a crash also
+/// records what was running when it happened.
+fn log_session_header() {
+    diagnostics_write(
+        "session",
+        &format!(
+            "Kavka {} · {} {} · webview session started",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
+}
+
+#[tauri::command]
+async fn diagnostics_status() -> CmdResult<DiagnosticsStatus> {
+    let dir = logs_dir()?;
+    blocking(move || Ok(read_diagnostics_status(&dir))).await
+}
+
+#[tauri::command]
+async fn diagnostics_set_enabled(app: AppHandle, enabled: bool) -> CmdResult<DiagnosticsStatus> {
+    let dir = logs_dir()?;
+    let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    blocking(move || {
+        write_diagnostics_pref(&config, enabled)?;
+        DIAGNOSTICS_ON.store(enabled, Ordering::Relaxed);
+        if enabled {
+            log_session_header();
+        }
+        // Turning it off does NOT delete what is already there. The user may
+        // have just captured the crash they are about to report, and a toggle
+        // that silently destroys evidence is worse than one that leaves a file
+        // behind — `diagnostics_clear` is the button that deletes, and it says
+        // so on its face.
+        Ok(read_diagnostics_status(&dir))
+    })
+    .await
+}
+
+/// One line from the webview: an uncaught error or a rejected promise.
+///
+/// Returns whether anything was actually written, so the UI can say "nothing
+/// was recorded — diagnostics is off" instead of implying a file exists.
+#[tauri::command]
+async fn diagnostics_record(kind: String, message: String) -> CmdResult<bool> {
+    // The webview is not trusted to invent categories: the file has to stay
+    // skimmable, so anything unrecognised becomes `ui`.
+    let kind = match kind.as_str() {
+        "error" | "rejection" | "note" => kind,
+        _ => "ui".to_string(),
+    };
+    if !DIAGNOSTICS_ON.load(Ordering::Relaxed) {
+        return Ok(false);
+    }
+    blocking(move || {
+        diagnostics_write(&kind, &message);
+        Ok(true)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn diagnostics_open_logs(app: AppHandle) -> CmdResult<()> {
+    let dir = logs_dir()?;
+    blocking(move || {
+        // Created first: opening a folder that does not exist is a dead end,
+        // and the folder legitimately does not exist until something is logged.
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            kavka_core::Error::Other(format!("Kavka couldn't create {}: {e}", dir.display()))
+        })?;
+        app.opener()
+            .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
+            .map_err(|e| {
+                kavka_core::Error::Other(format!(
+                    "Kavka couldn't ask this machine to open {}: {e}. The path is above — open \
+                     it yourself.",
+                    dir.display()
+                ))
+            })
+    })
+    .await
+}
+
+/// Deletes every log file. The counterpart to the toggle: a feature whose whole
+/// claim is "this stays on your machine" has to let you take it off your
+/// machine.
+#[tauri::command]
+async fn diagnostics_clear() -> CmdResult<DiagnosticsStatus> {
+    let dir = logs_dir()?;
+    blocking(move || {
+        for path in log_files(&dir) {
+            std::fs::remove_file(&path).map_err(|e| {
+                kavka_core::Error::Other(format!("Kavka couldn't delete {}: {e}", path.display()))
+            })?;
+        }
+        Ok(read_diagnostics_status(&dir))
+    })
+    .await
+}
+
+fn logs_dir() -> CmdResult<PathBuf> {
+    LOG_DIR.get().cloned().ok_or_else(|| {
+        "Kavka doesn't know where its data directory is on this machine, so it can't write logs \
+         there."
+            .to_string()
+    })
+}
+
+/// RFC 3339 in UTC to millisecond precision — `2023-11-14T22:13:20.000Z`.
+///
+/// A deliberate second copy of `kavka_core::produce`'s private helper (Howard
+/// Hinnant's civil-from-days). The alternative is making that one public, which
+/// would put a date formatter in the core's API surface for the sake of a log
+/// line in the shell, or adding `chrono` to this crate for fifteen lines.
+fn iso8601(now_ms: i64) -> String {
+    let days = now_ms.div_euclid(86_400_000);
+    let ms_of_day = now_ms.rem_euclid(86_400_000);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    let (hour, minute, second, milli) = (
+        ms_of_day / 3_600_000,
+        (ms_of_day / 60_000) % 60,
+        (ms_of_day / 1_000) % 60,
+        ms_of_day % 1_000,
+    );
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z")
+}
+
+fn now_ms() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis()),
+    )
+    .unwrap_or(i64::MAX)
 }
 
 // ── Plain English → a query ────────────────────────────────────────────────
@@ -4091,6 +5293,13 @@ fn file_trouble(path: &str, cause: &std::io::Error) -> kavka_core::Error {
 }
 
 pub fn run() {
+    // FIRST, before anything can panic. The hook does nothing until `setup`
+    // below tells it where the logs live and the user has opted in — but
+    // installing it here means a panic during Tauri's own start-up is covered
+    // on the second launch, which is exactly when somebody is trying to work
+    // out why the first one died.
+    install_panic_hook();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // The Rust half of @tauri-apps/plugin-dialog. Only the save dialog is
@@ -4112,9 +5321,17 @@ pub fn run() {
             // Masking rules sit beside both, for the same reason and with the
             // same discipline (tmp-then-rename, one write lock).
             let masks = Arc::new(MaskStore::new(dir.clone()));
-            let histories = Arc::new(HistoryStores::new(
-                app.path().app_data_dir()?.join("history"),
-            ));
+            let data_dir = app.path().app_data_dir()?;
+            let histories = Arc::new(HistoryStores::new(data_dir.join("history")));
+            // Diagnostics: the logs go in the DATA directory beside the history
+            // databases, for the same reason those do — they are something the
+            // app produced, not configuration the user wrote. The toggle itself
+            // is configuration, so it sits in the config dir with profiles.json.
+            // The directory is only *named* here; nothing creates it until the
+            // user turns diagnostics on.
+            let _ = LOG_DIR.set(data_dir.join("logs"));
+            DIAGNOSTICS_ON.store(read_diagnostics_pref(&dir), Ordering::Relaxed);
+            log_session_header();
             app.manage(AppState {
                 store: Arc::new(ProfileStore::new(dir)),
                 connections: Mutex::new(HashMap::new()),
@@ -4141,6 +5358,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core_version,
             mcp_info,
+            sandbox_status,
+            sandbox_start,
+            sandbox_stop,
+            diagnostics_status,
+            diagnostics_set_enabled,
+            diagnostics_record,
+            diagnostics_open_logs,
+            diagnostics_clear,
             nl_to_query,
             nl_grammar,
             masking_list,
@@ -5317,5 +6542,334 @@ mod tests {
     #[test]
     fn the_grammar_command_answers_with_the_core_s_text() {
         assert_eq!(nl_grammar(), kavka_core::nlq::NLQ_GRAMMAR);
+    }
+
+    // ── The playground ─────────────────────────────────────────────────────
+    //
+    // Almost nothing here is testable without a Docker daemon, and a unit test
+    // that shells out to one is an integration test wearing a disguise. What
+    // IS tested is the part that is pure string and policy work: which Docker
+    // state produces which sentence, and which stream a failure is quoted
+    // from — the two places this feature decides something rather than
+    // forwarding it.
+
+    /// docs/DESIGN.md §5.5's "every disabled control says why" applied to a
+    /// state machine: a Docker state with no sentence is a first-run screen
+    /// that offers nothing and explains nothing. This fails the day somebody
+    /// adds a fifth variant and forgets the prose.
+    #[test]
+    fn every_docker_state_has_a_sentence_naming_the_next_click() {
+        for state in [
+            DockerState::Absent,
+            DockerState::Stopped,
+            DockerState::Remote,
+            DockerState::NoCompose,
+            DockerState::Ready,
+        ] {
+            let said = docker_trouble(state, None);
+            assert!(!said.is_empty(), "{state:?} has no sentence");
+        }
+        // The four that are actually trouble each name what to do, not just
+        // what is wrong (§7 rule 4).
+        assert!(docker_trouble(DockerState::Absent, None).contains("Install Docker"));
+        assert!(docker_trouble(DockerState::Stopped, None).contains("Start Docker"));
+        assert!(docker_trouble(DockerState::NoCompose, None).contains("docker compose"));
+        assert!(docker_trouble(DockerState::Remote, None).contains("docker context use default"));
+    }
+
+    /// The refusal NAMES THE HOST, because that is the only part of it the
+    /// reader can act on — and it says why, because "Kavka won't" without a
+    /// reason reads as a bug rather than as a guardrail.
+    #[test]
+    fn a_remote_endpoint_is_named_in_the_refusal() {
+        let said = docker_trouble(DockerState::Remote, Some("tcp://build-07.internal:2376"));
+        assert!(said.contains("tcp://build-07.internal:2376"), "{said}");
+        assert!(said.contains("on THIS machine only"), "{said}");
+        // …and with nothing to name it still refuses rather than proceeding.
+        assert!(docker_trouble(DockerState::Remote, None).contains("another machine"));
+    }
+
+    /// The whole remote guard, as a pure function over its two inputs.
+    ///
+    /// This is the part worth testing without a daemon: the states above are
+    /// prose, and `probe_docker` is three subprocesses, but WHICH ENDPOINT
+    /// WINS and WHICH SCHEMES COUNT AS THIS MACHINE is policy — and getting
+    /// either wrong is a container on somebody else's host.
+    #[test]
+    fn the_endpoint_kavka_would_start_a_container_on() {
+        // Nothing set anywhere: the platform default, which is local.
+        assert_eq!(resolve_endpoint(None, None), Endpoint::Local);
+        // An empty string is Docker's own "unset", from either source.
+        assert_eq!(resolve_endpoint(Some(""), Some("   ")), Endpoint::Local);
+        // …and so is the Go template's answer for a field that is not there.
+        // A guardrail that fires on its own instrumentation is a first-run
+        // screen that refuses a perfectly local Docker.
+        assert_eq!(resolve_endpoint(None, Some("<no value>")), Endpoint::Local);
+
+        // The two local forms, from the context.
+        assert_eq!(
+            resolve_endpoint(None, Some("npipe:////./pipe/dockerDesktopLinuxEngine")),
+            Endpoint::Local
+        );
+        assert_eq!(
+            resolve_endpoint(None, Some("unix:///var/run/docker.sock")),
+            Endpoint::Local
+        );
+        // Case is Docker's, not ours.
+        assert_eq!(
+            resolve_endpoint(None, Some("UNIX:///var/run/docker.sock")),
+            Endpoint::Local
+        );
+
+        // A remote context, with the endpoint carried through verbatim.
+        assert_eq!(
+            resolve_endpoint(None, Some("tcp://build-07.internal:2376")),
+            Endpoint::Remote("tcp://build-07.internal:2376".to_string())
+        );
+        assert_eq!(
+            resolve_endpoint(None, Some("ssh://deploy@10.0.0.4")),
+            Endpoint::Remote("ssh://deploy@10.0.0.4".to_string())
+        );
+
+        // DOCKER_HOST OVERRIDES THE CONTEXT, which is the case this exists for:
+        // `docker context inspect` still reports the context's own endpoint,
+        // so reading only that would call this machine local while every
+        // command actually went to the build box.
+        assert_eq!(
+            resolve_endpoint(
+                Some("tcp://build-07.internal:2376"),
+                Some("npipe:////./pipe/docker_engine")
+            ),
+            Endpoint::Remote("tcp://build-07.internal:2376".to_string())
+        );
+        // …and the other way: an environment pointing at the local socket wins
+        // over a remote context.
+        assert_eq!(
+            resolve_endpoint(
+                Some("unix:///var/run/docker.sock"),
+                Some("tcp://build-07.internal:2376")
+            ),
+            Endpoint::Local
+        );
+
+        // tcp:// to this very machine is still refused. A TCP daemon can be a
+        // tunnel to anywhere, and this check does not guess.
+        assert_eq!(
+            resolve_endpoint(Some("tcp://localhost:2375"), None),
+            Endpoint::Remote("tcp://localhost:2375".to_string())
+        );
+        // Surrounding whitespace is a shell profile's, not an endpoint's.
+        assert_eq!(
+            resolve_endpoint(Some("  tcp://10.1.2.3:2376  "), None),
+            Endpoint::Remote("tcp://10.1.2.3:2376".to_string())
+        );
+    }
+
+    /// A failure is quoted from stderr, which is where Docker and Compose put
+    /// everything that explains one. Falling back to stdout matters just as
+    /// much: `docker compose ps` answers on stdout, and a tail that only ever
+    /// read stderr would show an empty `Show details` block.
+    #[test]
+    fn the_tail_prefers_stderr_and_falls_back_to_stdout() {
+        let both = Ran {
+            ok: false,
+            spawn_failed: false,
+            timed_out: false,
+            out: vec!["container id".into()],
+            err: vec!["Error response from daemon".into()],
+        };
+        assert_eq!(both.tail(4), "Error response from daemon");
+
+        let quiet = Ran {
+            ok: true,
+            spawn_failed: false,
+            timed_out: false,
+            out: vec!["a".into(), "b".into(), "c".into()],
+            err: Vec::new(),
+        };
+        // Bounded, and the LAST lines: a compose failure prints a hundred
+        // lines of pull progress and the useful one is always at the end.
+        assert_eq!(quiet.tail(2), "b\nc");
+        assert_eq!(quiet.tail(99), "a\nb\nc");
+    }
+
+    /// The compose project name is pinned on every invocation, or `down` looks
+    /// for a project `up` never created — see the constant's own comment.
+    #[test]
+    fn the_cli_hint_pins_the_project_and_quotes_the_path() {
+        let hint = playground_cli_hint(Path::new("/Applications/Kavka.app/x/docker-compose.yml"));
+        assert!(hint.contains(&format!("-p {PLAYGROUND_PROJECT}")), "{hint}");
+        // Quoted, because the packaged path contains spaces on every platform
+        // Kavka ships to, and a hint somebody has to repair is not a hint.
+        assert!(hint.contains("-f \"/Applications/Kavka.app"), "{hint}");
+    }
+
+    // ── Diagnostics ────────────────────────────────────────────────────────
+    //
+    // The rotation is the one piece with a data-loss failure mode: get it
+    // wrong and turning diagnostics on destroys the crash somebody turned it
+    // on to keep. `LOG_DIR` is a `OnceLock` that only `setup` fills, so these
+    // drive `append_log` directly rather than `diagnostics_write` — which is
+    // also what keeps them from racing the process-wide toggle.
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "kavka-diagnostics-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn an_entry_is_one_line_whatever_the_stack_trace_contains() {
+        let scratch = Scratch::new();
+        append_log(
+            &scratch.0,
+            "error",
+            "TypeError: x\n  at f (a.js:1:1)\r\n  at g",
+        );
+        let text = std::fs::read_to_string(scratch.0.join(LOG_NAME)).expect("the log exists");
+        // Exactly one newline: the trailing one. An embedded newline would
+        // turn one entry into three and make the file unskimmable.
+        assert_eq!(text.matches('\n').count(), 1, "{text:?}");
+        assert!(
+            text.starts_with("20"),
+            "the line leads with a timestamp: {text}"
+        );
+        assert!(text.contains(" error "), "{text}");
+        assert!(text.contains("at f (a.js:1:1)"), "{text}");
+    }
+
+    #[test]
+    fn an_entry_is_capped_so_one_runaway_stack_cannot_fill_the_file() {
+        let scratch = Scratch::new();
+        append_log(&scratch.0, "error", &"x".repeat(LOG_MAX_ENTRY * 3));
+        let text = std::fs::read_to_string(scratch.0.join(LOG_NAME)).expect("the log exists");
+        assert!(text.len() < LOG_MAX_ENTRY + 64, "{} bytes", text.len());
+    }
+
+    /// Five files, and the oldest is the one that goes. The number is the
+    /// About panel's claim about this feature's total disk cost, so it is
+    /// asserted rather than assumed.
+    #[test]
+    fn rotation_keeps_five_files_and_drops_the_oldest() {
+        let scratch = Scratch::new();
+        // Six rotations against five slots: the sixth must not create a sixth
+        // file, and the content that was in the oldest slot must be gone.
+        for generation in 0..6 {
+            append_log(&scratch.0, "note", &format!("generation-{generation}"));
+            rotate_logs(&scratch.0);
+        }
+        append_log(&scratch.0, "note", "current");
+
+        let files = log_files(&scratch.0);
+        assert_eq!(files.len(), LOG_KEEP, "{files:?}");
+
+        let read = |name: &str| std::fs::read_to_string(scratch.0.join(name)).unwrap_or_default();
+        assert!(read(LOG_NAME).contains("current"));
+        // Newest first after the current file: generation 5 rotated last.
+        assert!(
+            read("kavka.1.log").contains("generation-5"),
+            "{:?}",
+            read("kavka.1.log")
+        );
+        assert!(
+            read("kavka.4.log").contains("generation-2"),
+            "{:?}",
+            read("kavka.4.log")
+        );
+        // Generations 0 and 1 fell off the end, which is the whole point.
+        for n in 1..LOG_KEEP {
+            let text = read(&format!("kavka.{n}.log"));
+            assert!(
+                !text.contains("generation-0"),
+                "generation 0 survived in slot {n}"
+            );
+            assert!(
+                !text.contains("generation-1"),
+                "generation 1 survived in slot {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn writing_past_the_ceiling_rotates_rather_than_growing_one_file() {
+        let scratch = Scratch::new();
+        let file = scratch.0.join(LOG_NAME);
+        std::fs::write(
+            &file,
+            vec![b'x'; usize::try_from(LOG_MAX_BYTES).unwrap_or(usize::MAX)],
+        )
+        .expect("a full log file");
+        append_log(&scratch.0, "note", "after the ceiling");
+
+        let current = std::fs::read_to_string(&file).expect("a fresh current file");
+        assert!(current.contains("after the ceiling"), "{current}");
+        // The full file was moved aside, not truncated: it is somebody's
+        // evidence until it falls off the end of the five.
+        let rotated = std::fs::metadata(scratch.0.join("kavka.1.log")).expect("the old file moved");
+        assert_eq!(rotated.len(), LOG_MAX_BYTES);
+    }
+
+    /// A status is answerable before anything has ever been written — a person
+    /// deciding whether to turn this on is entitled to know where the files
+    /// would go, and an empty folder is a legitimate answer rather than an
+    /// error.
+    #[test]
+    fn the_status_of_an_empty_folder_is_zero_files_and_a_path() {
+        let scratch = Scratch::new();
+        let status = read_diagnostics_status(&scratch.0);
+        assert_eq!(status.files, 0);
+        assert_eq!(status.bytes, 0);
+        assert_eq!(status.dir, scratch.0.display().to_string());
+    }
+
+    /// Anything unreadable means OFF, because the safe answer to "may Kavka
+    /// write a log?" is always no. A future build's richer file, a truncated
+    /// write and a missing file all take the same branch.
+    #[test]
+    fn an_unreadable_preference_means_off() {
+        let scratch = Scratch::new();
+        assert!(!read_diagnostics_pref(&scratch.0), "a missing file is off");
+
+        for text in ["", "{", "{}", "null", "{\"enabled\": \"yes\"}", "[]"] {
+            std::fs::write(scratch.0.join(DIAGNOSTICS_FILE), text).expect("a preference file");
+            assert!(
+                !read_diagnostics_pref(&scratch.0),
+                "{text:?} should read as off"
+            );
+        }
+
+        write_diagnostics_pref(&scratch.0, true).expect("the preference is writable");
+        assert!(read_diagnostics_pref(&scratch.0));
+        write_diagnostics_pref(&scratch.0, false).expect("the preference is writable");
+        assert!(!read_diagnostics_pref(&scratch.0));
+    }
+
+    /// This formatter is a deliberate second copy of `kavka_core::produce`'s
+    /// private one, so it gets the same fixtures: the epoch, a leap day, and a
+    /// date past 2038.
+    #[test]
+    fn the_log_timestamp_is_rfc3339_in_utc() {
+        assert_eq!(iso8601(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso8601(1_700_000_000_000), "2023-11-14T22:13:20.000Z");
+        // 2024-02-29, the case a hand-rolled civil-from-days gets wrong.
+        assert_eq!(iso8601(1_709_208_000_123), "2024-02-29T12:00:00.123Z");
+        // Past the 32-bit second, which is the other one.
+        assert_eq!(iso8601(2_500_000_000_000), "2049-03-22T04:26:40.000Z");
     }
 }

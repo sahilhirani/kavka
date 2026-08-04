@@ -57,6 +57,11 @@ jobs:
       - name: Clippy (MCP server)
         run: cargo clippy -p kavka-mcp --all-targets -- -D warnings
 
+      # The companion CLI (crates/kavka-cli), at the same tier and for the same
+      # reason: it opens the same connections from the same profiles.json.
+      - name: Clippy (CLI)
+        run: cargo clippy -p kavka-cli --all-targets -- -D warnings
+
       - name: Start local Kafka (KRaft)
         run: docker compose -f dev/docker-compose.yml up -d --wait
 
@@ -75,6 +80,14 @@ jobs:
         env:
           KAVKA_IT: "1"
 
+      # The CLI suite spawns the built binary with a real argv against the same
+      # cluster. Its unit half (the flag surface, the output modes, the write
+      # gate, the §7 error table) needs no broker and runs here either way.
+      - name: CLI tests
+        run: cargo test -p kavka-cli
+        env:
+          KAVKA_IT: "1"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -86,6 +99,18 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      # The packaging templates, rendered. This runs on every PR because
+      # `packaging/render.mjs` is only ever executed on release day otherwise —
+      # a placeholder a template grew and the renderer cannot fill is an error
+      # nobody would see until the tag was already pushed.
+      #
+      # No --assets, deliberately: that mode substitutes the version and the
+      # URLs, writes `TODO-…` checksums and says on stderr that the output is
+      # not submittable. It still parses and renders every template and still
+      # fails on an unknown placeholder, which is the half that can rot here.
+      - name: Packaging manifests render
+        run: node packaging/render.mjs --version 0.0.0 --out "$RUNNER_TEMP/pkg"
 
   check-windows:
     name: Check (Windows)

@@ -1,0 +1,110 @@
+[package]
+name = "kavka-cli"
+description = "Kavka's companion CLI: the app's own connections, topics, search, SQL and produce, on a terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The binary is `kavka`, not `kavka-cli`: it is the name a person types, and the
+# package name only ever appears in `cargo` commands.
+[[bin]]
+name = "kavka"
+path = "src/main.rs"
+
+[dependencies]
+# The same tier the desktop app and the MCP server ship, for the same reason:
+# this program reads the SAME profiles.json, so it has to be able to open every
+# connection the app can open — TLS and MSK IAM included. Anything less would
+# mean a profile that works in the app and refuses here.
+kavka-core = { path = "../kavka-core", features = ["kafka-ssl"] }
+serde.workspace = true
+serde_json.workspace = true
+
+# --- Argument parsing -------------------------------------------------------
+# THE ONE DEPENDENCY IN THIS FILE, priced to the same standard as `datafusion`
+# and `wasmtime` in kavka-core's manifest. Measured on this machine (Windows,
+# cargo 1.97.1, clap 4.6.5), against the kafka-ssl tier this crate already
+# builds — kavka-mcp is the honest baseline, because it is the same tier with no
+# argument parsing at all:
+#
+#   crates in the tree     kavka-mcp (this tier, no clap)          372
+#                          kavka-cli with this entry               377   (+5)
+#   the five: clap, clap_builder, clap_derive, clap_lex, anstyle
+#   cargo build -p kavka-cli, this crate alone, cold           11.8 s
+#                             …with the five cold as well      12.8 s   (+1.0)
+#
+# `default-features = false` is doing real work, and the numbers say how much:
+#
+#   +8 crates for `color`      anstream, anstyle-parse, anstyle-query,
+#                              anstyle-wincon, colorchoice, utf8parse,
+#                              is_terminal_polyfill, once_cell_polyfill
+#   +4 crates for `wrap_help`  terminal_size, and three windows-sys crates
+#
+# Neither is wanted. docs/DESIGN.md Law 2 says no state is ever encoded by
+# colour alone, so every signal this program can emit — PROD, tombstone, absent,
+# internal, read-only, truncated — has to be a WORD anyway; a word that is also
+# coloured is a word plus eight crates, and `! PROD · …` on stderr is greppable
+# in a way a red one is not. `--help` is written to fit 80 columns by hand,
+# which is what `wrap_help`'s four are for.
+#
+# **What the +5 buys, and why this is not hand-rolled like the Kafka frames in
+# kavka-core::protocol.** That precedent went the other way for a reason that
+# does not hold here: eleven wire messages have one correct encoding and no
+# human reader, so a generated codec for 190 others was dead weight. `--help` is
+# the opposite — it is READ, by a person, and it is this program's entire
+# documentation surface, exactly as the MCP server's tool schemas are its
+# product. Seven subcommands, forty-odd flags, four mutually exclusive seek
+# forms, an exclusive-and-required payload group, `env`-backed defaults and the
+# exit codes are ~800 lines of hand-written parser plus a help renderer that
+# drifts from it the first week. `suggestions` is the other half of it: `kavka
+# topic list` answering "did you mean 'topics'?" is §7's "errors state the next
+# click", for free.
+#
+# `derive` costs `clap_derive` and nothing else — `heck`, `syn`, `quote` and
+# `proc-macro2` are already in this workspace's graph via serde and thiserror —
+# and it is what keeps a flag and its help text in one place instead of two.
+clap = { version = "4", default-features = false, features = [
+    "std",
+    "help",
+    "usage",
+    "error-context",
+    "suggestions",
+    "derive",
+    "env",
+] }
+
+# --- Error classification (src/errors.rs) -----------------------------------
+# ZERO new crates: `regex` is already in this crate's graph, at this version,
+# because kavka-core depends on it directly (for masking, and for CEL's
+# `matches()`). Naming it here rather than reaching through kavka-core's
+# re-exports is the difference between a dependency this crate declares and one
+# it borrows by accident — the same reasoning kavka-core's own `regex` entry
+# gives. Same feature set as kavka-core's, so no second regex is built.
+#
+# It is here for four patterns and nothing else: pulling `host:port` out of a
+# broker string, the SASL mechanism a broker named, the quoted group id and the
+# member count — the four the desktop app's `errors.ts` uses, character for
+# character, so the two ports of the §7 error table cannot answer differently
+# about the same string.
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+
+# NOTHING ELSE, deliberately.
+#
+# - **is-terminal**: `std::io::IsTerminal` has been in the standard library
+#   since Rust 1.70. The whole crate would be one trait import.
+# - **A table crate** (comfy-table, tabled, prettytable): the table this program
+#   draws is docs/DESIGN.md §5.2's — no borders, no zebra, identifiers left and
+#   mono, quantities right and tabular — which is *fewer* rules than any of
+#   those crates implement, and none of them can be told to stop drawing
+#   corners. It is 70 lines in src/output.rs, and it is the part of this program
+#   most likely to need a repo-specific opinion.
+# - **chrono/time**: a timestamp is rendered as ISO-8601 UTC by 25 lines of
+#   civil-from-days arithmetic in src/output.rs, tested against the epoch, a
+#   leap day and a year boundary. The same call kavka-core's metrics module
+#   made about parsing the Prometheus text format by hand.
+# - **anyhow/thiserror**: this program's failure type is four exit codes and a
+#   classified message (src/errors.rs). A backtrace is not what a user piping
+#   `kavka fetch` into `jq` needs.
+# - **An async runtime**: kavka-core is blocking by design, and one command is
+#   one answer.

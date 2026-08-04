@@ -8,6 +8,7 @@ import {
 } from "./api";
 import { classifyError } from "./errors";
 import Overlay from "./Overlay";
+import { useI18n, type TFunction } from "./i18n";
 
 /**
  * Export and import the connection list — DESIGN.md §5.8 (modal) and §7.
@@ -33,6 +34,11 @@ const CONFIRM_KEY = ON_MAC ? "⌘" : "Ctrl";
  * are used verbatim and only the unknown branch gets copy that belongs here.
  */
 function TransferError({ raw, what }: { raw: string; what: string }) {
+  const { t } = useI18n();
+  // classifyError is `errors.ts`, which is outside this wave's extraction
+  // boundary: the error library is still English in every locale. Stated in
+  // docs/I18N.md rather than papered over — a half-translated banner where
+  // only the fallback sentence moved would be worse than an honest one.
   const { title, detail, known } = classifyError(raw);
   return (
     <div className="banner banner-danger" role="alert">
@@ -43,7 +49,7 @@ function TransferError({ raw, what }: { raw: string; what: string }) {
         <p className="banner-title">{title}</p>
         <p className="banner-detail">{known ? detail : what}</p>
         <details className="banner-details">
-          <summary>Show details</summary>
+          <summary>{t("common.showDetails")}</summary>
           <pre className="banner-raw">{raw}</pre>
         </details>
       </div>
@@ -51,29 +57,39 @@ function TransferError({ raw, what }: { raw: string; what: string }) {
   );
 }
 
-/** Counts as a sentence. Exact numbers — §7 rule 5: tables and reports don't round. */
-function reportLines(r: ImportReport): { title: string; detail: string } {
+/**
+ * Counts as a sentence. Exact numbers — §7 rule 5: tables and reports don't
+ * round.
+ *
+ * `t` is a parameter rather than a hook because this is a plain function the
+ * render calls twice; the caller already holds the translator.
+ */
+function reportLines(
+  t: TFunction,
+  r: ImportReport,
+): { title: string; detail: string } {
   const changed = r.imported + r.replaced;
   if (changed === 0 && r.skipped === 0) {
     return {
-      title: "That JSON had no connections in it",
-      detail:
-        "Check you pasted the whole export, including the outer braces — Kavka read it fine, there was just nothing to add.",
+      title: t("transfer.report.empty.title"),
+      detail: t("transfer.report.empty.detail"),
     };
   }
   const bits: string[] = [];
-  if (r.imported) bits.push(`${r.imported} added`);
-  if (r.replaced) bits.push(`${r.replaced} replaced`);
-  if (r.skipped) bits.push(`${r.skipped} skipped — already on this machine`);
+  if (r.imported) bits.push(t("transfer.report.added", { count: r.imported }));
+  if (r.replaced)
+    bits.push(t("transfer.report.replaced", { count: r.replaced }));
+  if (r.skipped) bits.push(t("transfer.report.skipped", { count: r.skipped }));
+  const joined = bits.join(" · ");
   return {
     title:
       changed === 0
-        ? `Nothing changed — ${r.skipped} ${r.skipped === 1 ? "connection was" : "connections were"} already here`
-        : `Imported ${changed} ${changed === 1 ? "connection" : "connections"}`,
+        ? t("transfer.report.unchanged.title", { count: r.skipped })
+        : t("transfer.report.imported.title", { count: changed }),
     detail:
       changed === 0
-        ? `${bits.join(" · ")}. Choose “Replace it with the one in the JSON” above if you meant to overwrite them.`
-        : `${bits.join(" · ")}. Passwords aren't in an export — open each new connection and enter its password before connecting.`,
+        ? t("transfer.report.unchanged.detail", { bits: joined })
+        : t("transfer.report.imported.detail", { bits: joined }),
   };
 }
 
@@ -96,6 +112,7 @@ export default function ImportExportDialog({
   onDangerChange,
   onClose,
 }: ImportExportDialogProps) {
+  const { t } = useI18n();
   const [tab, setTab] = useState<TransferTab>(initialTab);
   // Focus lands on the tab we open on, so focus and aria-selected agree. Bind
   // it to "export" and opening on Import puts the caret on the wrong tab —
@@ -180,7 +197,14 @@ export default function ImportExportDialog({
       ref={id === initialTab ? initialTabRef : undefined}
       role="tab"
       aria-selected={tab === id}
-      aria-controls={`io-panel-${id}`}
+      // Only the selected panel is mounted, so only the selected tab has an
+      // id to point at — an unresolvable IDREF is worse than none.
+      aria-controls={tab === id ? `io-panel-${id}` : undefined}
+      // A tab strip is ONE tab stop walked with the arrows (`tabKeys`). Both
+      // buttons being tabbable made Tab and ArrowRight mean different things
+      // inside one widget, and put a control the user is not on into the
+      // overlay's focus-trap list.
+      tabIndex={tab === id ? 0 : -1}
       className={`tab ${tab === id ? "tab-active" : ""}`}
       onClick={() => setTab(id)}
       onKeyDown={tabKeys}
@@ -203,9 +227,9 @@ export default function ImportExportDialog({
 
   const importReason =
     pasted.trim() === ""
-      ? "Paste the JSON from an export first"
+      ? t("transfer.import.needsJson")
       : importing
-        ? "Kavka is importing those connections now"
+        ? t("transfer.import.busy")
         : undefined;
 
   return (
@@ -216,12 +240,16 @@ export default function ImportExportDialog({
       onClose={onClose}
     >
       <h2 className="modal-title" id="io-title">
-        Connections
+        {t("transfer.title")}
       </h2>
 
-      <div className="modal-tabs" role="tablist" aria-label="Export or import">
-        {tabButton("export", "Export")}
-        {tabButton("import", "Import")}
+      <div
+        className="modal-tabs"
+        role="tablist"
+        aria-label={t("transfer.tablist")}
+      >
+        {tabButton("export", t("transfer.tab.export"))}
+        {tabButton("import", t("transfer.tab.import"))}
       </div>
 
       {tab === "export" ? (
@@ -231,20 +259,14 @@ export default function ImportExportDialog({
           role="tabpanel"
           aria-labelledby="io-tab-export"
         >
-          <p className="modal-body">
-            Every connection on this machine, as JSON. Paste it into another
-            copy of Kavka to set the same clusters up there.
-          </p>
-          <p className="dialog-note">
-            Passwords and keys never leave this machine — exports carry
-            references, not secrets.
-          </p>
+          <p className="modal-body">{t("transfer.export.body")}</p>
+          <p className="dialog-note">{t("transfer.export.promise")}</p>
 
           {exportError ? (
             <>
               <TransferError
                 raw={exportError}
-                what="Kavka couldn't read its connection file. Your connections are still on disk — nothing was lost."
+                what={t("transfer.export.failed")}
               />
               <div className="dialog-inline-action">
                 <button
@@ -252,16 +274,16 @@ export default function ImportExportDialog({
                   className="btn"
                   onClick={() => void loadExport()}
                 >
-                  Try again
+                  {t("common.tryAgain")}
                 </button>
               </div>
             </>
           ) : json === null ? (
-            <p className="dialog-note">Reading your saved connections…</p>
+            <p className="dialog-note">{t("common.readingConnections")}</p>
           ) : (
             <>
               <label className="sr-only" htmlFor="io-export">
-                Your connections, as JSON
+                {t("transfer.export.label")}
               </label>
               <textarea
                 id="io-export"
@@ -276,8 +298,8 @@ export default function ImportExportDialog({
               {copied && (
                 <p className="dialog-note" role="status">
                   {copied === "clipboard"
-                    ? "Copied to the clipboard."
-                    : `Kavka couldn't reach the clipboard. The text is selected — press ${COPY_KEY} to copy it.`}
+                    ? t("transfer.export.copied")
+                    : t("transfer.export.copyManual", { key: COPY_KEY })}
                 </p>
               )}
             </>
@@ -290,20 +312,18 @@ export default function ImportExportDialog({
           role="tabpanel"
           aria-labelledby="io-tab-import"
         >
-          <p className="modal-body">
-            Paste an export from another copy of Kavka. Passwords aren't in it —
-            each imported connection asks for its own the first time you
-            connect.
-          </p>
+          <p className="modal-body">{t("transfer.import.body")}</p>
 
           <label className="field-label" htmlFor="io-import">
-            Exported JSON
+            {t("transfer.import.label")}
           </label>
           <textarea
             id="io-import"
             className="io-json"
             rows={7}
             spellCheck={false}
+            // A JSON skeleton, not prose: a literal stays verbatim in every
+            // locale for the same reason a bootstrap host does (§4).
             placeholder={'{"version": 1, "profiles": [ … ]}'}
             value={pasted}
             onChange={(e) => setPasted(e.target.value)}
@@ -319,27 +339,32 @@ export default function ImportExportDialog({
 
           <span className="dialog-kbd-hint">
             <span className="kbd">{CONFIRM_KEY}</span>
-            <span className="kbd">⏎</span> import
+            <span className="kbd">⏎</span> {t("transfer.import.kbd")}
             <span aria-hidden="true">·</span>
-            <span className="kbd">Esc</span> close
+            <span className="kbd">Esc</span> {t("transfer.import.kbdClose")}
           </span>
 
           <fieldset className="fieldset io-strategy">
-            <legend className="eyebrow">If a connection is already here</legend>
+            <legend className="eyebrow">{t("transfer.import.legend")}</legend>
+            {/* §5.3: the hint is a SIBLING of the label wired with
+                `aria-describedby`, so it describes the control instead of
+                renaming it — and so it reaches a screen reader at all. These
+                two were the only check-fields in the app rendering the hint
+                with nothing pointing at it. */}
             <div className="check-field">
               <input
                 type="radio"
                 id="io-skip"
                 name="io-strategy"
                 checked={strategy === "skip"}
+                aria-describedby="io-skip-hint"
                 onChange={() => setStrategy("skip")}
               />
               <label className="check-label" htmlFor="io-skip">
-                Keep the one on this machine
+                {t("transfer.import.skip")}
               </label>
-              <span className="field-hint">
-                Connections already saved here are left exactly as they are.
-                Everything new in the JSON is still added.
+              <span className="field-hint" id="io-skip-hint">
+                {t("transfer.import.skipHint")}
               </span>
             </div>
             <div className="check-field">
@@ -348,15 +373,14 @@ export default function ImportExportDialog({
                 id="io-replace"
                 name="io-strategy"
                 checked={strategy === "replace"}
+                aria-describedby="io-replace-hint"
                 onChange={() => setStrategy("replace")}
               />
               <label className="check-label" htmlFor="io-replace">
-                Replace it with the one in the JSON
+                {t("transfer.import.replace")}
               </label>
-              <span className="field-hint">
-                The pasted version wins — name, address, environment and
-                sign-in method. Passwords already in your keychain stay where
-                they are.
+              <span className="field-hint" id="io-replace-hint">
+                {t("transfer.import.replaceHint")}
               </span>
             </div>
           </fieldset>
@@ -364,7 +388,7 @@ export default function ImportExportDialog({
           {importError && (
             <TransferError
               raw={importError}
-              what="Kavka couldn't read that as an export. Check you pasted the whole file, including the outer braces — the text Kavka got is below."
+              what={t("transfer.import.failed")}
             />
           )}
 
@@ -374,8 +398,10 @@ export default function ImportExportDialog({
                 ✓
               </span>
               <div className="banner-body">
-                <p className="banner-title">{reportLines(report).title}</p>
-                <p className="banner-detail">{reportLines(report).detail}</p>
+                <p className="banner-title">{reportLines(t, report).title}</p>
+                <p className="banner-detail">
+                  {reportLines(t, report).detail}
+                </p>
               </div>
             </div>
           )}
@@ -384,7 +410,7 @@ export default function ImportExportDialog({
 
       <div className="modal-actions">
         <button type="button" className="btn" onClick={onClose}>
-          Close
+          {t("common.close")}
         </button>
         {tab === "export" ? (
           <button
@@ -393,14 +419,14 @@ export default function ImportExportDialog({
             disabled={json === null}
             title={
               exportError !== null
-                ? "There's nothing to copy — Kavka couldn't read its connection file"
+                ? t("transfer.export.nothingToCopy")
                 : json === null
-                  ? "Kavka is still reading your connections"
+                  ? t("transfer.export.stillReading")
                   : undefined
             }
             onClick={() => void copy()}
           >
-            Copy to clipboard
+            {t("transfer.export.copy")}
           </button>
         ) : (
           <button
@@ -414,7 +440,9 @@ export default function ImportExportDialog({
             <span className="btn-busy-slot" aria-hidden="true">
               {importing ? <span className="spinner" /> : null}
             </span>
-            {importing ? "Importing…" : "Import connections"}
+            {importing
+              ? t("transfer.import.running")
+              : t("transfer.import.run")}
           </button>
         )}
       </div>

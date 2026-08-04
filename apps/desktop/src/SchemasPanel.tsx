@@ -500,17 +500,9 @@ export default function SchemasPanel({
                         ? " row-selected"
                         : ""
                     }`}
-                    tabIndex={0}
                     onClick={() => {
                       setLeftV(rightV);
                       setRightV(v.version);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setLeftV(rightV);
-                        setRightV(v.version);
-                      }
                     }}
                     title="Compare this version with the one on the right"
                   >
@@ -526,8 +518,23 @@ export default function SchemasPanel({
                           .find((line) => line.trim().length > 0) ?? ""}
                       </span>
                     </td>
+                    {/* The row's keyboard path, and the only element here
+                        with a role that says it does something (SC 4.1.2). */}
                     <td className="col-affordance">
-                      <span className="row-affordance">Compare →</span>
+                      <button
+                        type="button"
+                        className="row-affordance"
+                        aria-label={`Compare version ${v.version}`}
+                        // The row is still clickable for the pointer;
+                        // without this the handler runs twice per click.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLeftV(rightV);
+                          setRightV(v.version);
+                        }}
+                      >
+                        Compare →
+                      </button>
                     </td>
                   </tr>
                 ))}

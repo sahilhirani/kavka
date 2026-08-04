@@ -21,6 +21,18 @@ import {
 type InspectorTab = "value" | "key" | "headers" | "raw";
 
 /**
+ * The four tabs, in order, so the strip's rendering and its arrow keys read
+ * from one list. `Headers` gains its count at the call site — the label here
+ * is the stable name the keyboard model walks.
+ */
+const TABS: ReadonlyArray<readonly [InspectorTab, string]> = [
+  ["value", "Value"],
+  ["key", "Key"],
+  ["headers", "Headers"],
+  ["raw", "Raw"],
+];
+
+/**
  * Above this many lines the inspector stops rendering and says so. DESIGN
  * §5.10 asks for line-level virtualization at the cut; this is the honest
  * interim: a hard stop with a sentence, never a silently shortened payload.
@@ -72,6 +84,27 @@ export default function MessageInspector({
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
+  const tabRefs = useRef<Partial<Record<InspectorTab, HTMLButtonElement | null>>>(
+    {},
+  );
+
+  /** Arrow keys walk the strip; selection follows focus, as in every other
+      tablist in the app (ClusterView's is the reference implementation). */
+  const onTabKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      let next: number | null = null;
+      if (e.key === "ArrowRight") next = (index + 1) % TABS.length;
+      else if (e.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = TABS.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      const [key] = TABS[next];
+      setTab(key);
+      tabRefs.current[key]?.focus();
+    },
+    [],
+  );
 
   // A new record is a new payload: every per-payload toggle resets, or the
   // user lands on "Raw" for a message they never asked to see raw.
@@ -223,28 +256,42 @@ export default function MessageInspector({
         </p>
       )}
 
+      {/* A tablist is one tab stop walked with the arrows, and every tab
+          points at the panel it opens. Both halves were missing: four tabs
+          all in the tab order, arrow keys that did nothing, and a body that
+          was never announced as the tab's panel (SC 2.1.1, SC 4.1.2). */}
       <div className="modal-tabs inspector-tabs" role="tablist" aria-label="Payload">
-        {(
-          [
-            ["value", "Value"],
-            ["key", "Key"],
-            ["headers", `Headers${record.headers.length > 0 ? ` ${record.headers.length}` : ""}`],
-            ["raw", "Raw"],
-          ] as const
-        ).map(([key, label]) => (
+        {TABS.map(([key, label], index) => (
           <button
             key={key}
             type="button"
             role="tab"
+            id={`insp-tab-${key}`}
             aria-selected={tab === key}
+            aria-controls="insp-panel"
+            tabIndex={tab === key ? 0 : -1}
+            ref={(el) => {
+              tabRefs.current[key] = el;
+            }}
             className={`tab${tab === key ? " tab-active" : ""}`}
             onClick={() => setTab(key)}
+            onKeyDown={(e) => onTabKeyDown(e, index)}
           >
-            {label}
+            {key === "headers" && record.headers.length > 0
+              ? `${label} ${record.headers.length}`
+              : label}
           </button>
         ))}
       </div>
 
+      {/* One panel element for all four tabs — its contents swap, its
+          identity does not, so `aria-controls` always resolves. */}
+      <div
+        className="inspector-panel"
+        id="insp-panel"
+        role="tabpanel"
+        aria-labelledby={`insp-tab-${tab}`}
+      >
       {tab === "headers" ? (
         <div className="inspector-body inspector-body-plain">
           {record.headers.length === 0 ? (
@@ -442,6 +489,7 @@ export default function MessageInspector({
           </div>
         </>
       )}
+      </div>
     </aside>
   );
 }

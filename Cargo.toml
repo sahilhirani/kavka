@@ -6,6 +6,11 @@ members = [
     # desktop package because it must build and run where Tauri, a webview and a
     # built frontend do not exist — see crates/kavka-mcp/src/lib.rs.
     "crates/kavka-mcp",
+    # The companion CLI (docs/ROADMAP.md Phase 6 / fast-follow). A member for
+    # the same reason kavka-mcp is one: it is a second front end of the core
+    # that must build where Tauri, a webview and a built frontend do not exist
+    # — see crates/kavka-cli/src/lib.rs.
+    "crates/kavka-cli",
     "apps/desktop/src-tauri",
 ]
 

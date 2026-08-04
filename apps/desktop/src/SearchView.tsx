@@ -692,8 +692,11 @@ export default function SearchView({
           </HelpPopover>
         </div>
 
+        {/* Raised by pressing ⏎ in the box or Start beside it, neither of
+            which moves focus — so the message needs a live region to be
+            heard at all (SC 4.1.3). The input keeps `aria-describedby` too. */}
         {celError !== null && (
-          <span className="field-error" id="sv-cel-error">
+          <span className="field-error" id="sv-cel-error" role="alert">
             {celError}
           </span>
         )}

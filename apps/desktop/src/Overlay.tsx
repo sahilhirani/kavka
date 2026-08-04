@@ -21,15 +21,30 @@ import { useEffect, useRef } from "react";
  * Everything a user can Tab to. `[tabindex="-1"]` is deliberately excluded:
  * it means "focusable by script, not by Tab", which is exactly what the
  * wrap-around below must not land on.
+ *
+ * THE EXCLUSION HAS TO BE ON EVERY BRANCH, not only the last one. A
+ * `<button tabindex="-1">` still matches `button:not([disabled])`, so the
+ * roving-tabindex widgets inside these overlays — the transfer dialog's tab
+ * strip, the produce panel's, the inspector's — were putting their INACTIVE
+ * members into the trap's list. The consequence is not cosmetic: `first` and
+ * `last` are read off that list, so the wrap-around sent Shift+Tab to a
+ * control the browser will not focus, and the trap leaked.
  */
 const FOCUSABLE = [
   "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "textarea:not([disabled])",
-  "select:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(", ");
+  "button",
+  "input",
+  "textarea",
+  "select",
+  // Every error banner in a dialog ends in `Show details`, and a <summary>
+  // is Tab-focusable without matching any selector above — so the trap's
+  // `last` was sometimes not the last thing Tab reaches, and Tab walked out
+  // of the dialog.
+  "details > summary",
+  "[tabindex]",
+]
+  .map((sel) => `${sel}:not([disabled]):not([tabindex="-1"])`)
+  .join(", ");
 
 interface OverlayProps {
   /** Class for the raised surface: `modal`, `modal modal-wide`, `palette`. */

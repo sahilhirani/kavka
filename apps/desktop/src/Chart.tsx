@@ -367,7 +367,17 @@ export default function LineChart({
       <div
         className="chart-plot"
         role="img"
-        aria-label={label}
+        // `role="img"` makes everything inside it presentational, which is
+        // right for the SVG and wrong for the one sentence that shares the
+        // box: the empty state was invisible to a screen reader, so a chart
+        // with no readings announced as a chart and said nothing about why
+        // (SC 1.1.1). The sentence is folded into the name instead of being
+        // moved, because it is positioned against this element.
+        aria-label={
+          empty
+            ? `${label} — nothing recorded in this window. Kavka only has history it collected while this connection was up.`
+            : label
+        }
         aria-describedby={noteId}
         tabIndex={0}
         onKeyDown={onKeyDown}

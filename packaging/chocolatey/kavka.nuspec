@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TEMPLATE. `{{VERSION}}` is filled by packaging/render.mjs.
+
+  This package DOWNLOADS the installer from the GitHub Release rather than
+  embedding it, which is why there is no `VERIFICATION.txt` here: that file is
+  Chocolatey's requirement for packages that ship binaries inside the nupkg, so
+  a moderator can confirm they match upstream. A download package proves the
+  same thing with the checksums in tools/chocolateyinstall.ps1, and those are
+  what the moderators check instead — see packaging/README.md.
+
+  What it downloads is the WiX MSI, which installs PER-MACHINE and therefore
+  needs an elevated shell. `choco install` normally is one; the reasoning, and
+  what it costs a non-admin, is at the top of tools/chocolateyinstall.ps1 and
+  in packaging/README.md. The description below says so too, because the
+  package page is where somebody finds out before they run it rather than
+  after.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>kavka</id>
+    <version>{{VERSION}}</version>
+    <packageSourceUrl>https://github.com/sahilhirani/kavka/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>sahilhirani</owners>
+
+    <title>Kavka</title>
+    <authors>Sahil Hirani</authors>
+    <projectUrl>https://github.com/sahilhirani/kavka</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/sahilhirani/kavka/main/apps/desktop/src-tauri/icons/128x128.png</iconUrl>
+    <copyright>Copyright (C) 2026 Sahil Hirani</copyright>
+    <licenseUrl>https://github.com/sahilhirani/kavka/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/sahilhirani/kavka</projectSourceUrl>
+    <docsUrl>https://github.com/sahilhirani/kavka/blob/main/docs/FEATURES.md</docsUrl>
+    <bugTrackerUrl>https://github.com/sahilhirani/kavka/issues</bugTrackerUrl>
+    <tags>kafka apache-kafka kafka-client streaming devops developer-tools foss</tags>
+    <summary>A fast, fully open-source desktop client for Apache Kafka.</summary>
+    <description><![CDATA[
+Kavka is a desktop client for Apache Kafka for Windows and macOS.
+
+* **Browse and search** — streaming search across a whole topic with CEL
+  filters, Avro/Protobuf/JSON Schema decoding through Schema Registry, and a
+  payload inspector.
+* **Operate** — consumer group lag and offset resets, ACLs, client quotas,
+  partition reassignment, Kafka Connect, Schema Registry management.
+* **Monitor** — lag history, throughput charts, alert rules with Windows
+  notifications and webhooks.
+* **Power tools** — SQL over topics, cross-cluster copy and diff, DLQ
+  workflows, an MCP server so an AI assistant can read your clusters, and
+  WebAssembly custom decoders.
+
+Every feature is free — no paid tiers, no licence keys, no server component.
+Connection passwords go to Windows Credential Manager, and nothing about your
+clusters leaves the machine.
+
+Licensed AGPL-3.0: free for personal and commercial use, and a modified Kavka
+that is distributed or offered as a service must publish its source.
+
+**Installs per-machine.** This package downloads Kavka's MSI, so it needs an
+elevated shell — which is what `choco install` normally runs in, and what a
+fleet tool always does. For a per-user install on your own laptop with no
+admin rights, use `winget install SahilHirani.Kavka` or the `.exe` on the
+releases page.
+    ]]></description>
+    <releaseNotes>https://github.com/sahilhirani/kavka/releases/tag/v{{VERSION}}</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

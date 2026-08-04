@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+#
+# TEMPLATE. `{{VERSION}}` is filled by packaging/render.mjs.
+#
+# `Publisher` must match the code-signing certificate's subject once one
+# exists — see packaging/README.md's winget blockers. Changing it later means a
+# new PR to winget-pkgs, so it is worth getting the legal name right the first
+# time rather than the GitHub handle.
+PackageIdentifier: SahilHirani.Kavka
+PackageVersion: "{{VERSION}}"
+PackageLocale: en-US
+Publisher: Sahil Hirani
+PublisherUrl: https://github.com/sahilhirani
+PublisherSupportUrl: https://github.com/sahilhirani/kavka/issues
+Author: Sahil Hirani
+PackageName: Kavka
+PackageUrl: https://github.com/sahilhirani/kavka
+License: AGPL-3.0-only
+LicenseUrl: https://github.com/sahilhirani/kavka/blob/main/LICENSE
+Copyright: Copyright (C) 2026 Sahil Hirani
+CopyrightUrl: https://github.com/sahilhirani/kavka/blob/main/LICENSE
+ShortDescription: A fast, fully open-source desktop client for Apache Kafka.
+Description: >-
+  Kavka is a desktop client for Apache Kafka for macOS and Windows. It browses
+  and searches topics, manages consumer groups, ACLs, quotas, partition
+  reassignment, Kafka Connect and Schema Registry, charts lag and throughput,
+  runs SQL over topics, and ships an MCP server so an AI assistant can read your
+  clusters. Every feature is free: there are no paid tiers, no licence keys and
+  no server component. Connection passwords are stored in Windows Credential
+  Manager, and nothing about your clusters leaves the machine.
+Moniker: kavka
+Tags:
+  - apache-kafka
+  - developer-tools
+  - devops
+  - kafka
+  - kafka-client
+  - message-queue
+  - streaming
+ReleaseNotesUrl: https://github.com/sahilhirani/kavka/releases/tag/v{{VERSION}}
+Documentations:
+  - DocumentLabel: Features
+    DocumentUrl: https://github.com/sahilhirani/kavka/blob/main/docs/FEATURES.md
+  - DocumentLabel: Architecture
+    DocumentUrl: https://github.com/sahilhirani/kavka/blob/main/docs/ARCHITECTURE.md
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
