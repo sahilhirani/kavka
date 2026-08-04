@@ -115,7 +115,12 @@ jobs:
 
             Kavka is free and open source (AGPL-3.0). If it saves you time:
             https://buymeacoffee.com/sahilhirani ☕
-          releaseDraft: false
+          # Branch builds stay DRAFT until every leg has uploaded, then the
+          # finalize job flips them public — so a cancelled or half-done run
+          # is never a visible release with missing installers (build.1 was,
+          # once). Tag builds keep publish-as-you-go: they are deliberate,
+          # rare, and the manifests job needs the published tag.
+          releaseDraft: ${{ github.ref_type == 'branch' }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           args: ${{ matrix.args }}
 
@@ -193,26 +198,48 @@ jobs:
           gh release upload "${{ github.ref_name }}" manifests/* \
             --repo "${{ github.repository }}" --clobber
 
-  # Automated main builds still get their checksums — the release body
-  # promises SHA256SUMS.txt on every release, not only the blessed ones.
-  checksums:
-    name: Checksums (automated build)
+  # Branch builds finish here: checksum the draft's installers, attach
+  # SHA256SUMS, sweep any older build-drafts a cancelled run left behind,
+  # and only then flip the release public. Users never see a release that
+  # is missing a platform.
+  finalize:
+    name: Publish automated build
     needs: build
     if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
     steps:
-      - name: Checksum the release's installers
+      - name: Checksum, sweep stale drafts, publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(gh api "repos/${{ github.repository }}/contents/apps/desktop/src-tauri/tauri.conf.json?ref=${{ github.sha }}" \
-            --jq '.content' | base64 -d | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          set -euo pipefail
+          VERSION=$(gh api "repos/${{ github.repository }}/contents/apps/desktop/src-tauri/tauri.conf.json?ref=${{ github.sha }}"             --jq '.content' | base64 -d | node -p "JSON.parse(require('fs').readFileSync(0)).version")
           TAG="v${VERSION}-build.${{ github.run_number }}"
+
+          # The draft this run's three legs uploaded into.
+          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" | head -1)
+          [ -n "$RELEASE_ID" ] || { echo "no draft release for $TAG"; exit 1; }
+
+          # Download by asset id — a draft's tag does not exist in git yet.
           mkdir -p release-assets
-          gh release download "$TAG" \
-            --repo "${{ github.repository }}" \
-            --dir release-assets \
-            --pattern 'Kavka_*.exe' --pattern 'Kavka_*.msi' --pattern 'Kavka_*.dmg'
+          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_.*\.(exe|msi|dmg)$")) | "\(.id) \(.name)"' |
+          while read -r ID NAME; do
+            gh api "repos/${{ github.repository }}/releases/assets/$ID"               -H "Accept: application/octet-stream" > "release-assets/$NAME"
+          done
+          COUNT=$(ls release-assets | wc -l)
+          # Three legs, four installers (Windows uploads exe + msi).
+          [ "$COUNT" -ge 4 ] || { echo "expected >=4 installers, found $COUNT — a leg is missing"; ls release-assets; exit 1; }
           (cd release-assets && sha256sum Kavka_* > ../SHA256SUMS.txt)
-          gh release upload "$TAG" SHA256SUMS.txt \
-            --repo "${{ github.repository }}" --clobber
+          gh release upload "$TAG" SHA256SUMS.txt --repo "${{ github.repository }}" --clobber
+
+          # Housekeeping: drafts from superseded (cancelled) runs are invisible
+          # but accumulate; sweep every OTHER v*-build.* draft before we go
+          # public.
+          gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and (.tag_name | test(\"^v.*-build\.\")) and .tag_name != \"$TAG\") | .id" |
+          while read -r STALE; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/$STALE"
+            echo "deleted stale draft $STALE"
+          done
+
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F draft=false > /dev/null
+          echo "published $TAG with $COUNT installers + SHA256SUMS"
