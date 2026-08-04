@@ -42,8 +42,13 @@ jobs:
             platform: macos-latest
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+          # Cross-compiled from an Apple Silicon runner: macos-13 was
+          # GitHub's last Intel image and it is retired — jobs targeting it
+          # queue forever. Rust builds x86_64-apple-darwin from arm64 natively
+          # (same OS, second target), and the cmake/openssl vendored builds
+          # follow the cargo target.
           - name: macOS Intel
-            platform: macos-13
+            platform: macos-latest
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
           - name: Windows x64
