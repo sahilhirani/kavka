@@ -230,7 +230,7 @@ jobs:
 
           # Download by asset id — a draft's tag does not exist in git yet.
           mkdir -p release-assets
-          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_") and (.name | endswith(".exe") or endswith(".msi") or endswith(".dmg"))) | "\(.id) \(.name)"' |
+          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | startswith("Kavka_") and (endswith(".exe") or endswith(".msi") or endswith(".dmg"))) | "\(.id) \(.name)"' |
           while read -r ID NAME; do
             gh api "repos/${{ github.repository }}/releases/assets/$ID"               -H "Accept: application/octet-stream" > "release-assets/$NAME"
           done
