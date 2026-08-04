@@ -17,7 +17,12 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # v*-build.* is what this workflow itself mints for automated builds —
+    # excluded so a manually-published build release can never re-trigger
+    # the stable-tag path (the automated path is already safe: refs created
+    # with GITHUB_TOKEN don't trigger workflows, but a human's token does,
+    # and that rebuilt everything and failed the manifests job twice).
+    tags: ["v*", "!v*-build.*"]
     branches: [main]
 
 permissions:
