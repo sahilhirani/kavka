@@ -230,7 +230,7 @@ jobs:
 
           # Download by asset id — a draft's tag does not exist in git yet.
           mkdir -p release-assets
-          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_.*\.(exe|msi|dmg)$")) | "\(.id) \(.name)"' |
+          gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets"             --jq '.[] | select(.name | test("^Kavka_") and (.name | endswith(".exe") or endswith(".msi") or endswith(".dmg"))) | "\(.id) \(.name)"' |
           while read -r ID NAME; do
             gh api "repos/${{ github.repository }}/releases/assets/$ID"               -H "Accept: application/octet-stream" > "release-assets/$NAME"
           done
@@ -243,7 +243,7 @@ jobs:
           # Housekeeping: drafts from superseded (cancelled) runs are invisible
           # but accumulate; sweep every OTHER v*-build.* draft before we go
           # public.
-          gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and (.tag_name | test(\"^v.*-build\.\")) and .tag_name != \"$TAG\") | .id" |
+          gh api "repos/${{ github.repository }}/releases" --paginate             --jq ".[] | select(.draft and (.tag_name | startswith(\"v\") and contains(\"-build.\")) and .tag_name != \"$TAG\") | .id" |
           while read -r STALE; do
             gh api -X DELETE "repos/${{ github.repository }}/releases/$STALE"
             echo "deleted stale draft $STALE"
