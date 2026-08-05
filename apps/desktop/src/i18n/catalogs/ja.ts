@@ -141,6 +141,7 @@ const ja: Catalog = {
     "Apache Kafka のためのデスクトップクライアントです。Kavka は完全にこのマシン上で動作します。パスワードはお使いの OS のキーチェーンに保存され、クラスターに関する情報がこのコンピューターから出ることはありません。",
   "about.coreVersion": "コアのバージョン",
   "about.versionLoading": "読み込んでいます…",
+  "about.build": "ビルド {number}",
   "about.licence": "ライセンス",
   "about.licenceValue": "AGPL-3.0 のもとで自由に使えるオープンソース",
   "about.language": "言語",
@@ -834,6 +835,63 @@ const ja: Catalog = {
   "settings.about.help":
     "「情報」パネルに Kavka のバージョンとライセンス、MCP サーバー設定、クラッシュ診断のスイッチがあります。",
   "settings.about.open": "情報を開く",
+
+  // ── Updates ─────────────────────────────────────────────────────────────
+  "settings.section.updates": "アップデート",
+
+  "settings.updates.auto.title": "アップデートを確認する",
+  "settings.updates.auto.label": "Kavka に新しいリリースを探させる",
+  "settings.updates.auto.hint":
+    "既定でオンです。Kavka は最新のリリースが何かを github.com に尋ねます。多くても 1 日に 1 回で、公開されている Releases ページが誰にでも答えているのと同じ質問です。あなたを特定するものも、クラスターに関する情報も一切送りません。また、Kavka が自分の判断でダウンロードやインストールを行うことはありません。これは Kavka が頼まれずに行う唯一の通信です。ここをオフにすれば、その通信もなくなります。",
+
+  "settings.updates.channel.title": "対象のリリース",
+  "settings.updates.channel.help":
+    "「安定版」は人が意図してタグを付けたリリースを追います。「すべてのビルド」は main へのマージごとに公開されるプレリリースを追います。より新しい代わりに、同じ基準で判断されてはいません。",
+  "settings.updates.channel.stable": "安定版",
+  "settings.updates.channel.builds": "すべてのビルド",
+  "settings.updates.channel.warning":
+    "ビルドは main から自動で公開されます。ビルドは通り、チェックも通っていますが、それが良いものだと誰かが判断したわけではありません。最新の成果がほしく、問題があれば安定版を入れ直せる場合にだけ選んでください。",
+
+  "settings.updates.check.title": "今すぐ確認",
+  "settings.updates.check.help":
+    "上のスイッチの状態にかかわらず、すぐに github.com に尋ねます。何もダウンロードしません。",
+  "settings.updates.check.button": "今すぐ確認",
+  "settings.updates.check.checking": "github.com に問い合わせています…",
+
+  "settings.updates.result.update":
+    "Kavka {version} が利用できます。ウィンドウ上部の通知にインストールのボタンがあります。",
+  "settings.updates.result.currentStable": "最新の安定版です。",
+  "settings.updates.result.currentBuild": "最新のビルドです。",
+  "settings.updates.result.noStable":
+    "安定版はまだ一度も公開されていません。今のところ main からの自動ビルドしかありません。それを追うには「すべてのビルド」に切り替えてください。",
+
+  "settings.updates.lastChecked": "Kavka が最後に確認したのは {when} です。",
+  "settings.updates.lastCheckedFailed":
+    "Kavka が最後に試したのは {when} で、github.com に接続できませんでした。",
+  "settings.updates.never": "Kavka はまだ確認していません。",
+
+  "updates.banner.label": "アップデートの通知 — Kavka {version}",
+  "updates.banner.title": "Kavka {version} が利用できます",
+  "updates.banner.body":
+    "まだ何もダウンロードしていません。Kavka はインストールを押したときにだけインストーラーを取得し、実行する前に Kavka 自身の署名鍵で照合します。",
+  "updates.banner.bodyBuild":
+    "これは main への最新のマージから作られた自動ビルドで、安定版ではありません。良いものだと誰かが判断したわけではありません。まだ何もダウンロードしていません。Kavka はインストールを押したときにだけインストーラーを取得し、実行する前に Kavka 自身の署名鍵で照合します。",
+  "updates.banner.willClose":
+    "インストールすると、インストーラーが置き換えられるように Kavka は終了します。作業を終えてから実行し、インストーラーが終わったら Kavka を開き直してください。",
+  "updates.banner.willRestart":
+    "インストールすると Kavka はいったん終了し、更新が済んだら開き直します。先に作業を終えてください。",
+  "updates.banner.notes": "変更点",
+  "updates.banner.releasePage": "リリースページ",
+  "updates.banner.install": "インストール…",
+  "updates.banner.installing": "ダウンロード中…",
+  "updates.banner.notNow": "今はしない",
+
+  "updates.error.unreachable.title": "Kavka は github.com に接続できませんでした",
+  "updates.error.unreachable.detail":
+    "何もダウンロードしておらず、このマシンには何の変更もありません。接続、または github.com との間にプロキシやファイアウォールがないかを確認してから、もう一度お試しください。",
+  "updates.error.title": "アップデートは完了しませんでした",
+  "updates.error.detail":
+    "何もインストールしておらず、このマシンには何の変更もありません。全文は「詳細を表示」にあります。リリースページには自分でダウンロードできるインストーラーもあります。",
 
   "unit.seconds": "{count, plural, other {#秒}}",
   "unit.minutes": "{count, plural, other {#分}}",

@@ -13,12 +13,22 @@ import { noteToLog } from "./diagnostics";
 /**
  * DIAGNOSTICS, as the About dialog explains it.
  *
- * THE ONE CLAIM THIS SECTION MAKES, and the reason it can: **nothing leaves
- * this machine.** Not "we anonymise it", not "only with your consent" — there
- * is no telemetry endpoint anywhere in Kavka, so there is no transmission to
- * consent to. The feature writes a text file. You open the folder, you read
- * it, you decide whether to paste it into a GitHub issue. That is the whole
- * product.
+ * THE ONE CLAIM THIS SECTION MAKES, and the reason it can: **no diagnostics
+ * leave this machine.** Not "we anonymise it", not "only with your consent" —
+ * there is no telemetry endpoint anywhere in Kavka, so there is no
+ * transmission to consent to. The feature writes a text file. You open the
+ * folder, you read it, you decide whether to paste it into a GitHub issue.
+ * That is the whole product.
+ *
+ * THE CLAIM WAS NARROWED WHEN THE UPDATE CHECK SHIPPED, and the narrowing is
+ * the point of the paragraph below. It used to say "nothing leaves this
+ * machine" full stop; Kavka now asks github.com what the newest release is,
+ * at most once a day, on by default. That request is named here — with its
+ * host, its frequency, what it does not carry and where its switch is —
+ * because a page that lists what a log line contains and then quietly omits
+ * the app's only outbound request has spent the credibility the rest of the
+ * section is built on. No surface in this product may claim Kavka makes no
+ * network requests.
  *
  * Which is exactly why the copy here is specific rather than reassuring. "We
  * respect your privacy" is what a page says when it is collecting something.
@@ -120,11 +130,27 @@ export default function DiagnosticsSection() {
       </h3>
 
       <p className="dialog-note">
-        Kavka has <strong>no telemetry</strong>. There is no endpoint, no
-        analytics, no crash reporter phoning anywhere — not a disabled one, not
+        Kavka has <strong>no telemetry</strong>. There is no analytics
+        endpoint, no crash reporter phoning anywhere — not a disabled one, not
         one behind a flag. This switch does exactly one thing: it lets Kavka
         write a text file on this computer when something goes wrong, so you
         have something to attach to a GitHub issue.
+      </p>
+
+      {/* THE HONEST LIMIT OF THE PARAGRAPH ABOVE, and it is not behind a fold
+          for the same reason "What never goes in it" isn't: a qualification
+          one click away is a qualification that gets quoted without it
+          (docs/DESIGN.md §7). Kavka makes exactly one request nobody asked
+          for, and this is where the app says so, in the same panel that makes
+          the no-telemetry claim. */}
+      <p className="dialog-note">
+        <strong>Kavka does make one request of its own.</strong> At most once a
+        day it asks github.com what the newest release is, so it can tell you
+        when there is one — the same question the public Releases page answers
+        for anybody. It carries nothing that identifies you and nothing about
+        your clusters, it downloads and installs nothing until you press
+        Install, and <em>Settings → Updates</em> turns it off. That is the
+        whole of Kavka's outbound traffic that you did not ask for.
       </p>
 
       {/* 18px box in a 18px/1fr grid with the hint in row 2 — 14px fails

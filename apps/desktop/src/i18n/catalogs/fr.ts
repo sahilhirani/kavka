@@ -140,6 +140,7 @@ const fr: Catalog = {
     "Un client de bureau pour Apache Kafka. Kavka fonctionne entièrement sur cette machine : les mots de passe vont dans le trousseau de votre système d'exploitation, et rien de ce qui concerne vos clusters ne quitte cet ordinateur.",
   "about.coreVersion": "Version du cœur",
   "about.versionLoading": "Lecture en cours…",
+  "about.build": "Build {number}",
   "about.licence": "Licence",
   "about.licenceValue": "Libre et open source sous AGPL-3.0",
   "about.language": "Langue",
@@ -848,6 +849,67 @@ const fr: Catalog = {
   "settings.about.help":
     "Le panneau À propos contient la version et la licence de Kavka, les réglages du serveur MCP et l’interrupteur de diagnostic de plantage.",
   "settings.about.open": "Ouvrir À propos",
+
+  // ── Updates ─────────────────────────────────────────────────────────────
+  "settings.section.updates": "Mises à jour",
+
+  "settings.updates.auto.title": "Rechercher les mises à jour",
+  "settings.updates.auto.label":
+    "Laisser Kavka chercher les nouvelles versions",
+  "settings.updates.auto.hint":
+    "Activé par défaut. Kavka demande à github.com quelle est la version la plus récente, au plus une fois par jour — la même question à laquelle la page publique des Releases répond à tout le monde. La requête ne transporte rien qui vous identifie ni rien sur vos clusters, et elle ne télécharge et n'installe rien d'elle-même. C'est la seule requête que Kavka fait sans qu'on la lui demande ; désactivez-la et il n'y en a aucune.",
+
+  "settings.updates.channel.title": "Quelles versions",
+  "settings.updates.channel.help":
+    "Stable suit les versions qu'une personne a étiquetées volontairement. Chaque build suit la préversion publiée par chaque fusion dans main — plus récente, et pas tenue à la même exigence.",
+  "settings.updates.channel.stable": "Stable",
+  "settings.updates.channel.builds": "Chaque build",
+  "settings.updates.channel.warning":
+    "Les builds sont publiés automatiquement depuis main. Ils compilent et passent les vérifications, mais personne n'a décidé qu'ils étaient bons. Ne prenez ceci que si vous voulez le travail le plus récent et que vous pourriez réinstaller une version stable si un build se comportait mal.",
+
+  "settings.updates.check.title": "Vérifier maintenant",
+  "settings.updates.check.help":
+    "Interroge github.com tout de suite, quoi que dise l'interrupteur ci-dessus. Rien n'est téléchargé.",
+  "settings.updates.check.button": "Vérifier maintenant",
+  "settings.updates.check.checking": "Interrogation de github.com…",
+
+  "settings.updates.result.update":
+    "Kavka {version} est disponible. L'avis en haut de la fenêtre porte le bouton d'installation.",
+  "settings.updates.result.currentStable":
+    "Vous avez la version stable la plus récente.",
+  "settings.updates.result.currentBuild":
+    "Vous avez le build le plus récent.",
+  "settings.updates.result.noStable":
+    "Aucune version stable n'a encore été publiée — il n'existe pour l'instant que des builds automatiques de main. Passez à Chaque build pour les suivre.",
+
+  "settings.updates.lastChecked":
+    "Kavka a vérifié pour la dernière fois le {when}.",
+  "settings.updates.lastCheckedFailed":
+    "Kavka a essayé pour la dernière fois le {when} et n'a pas pu joindre github.com.",
+  "settings.updates.never": "Kavka n'a pas encore vérifié.",
+
+  "updates.banner.label": "Avis de mise à jour — Kavka {version}",
+  "updates.banner.title": "Kavka {version} est disponible",
+  "updates.banner.body":
+    "Rien n'a été téléchargé. Kavka ne récupère l'installateur que lorsque vous appuyez sur Installer, et il le vérifie avec la clé de signature de Kavka avant que quoi que ce soit ne s'exécute.",
+  "updates.banner.bodyBuild":
+    "C'est un build automatique de la dernière fusion dans main, pas une version stable — personne n'a décidé qu'il était bon. Rien n'a été téléchargé ; Kavka ne récupère l'installateur que lorsque vous appuyez sur Installer, et il le vérifie avec la clé de signature de Kavka avant que quoi que ce soit ne s'exécute.",
+  "updates.banner.willClose":
+    "L'installation ferme Kavka pour que l'installateur puisse le remplacer. Terminez d'abord ce que vous faites, puis rouvrez Kavka quand l'installateur a fini.",
+  "updates.banner.willRestart":
+    "L'installation ferme Kavka et le rouvre une fois la mise à jour en place. Terminez d'abord ce que vous faites.",
+  "updates.banner.notes": "Ce qui a changé",
+  "updates.banner.releasePage": "Page de la version",
+  "updates.banner.install": "Installer…",
+  "updates.banner.installing": "Téléchargement…",
+  "updates.banner.notNow": "Pas maintenant",
+
+  "updates.error.unreachable.title": "Kavka n'a pas pu joindre github.com",
+  "updates.error.unreachable.detail":
+    "Rien n'a été téléchargé et rien n'a changé sur cette machine. Vérifiez la connexion, ou s'il y a un proxy ou un pare-feu entre vous et github.com, puis réessayez.",
+  "updates.error.title": "La mise à jour ne s'est pas terminée",
+  "updates.error.detail":
+    "Rien n'a été installé et rien n'a changé sur cette machine. Le texte complet est sous « Afficher les détails », et la page de la version propose des installateurs que vous pouvez télécharger vous-même.",
 
   "unit.seconds": "{count, plural, one {# seconde} other {# secondes}}",
   "unit.minutes": "{count, plural, one {# minute} other {# minutes}}",

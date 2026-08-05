@@ -1,15 +1,22 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { updatesBuildNumber } from "./api";
 import DiagnosticsSection from "./DiagnosticsSection";
 import McpSection from "./McpSection";
 import Overlay from "./Overlay";
 import { LOCALES, useI18n, type Locale } from "./i18n";
 
 /**
- * The two links Kavka is allowed to open. They live here — the one component
- * that shows both — and the sidebar and the palette import them, so the
- * allowlist in `src-tauri/capabilities/default.json` has exactly two literals
- * to match and neither can drift by being retyped somewhere else.
+ * The two literal links Kavka is allowed to open. They live here — the one
+ * component that shows both — and the sidebar and the palette import them, so
+ * the allowlist in `src-tauri/capabilities/default.json` has two literals to
+ * match and neither can drift by being retyped somewhere else.
+ *
+ * THE THIRD ENTRY IN THAT ALLOWLIST IS NOT A LITERAL and cannot live here:
+ * `UpdateBanner` opens the release page for whatever version GitHub named,
+ * which is `…/kavka/releases/*` — a pattern, not a constant. It is the one
+ * URL in the app that is not written down in advance, and the scope is
+ * narrowed to the releases path for exactly that reason.
  *
  * Anything added here must be added to that capability too, or `openUrl`
  * rejects at runtime and the link silently does nothing.
@@ -30,6 +37,31 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
   // (no browser registered, or the capability allowlist doesn't cover the
   // URL). When it does, the address is put on screen to copy instead.
   const [unopened, setUnopened] = useState<string | null>(null);
+  /**
+   * The run number this binary was compiled with, or null on a stable or
+   * local build.
+   *
+   * IT IS NOT DERIVABLE FROM THE VERSION, which is the whole reason it is
+   * here: `tauri.conf.json` carries the same plain version for every build
+   * — MSI/WiX will not take a prerelease string in it — so two installs
+   * eleven merges apart both report `0.1.0`, and a bug report that names one
+   * of them names nothing. Null is a normal answer and renders nothing.
+   */
+  const [build, setBuild] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    updatesBuildNumber()
+      .then((n) => {
+        if (alive) setBuild(n);
+      })
+      // Silent: an older shell that does not register the command should cost
+      // this dialog one absent line, not an error over the licence.
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const open = useCallback((url: string) => {
     setUnopened(null);
@@ -77,7 +109,18 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
         <div className="about-fact">
           <dt className="about-fact-label">{t("about.coreVersion")}</dt>
           <dd className="about-fact-value">
-            {version ? <code>{version}</code> : t("about.versionLoading")}
+            {version ? (
+              <>
+                <code>{version}</code>
+                {/* The number is an identifier, not a quantity: passed as a
+                    string so `Intl.NumberFormat` doesn't render run 1234 as
+                    "1,234" and send someone looking for a release that has no
+                    such tag. */}
+                {build !== null && ` · ${t("about.build", { number: String(build) })}`}
+              </>
+            ) : (
+              t("about.versionLoading")
+            )}
           </dd>
         </div>
         <div className="about-fact">

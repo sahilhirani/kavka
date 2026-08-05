@@ -1,7 +1,7 @@
 {
   "$schema": "gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window. Nothing here is granted 'in case': notification is deliberately absent, because alerts are raised from Rust (notify() in src/lib.rs) and the plugin's Rust API does not go through this ACL — granting notification:default would hand the webview all sixteen of that plugin's commands to buy nothing.",
+  "description": "Default capability for the main window. Nothing here is granted 'in case': notification and updater are both deliberately absent, because alerts are raised from Rust (notify() in src/lib.rs) and updates are driven from Rust (src/update.rs, behind the four updates_* commands), and a plugin's Rust API does not go through this ACL — granting notification:default or updater:default would hand the webview every command of those plugins to buy nothing. The process plugin goes one further and is not registered at all: the macOS relaunch is updates_restart, which calls core Tauri's request_restart. The webview's whole update surface is updates_check / updates_install / updates_restart / updates_build_number, which are this app's own commands and need no entry here. If a future UI ever calls @tauri-apps/plugin-updater directly, THAT is the change that earns the grant.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,7 +10,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://buymeacoffee.com/sahilhirani" },
-        { "url": "https://github.com/sahilhirani/kavka" }
+        { "url": "https://github.com/sahilhirani/kavka" },
+        { "url": "https://github.com/sahilhirani/kavka/releases/*" }
       ]
     }
   ]
