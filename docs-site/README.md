@@ -37,21 +37,32 @@ whose toolchain has rotted by then.
 It is built on the app's own tokens — see `docs/DESIGN.md`. The rules that
 apply here as much as they do in the product:
 
-- **No cards.** Grouping is whitespace plus a top hairline. The feature grid,
-  the download columns and the screenshots all follow that; none of them has a
-  border, a radius or a shadow.
-- **The ledger rule is the signature.** Each section carries a mono address in a
-  fixed left gutter with a 1px rule beside it, exactly as the app's tables carry
-  offsets and broker ids. It collapses below 900px and the rule stays — the same
-  behaviour the app has when a table runs out of width.
-- **The accent means live.** `--accent` appears twice on the page: the wire
-  across the top, and one word in the headline. It is never a button fill.
+- **Soft raised panels.** The feature grid and the download columns are real
+  surfaces — `--bg-panel`, one hairline, `--r-md` and `--shadow-1` — because
+  that is what a panel is in the app now. There is exactly one shadow token in
+  use here; if a rule reaches for a second elevation, it is wrong.
+- **Two signatures, both real.** The page opens with a **Perch**: the bird, the
+  screen and state in words, one sentence of verdict and the caveat printed
+  beside it — the same shape `Perch.tsx` renders. And the **ledger rule** still
+  runs down the left of every section, a mono address in a fixed gutter with a
+  1px rule beside it, exactly as the app's tables carry offsets and broker ids.
+  It collapses below 900px and the rule stays, the same behaviour the app has
+  when a table runs out of width.
+- **The accent means nothing.** Brass appears on the wire, the primary button,
+  link underlines and one word in the headline. In the product it marks only
+  what you can click and what is selected, which is what makes the accent
+  picker in Settings safe; nothing on either surface is spelled in it.
+- **Both themes.** Dark warm brown-grey is the default and the light block is
+  the app's warm paper, keyed on `prefers-color-scheme`. Every colour token is
+  declared exactly twice, once per theme — a token declared in only one of them
+  is a half-themed control waiting to happen.
 - **Almost nothing moves.** Two colour transitions on hover, and a
   `prefers-reduced-motion` block that removes even those. The one exception is
   the live-tail GIF, and it is handled rather than excused — see below.
-- **No cards around the screenshots either.** A capture already has a window
-  frame drawn inside it; a second frame with a radius and a shadow around that
-  is the exact thing this system refuses. Top hairline, whitespace, caption.
+- **No panel around the screenshots.** A capture already has a window frame
+  around it and the app's own panels drawn inside it; a third surface with its
+  own radius and shadow is a frame around a frame around a frame. Top hairline,
+  whitespace, caption.
 
 The token values are **copied** into `styles.css` rather than imported. The site
 has to render from a static host with no relationship to the app's build, so it
@@ -73,8 +84,9 @@ The placeholders are gone; the page now carries real captures from
 Rules for any capture added later:
 
 - **Capture on the dev cluster** (`dev/docker-compose.yml`), dark theme,
-  default density. A production screenshot puts a real bootstrap address on the
-  internet, and the coral guardrail makes the page look like something is wrong.
+  brass accent, comfortable density. A production screenshot puts a real
+  bootstrap address on the internet, and a protected environment's warm
+  substrate and lit wire make the page look like something is wrong.
 - **Every `<img>` carries `width`, `height`, `loading="lazy"` and real `alt`
   text.** The dimensions reserve the box so nothing below it jumps; the alt
   text describes what is on the screen, not what the section is about. Both are
