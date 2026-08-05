@@ -37,6 +37,50 @@ tauri-plugin-dialog = "2"
 # (see `kavka_core::alerts::AlertChannels::os_notification`, which is documented
 # as "honoured by the Tauri shell").
 tauri-plugin-notification = "2"
+# In-app updates (src/update.rs). Brings the signature check with it — the
+# public key lives in tauri.conf.json and an installer whose minisign signature
+# does not match it is refused before a single byte is run, which is the only
+# reason "click to install" is an acceptable thing to offer at all.
+#
+# `tauri-plugin-process` is NOT here, though the relaunch half of this story
+# needs doing: macOS and Linux finish an install with the OLD binary still
+# running (Windows never gets there — its installer ends the process itself).
+# That relaunch is `updates_restart`, which calls core Tauri's
+# `AppHandle::request_restart` instead, because that one routes through
+# `RunEvent::Exit` where `stop_all_sessions` hangs — a restart puts the live
+# librdkafka clients down the same way quitting does. The plugin would buy a
+# webview API nothing calls and nothing is granted.
+tauri-plugin-updater = "2"
+# The GitHub REST client for the builds channel, and deliberately the SAME
+# reqwest tauri-plugin-updater already links rather than a second HTTP stack:
+# identical version, identical feature set plus `json`. `rustls-no-provider`
+# rather than `rustls` is the load-bearing part — plain `rustls` would pull
+# aws-lc-rs into a build that has carefully stayed on `ring` (see
+# kavka-core/Cargo.toml), and cross-compiling that to Intel macOS from an Apple
+# Silicon runner is a fight the release workflow does not need. The provider is
+# installed at first use in src/update.rs.
+#
+# `system-proxy` is the one feature added for Kavka's own reasons rather than
+# copied: a Kafka tool is very often run from inside a corporate network, and
+# reqwest 0.13 moved proxy discovery behind this flag. Cargo unifies features,
+# so turning it on also gives tauri-plugin-updater the proxy handling its own
+# `no_proxy()` method already assumes it has — which is the behaviour it
+# documents, restored rather than changed.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "rustls-no-provider",
+    "system-proxy",
+] }
+# Only for that provider install. `ring` matches what kavka-core links and what
+# tauri-plugin-updater installs, so this adds a call site rather than a crate.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
+# The version type the updater plugin compares and `PackageInfo::version`
+# carries. Named here because src/update.rs does its own comparing — the whole
+# point of the builds channel is that the plugin's comparison cannot work.
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

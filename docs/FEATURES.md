@@ -35,7 +35,7 @@ Every dollar on that list is a reason an engineer will try the free, open-source
 ## Architecture at a glance
 
 - **Desktop app:** Tauri 2.x shell, Rust core using rust-rdkafka (librdkafka) for the Kafka protocol; web-tech UI (React or Svelte). Target < 25 MB installers, instant startup, macOS Universal + Windows x64/ARM64. All cluster communication is local — credentials never leave the machine (OS keychain).
-- **That's it.** No server component, no licensing plane, no account system, no phone-home. The entire product is the desktop app; everything below ships in it, free.
+- **That's it.** No server component, no licensing plane, no account system, no telemetry. The one request the app makes on its own initiative is the daily update check against github.com (§8) — nothing identifying, nothing about the user's clusters, one switch that stops it, and nothing installed without an explicit click. The entire product is the desktop app; everything below ships in it, free.
 - **Sustainability:** donation-funded — a Buy Me a Coffee button in the README, GitHub's Sponsor button via `.github/FUNDING.yml`, and a quiet "Support Kavka ☕" link in the app's About panel and command palette. Never a nag screen, never a feature gate.
 
 ---
@@ -99,7 +99,10 @@ Every dollar on that list is a reason an engineer will try the free, open-source
 ### 8. Desktop UX fundamentals
 - Modern UI; **dark mode** (a 5👍 open ask on Redpanda Console); command palette (⌘K); keyboard-first navigation
 - < 25 MB installer, < 2 s cold start, low idle memory (the anti-JVM pitch)
-- Multi-window/multi-tab; per-cluster workspaces; auto-update channel
+- Multi-window/multi-tab; per-cluster workspaces
+- **Update notices, never automatic installs** — the app asks github.com for the newest release at most once a day (on by default, one switch in Settings → Updates stops it) and states plainly what it found; **nothing is downloaded or installed until the user clicks Install**, and what is downloaded is verified against a signing public key compiled into the app before the installer is handed anything
+  - **Two channels.** *Stable* — human-tagged `v*` releases. *Every build*, opt-in — the `v<version>-build.<n>` pre-release from the newest merge to `main`. While no stable release has ever been published, the stable channel says exactly that rather than reporting an error or "up to date"; an install carrying a build number is offered the stable release of its own base version when one appears
+  - **This is the app's only outbound request of its own initiative.** It carries nothing identifying and nothing about the user's clusters — it asks GitHub the same question the public Releases page answers for anyone. Copies installed from a package manager (winget/Chocolatey/Homebrew) are updated by that manager. The README's *What Kavka sends* and the website say this in the same words; no surface may claim Kavka makes no network requests
 - Local action log: every mutating action you performed, timestamped, exportable
 - About panel with a quiet **"Support Kavka ☕" Buy Me a Coffee link** (also reachable from the command palette) — the app's only monetization surface, and it's a donation link, not a paywall
 

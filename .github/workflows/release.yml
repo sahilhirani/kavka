@@ -13,6 +13,13 @@
 # needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
 # macOS calls un-notarized downloads "damaged" — the release body carries
 # the honest xattr instruction.
+#
+# Every release ALSO carries updater artifacts and a `latest.json` manifest,
+# minisign-signed with TAURI_SIGNING_PRIVATE_KEY, which is what lets the app
+# install an update in place instead of sending a user back to this page.
+# Distribution signing (Authenticode/notarization) and update signing are
+# different things: the second is what exists today, and it only proves the
+# bytes came from this workflow — not that an OS will trust them.
 name: Release
 
 on:
@@ -107,10 +114,32 @@ jobs:
             echo "note=$NOTE"
           } >> "$GITHUB_OUTPUT"
 
+      # The signing key is what turns `bundle.createUpdaterArtifacts` into
+      # something the app will accept: Tauri writes a .sig beside each updater
+      # bundle and tauri-action inlines those signatures into latest.json. The
+      # build FAILS if the key is absent while updater artifacts are on, so
+      # this env block is load-bearing rather than decoration — safe only
+      # because this workflow never runs on `pull_request`, where a fork gets
+      # no secrets and every build would break.
+      #
+      # KAVKA_BUILD stamps the run number into the binary at COMPILE time
+      # (option_env!), which is how a build install knows it is a build
+      # without a prerelease string in tauri.conf.json version — MSI/WiX
+      # refuses those. The `|| ''` is the entire point of the expression:
+      # `A && B` on its own evaluates to the literal string "false" on the tag
+      # path, and "false" is not empty, so a stable install would come out
+      # believing its build number was "false". `|| ''` turns the miss into an
+      # empty string, which the Rust side parses to null. (run_number is never
+      # 0, so it can never be falsy on the branch path.) Cargo fingerprints
+      # env vars read through option_env!, so a rust-cache hit from a run with
+      # a different number still recompiles rather than baking in a stale one.
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          KAVKA_BUILD: ${{ github.ref_type == 'branch' && github.run_number || '' }}
         with:
           projectPath: apps/desktop
           tagName: ${{ steps.meta.outputs.tag }}
@@ -136,9 +165,31 @@ jobs:
           releaseDraft: ${{ github.ref_type == 'branch' }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           args: ${{ matrix.args }}
+          # latest.json, the updater's manifest. This input defaults to true,
+          # but it is spelled out because it is the one switch deciding whether
+          # a release is installable in-app or only downloadable by hand.
+          #
+          # Each matrix leg merges only ITS platforms into the release's
+          # existing latest.json, so the manifest is complete only after all
+          # three have run. That merge reads the current manifest back through
+          # `GET /releases/assets/{asset_id}` with `Accept:
+          # application/octet-stream` — an authenticated read by id, not the
+          # public download URL — which is exactly why it still works while the
+          # release is a DRAFT and has no public URLs. The read-modify-write
+          # has no locking, though, so two legs finishing together can drop one
+          # of the entries; finalize re-reads the manifest and refuses to
+          # publish a build whose merge came back short.
+          uploadUpdaterJson: true
+          # Windows ships both an NSIS .exe and a WiX .msi, and the default
+          # points the updater at the .msi. NSIS is the one that can install
+          # over a running app and relaunch it, which is the flow the app
+          # promises the user; WiX cannot. Choose it explicitly.
+          updaterJsonPreferNsis: true
 
   # Renders the package-manager manifests against the release that was just
-  # published and attaches them to it.
+  # published and attaches them to it — and then, in its last step, verifies
+  # that release's `latest.json`, which is the tag path's half of the gate
+  # `finalize` runs on every branch build.
   #
   # WHY AFTER, AND NOT IN THE BUILD MATRIX. A winget manifest names the Windows
   # installer AND both macOS disk images, so it cannot be written by any single
@@ -211,17 +262,60 @@ jobs:
           gh release upload "${{ github.ref_name }}" manifests/* \
             --repo "${{ github.repository }}" --clobber
 
+      # The same completeness gate `finalize` runs on branch builds, on the
+      # path that actually matters more.
+      #
+      # WHY IT HAS TO BE HERE AND NOT THERE. `finalize` is `if: ref_type ==
+      # 'branch'`, so nothing checked the manifest of a STABLE tag — and a tag
+      # is published as-you-go (`releaseDraft: false`), so a leg that dropped
+      # its entry in tauri-action's unlocked read-modify-write of latest.json
+      # ships to the release every stable user auto-updates against. This job
+      # is the tag path's only after-the-fact step, it already runs on tags
+      # only, it already talks to the published release, and it already has
+      # node. So it is where the check belongs.
+      #
+      # A missing platform is not silent-by-accident: tauri-action only
+      # `console.warn`s when a leg has no signatures or no updater artifacts to
+      # contribute, so nothing upstream turns a short manifest red. The
+      # user-visible failure without this gate is honest but late — the app
+      # offers the update, downloads nothing, and says "That release doesn't
+      # carry an installer for this platform."
+      - name: Verify the updater manifest is complete
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq '.id')
+          MANIFEST_ID=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name == "latest.json") | .id' | head -1)
+          [ -n "$MANIFEST_ID" ] || { echo "no latest.json on ${{ github.ref_name }} — updater artifacts never made it; in-app updates would be broken for this release"; exit 1; }
+          gh api "repos/${{ github.repository }}/releases/assets/$MANIFEST_ID" \
+            -H "Accept: application/octet-stream" > latest.json
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
+            const platforms = m.platforms ?? {};
+            const missing = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]
+              .filter((p) => !platforms[p]?.url || !platforms[p]?.signature);
+            const carries = Object.keys(platforms).join(", ") || "nothing";
+            if (missing.length) {
+              console.error("latest.json has no signed entry for " + missing.join(", ") +
+                " — a leg was lost in the merge; it carries " + carries);
+              process.exit(1);
+            }
+            console.log("latest.json is complete: " + carries);
+          '
+
   # Branch builds finish here: checksum the draft's installers, attach
-  # SHA256SUMS, sweep any older build-drafts a cancelled run left behind,
-  # and only then flip the release public. Users never see a release that
-  # is missing a platform.
+  # SHA256SUMS, verify the updater manifest is complete, sweep any older
+  # build-drafts a cancelled run left behind, and only then flip the release
+  # public. Users never see a release that is missing a platform — in the
+  # download list or in latest.json.
   finalize:
     name: Publish automated build
     needs: build
     if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
     steps:
-      - name: Checksum, sweep stale drafts, publish
+      - name: Checksum, verify manifest, sweep stale drafts, publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -243,6 +337,38 @@ jobs:
           # Three legs, four installers (Windows uploads exe + msi).
           [ "$COUNT" -ge 4 ] || { echo "expected >=4 installers, found $COUNT — a leg is missing"; ls release-assets; exit 1; }
           (cd release-assets && sha256sum Kavka_* > ../SHA256SUMS.txt)
+
+          # The same fail-fast, one layer up. Branch builds now feed the app's
+          # "Every build" channel, so a build without a complete latest.json is
+          # not merely missing a nicety: the app will offer it and then fail at
+          # install time, which is worse than never offering it. tauri-action
+          # only WARNS when a leg has no updater artifacts to contribute, so
+          # nothing upstream of here turns that into a red run.
+          #
+          # Presence alone is too weak a check. The three legs merge into one
+          # manifest by read-modify-write with no locking, so the failure that
+          # actually happens is a manifest that exists and is a platform short.
+          # Assert every platform this matrix builds is present AND signed.
+          MANIFEST_ID=$(gh api "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name == "latest.json") | .id' | head -1)
+          [ -n "$MANIFEST_ID" ] || { echo "no latest.json on $TAG — updater artifacts never made it; in-app updates would be broken for this build"; exit 1; }
+          gh api "repos/${{ github.repository }}/releases/assets/$MANIFEST_ID" \
+            -H "Accept: application/octet-stream" > latest.json
+          # node, not jq: this step already shells out to node for the version
+          # above, so it is a dependency this job has proven it has.
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
+            const platforms = m.platforms ?? {};
+            const missing = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]
+              .filter((p) => !platforms[p]?.url || !platforms[p]?.signature);
+            const carries = Object.keys(platforms).join(", ") || "nothing";
+            if (missing.length) {
+              console.error("latest.json has no signed entry for " + missing.join(", ") +
+                " — a leg was lost in the merge; it carries " + carries);
+              process.exit(1);
+            }
+            console.log("latest.json is complete: " + carries);
+          '
           gh release upload "$TAG" SHA256SUMS.txt --repo "${{ github.repository }}" --clobber
 
           # Housekeeping: drafts from superseded (cancelled) runs are invisible
@@ -255,4 +381,4 @@ jobs:
           done
 
           gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F draft=false > /dev/null
-          echo "published $TAG with $COUNT installers + SHA256SUMS"
+          echo "published $TAG with $COUNT installers + SHA256SUMS + latest.json"

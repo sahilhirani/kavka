@@ -5,10 +5,21 @@ import {
   coreVersion,
   errorMessage,
   profilesList,
+  updatesCheck,
   type ConnectionProfile,
   type ConnState,
   type ConnStatus,
 } from "./api";
+import {
+  LAUNCH_CHECK_DELAY_MS,
+  dismissVersion,
+  dueForCheck,
+  getUpdatePrefs,
+  isDismissed,
+  noteChecked,
+  type UpdateOffer,
+} from "./updates";
+import UpdateBanner from "./UpdateBanner";
 import {
   envAttrs,
   envWireLabel,
@@ -105,6 +116,11 @@ export default function App() {
   // by ClusterView with its handlers already bound — the palette never
   // reaches down into a view (§5.9).
   const [topicActions, setTopicActions] = useState<TopicActions | null>(null);
+  // The release Kavka is offering, or null. App-level rather than per-view
+  // because it outlives every screen: it survives switching clusters, opening
+  // Settings and disconnecting, and it goes away only when the user answers
+  // it. Null while nothing is offered, which is almost always.
+  const [update, setUpdate] = useState<UpdateOffer | null>(null);
   // Profile ids with a cluster_connect in flight (double-click guard).
   const connectsInFlight = useRef(new Set<string>());
   // Mirror of `profiles` for use after awaits without stale closures.
@@ -152,6 +168,61 @@ export default function App() {
       .then(setVersion)
       .catch(() => setVersion("unknown"));
   }, [reloadProfiles]);
+
+  /**
+   * THE LAUNCH CHECK — the one request Kavka makes that nobody asked for.
+   *
+   * Every guard on it is deliberate and each one is a promise made somewhere
+   * a user can read it (the README's *What Kavka sends*, the disclosure in
+   * Settings → Updates, the About panel's amended no-telemetry paragraph):
+   *
+   *   · ~5 seconds after boot, not on mount. The first seconds belong to
+   *     reading `profiles.json` and connecting to the cluster the user came
+   *     back for. A release lookup is the least urgent thing this app does.
+   *   · Only when the switch is on, read at fire time rather than at mount,
+   *     so turning it off during those five seconds turns it off.
+   *   · Only when a day has passed since the last ATTEMPT, which is a stamp
+   *     on disk — forty relaunches in an afternoon is still one request.
+   *   · Only raised if the user has not already waved this exact version away.
+   *
+   * A FAILED LAUNCH CHECK SAYS NOTHING. Not a banner, not a toast: the user
+   * did not ask this question, so they are not owed an error about it, and a
+   * strip across the workspace saying Kavka could not reach github.com is
+   * noise on top of whatever they actually opened the app to do. The attempt
+   * is recorded, the "Check now" button in Settings reports failures out
+   * loud, and nothing anywhere pretends the app is up to date.
+   */
+  useEffect(() => {
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      const prefs = getUpdatePrefs();
+      if (!prefs.auto || !dueForCheck()) return;
+      void (async () => {
+        try {
+          const check = await updatesCheck(prefs.channel);
+          noteChecked(check.status !== "error");
+          if (!alive) return;
+          if (check.status === "update" && !isDismissed(check.version)) {
+            setUpdate({ ...check, channel: prefs.channel });
+          }
+        } catch {
+          noteChecked(false);
+        }
+      })();
+    }, LAUNCH_CHECK_DELAY_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const dismissUpdate = useCallback(() => {
+    if (update === null) return;
+    // Against the VERSION, not the session. A notice that comes back every
+    // launch is a notice people learn to click through without reading.
+    dismissVersion(update.version);
+    setUpdate(null);
+  }, [update]);
 
   // Drop a persisted selection that no longer exists — but never based on a
   // failed (spuriously empty) load.
@@ -365,7 +436,7 @@ export default function App() {
     // First branch on purpose: Settings answers "I cannot read this app", and
     // that has to work in every other state the workspace can be in —
     // including the one where reading the connection file failed.
-    main = <SettingsView onOpenAbout={openAbout} />;
+    main = <SettingsView onOpenAbout={openAbout} onUpdateFound={setUpdate} />;
   } else if (profiles === null) {
     // Never a full-screen spinner. A sentence says what we are waiting for.
     main = (
@@ -610,6 +681,15 @@ export default function App() {
               for whoever actually wants it. */}
           {error !== null && (
             <ErrorBanner raw={error} onDismiss={() => setError(null)} />
+          )}
+
+          {/* BELOW the error banner, always. An error is a thing the user has
+              to act on now; a new release has waited days and can wait for the
+              sentence above it. Inside the workspace rather than over it, so
+              it is still on screen while Settings is open — which is where
+              "Check now" raises it from. */}
+          {update !== null && (
+            <UpdateBanner offer={update} onDismiss={dismissUpdate} />
           )}
 
           <div className="workspace-body">{main}</div>

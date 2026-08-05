@@ -3383,3 +3383,95 @@ export function diagnosticsClear(): Promise<DiagnosticsStatus> {
 
 /** The app's total log ceiling — 5 files × 512 KB, mirrored from the shell. */
 export const DIAGNOSTICS_MAX_BYTES = 5 * 512 * 1024;
+
+// ── Updates ────────────────────────────────────────────────────────────────
+
+/**
+ * THE ONE REQUEST KAVKA MAKES ON ITS OWN INITIATIVE, and the four commands
+ * behind it. Read this before changing anything below it.
+ *
+ * WHAT IT IS: the shell asks github.com what the newest release is, at most
+ * once a day, and the window says so. It carries nothing that identifies the
+ * user and nothing about their clusters — it asks the question the public
+ * Releases page answers for anybody. It is on by default and one switch in
+ * Settings → Updates stops it, which is why the no-telemetry copy in
+ * `DiagnosticsSection` now names it out loud instead of claiming silence the
+ * app no longer keeps.
+ *
+ * WHAT IT IS NOT: an auto-updater. `updates_check` downloads nothing.
+ * `updates_install` is reached only from a button the user pressed, and what
+ * it downloads is checked against the signing public key compiled into the
+ * shell before the installer is handed a byte of it.
+ *
+ * THE CHANNEL SEMANTICS LIVE IN RUST (`src-tauri/src/update.rs`) and are not
+ * re-derived here — which release is newer than which is exactly the kind of
+ * comparison that must have one implementation and unit tests, not two
+ * implementations and a bug. The window's whole job is to render the answer.
+ */
+export type UpdateChannel = "stable" | "builds";
+
+/**
+ * The verdict, as a tagged union on `status`.
+ *
+ * `no-stable-release` is its own arm rather than an error, and that is the
+ * point of the type: today the repository has published only automated
+ * prereleases, so GitHub's `/releases/latest` endpoint answers 404. That is a
+ * FACT about the project, not a failure of the request, and a UI that reported
+ * it as "something went wrong" would be lying about a thing it knows exactly.
+ *
+ * It is a claim, though, so Rust sends this arm for an OBSERVED 404 and for
+ * nothing else. A rate limit, a 5xx or a captive portal arrives as `error` —
+ * those are facts about the network, and the day a stable release exists,
+ * dressing one up as this arm would tell a stable user their own release does
+ * not exist (`stable_absence` in src-tauri/src/update.rs).
+ *
+ * `message` on the error arm is already human-readable — the core writes the
+ * sentence, because the core is what knows whether the address failed to
+ * resolve, the signature failed to verify or GitHub answered 403.
+ */
+export type UpdateCheck =
+  | {
+      status: "update";
+      version: string;
+      notes: string | null;
+      /** The release page, for a human to read. Never a download URL. */
+      url: string;
+    }
+  | { status: "current" }
+  | { status: "no-stable-release" }
+  | { status: "error"; message: string };
+
+/** Asks GitHub. Downloads nothing, installs nothing, and never throws for a 404. */
+export function updatesCheck(channel: UpdateChannel): Promise<UpdateCheck> {
+  return invoke<UpdateCheck>("updates_check", { channel });
+}
+
+/**
+ * Downloads the release, verifies its signature, and hands it to the
+ * installer. Reached only from an explicit click.
+ *
+ * ON WINDOWS THIS DOES NOT RESOLVE: NSIS cannot replace a running executable,
+ * so the shell exits as it hands over and the promise dies with the process.
+ * Everywhere else it resolves once the update is in place, and the caller
+ * follows it with `updatesRestart`.
+ */
+export function updatesInstall(channel: UpdateChannel): Promise<void> {
+  return invoke<void>("updates_install", { channel });
+}
+
+/** Relaunches the app. Only meaningful after `updatesInstall` has resolved. */
+export function updatesRestart(): Promise<void> {
+  return invoke<void>("updates_restart");
+}
+
+/**
+ * The build number this install carries, or null on a stable or local build.
+ *
+ * Compile-time, not runtime: it comes from `option_env!("KAVKA_BUILD")` in the
+ * shell, so it describes the binary rather than the machine. `tauri.conf.json`
+ * stays at the plain version for every build — MSI/WiX cannot take a
+ * prerelease string in it — which is why this number exists at all.
+ */
+export function updatesBuildNumber(): Promise<number | null> {
+  return invoke<number | null>("updates_build_number");
+}

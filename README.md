@@ -34,6 +34,7 @@
 - **Guardrails** — nine independent layers. Every view carries its environment's colour, and a *protected* environment (call it prod, or anything else) gets a warm red substrate and a wire down the edge that survives both themes. Destructive actions there ask you to type the name. Most incidents are right-action-wrong-cluster.
 - **Plain language first** — every screen opens with a one-line verdict in English ("demo-billing is about 150 messages behind across 6 partitions, and rising"), derived from live data and honest about what it doesn't know. Jargon is explained where it appears, not in a manual.
 - **Your look** — Settings holds light and dark warm themes (or follow the OS), four accent colours, comfortable or compact density, adjustable text size and reduced motion. Everything applies instantly and persists on this machine.
+- **Updates you approve** — Kavka asks github.com for the newest release at most once a day and tells you in a sentence what it found. **Nothing is downloaded or installed until you click *Install***, and what it downloads is signature-verified against a key compiled into the app before the installer ever sees it. Two channels — Stable, and opt-in Every build — and one switch in *Settings → Updates* stops the checking entirely. See [Updating](#updating).
 - **Accessibility** — built to WCAG 2.2 AA: zero contrast failures, no state encoded by colour alone, a 24px minimum hit target, full keyboard navigation, and a command palette that is the real navigation. Verified in Windows high-contrast mode.
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the complete specification, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design, and [docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan.
@@ -66,7 +67,7 @@ Every release also carries `SHA256SUMS.txt`, so you can check what you downloade
 xattr -cr /Applications/Kavka.app
 ```
 
-(Right-click → *Open* used to be enough; recent macOS no longer offers it for un-notarized apps.) On Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
+(Right-click → *Open* used to be enough; recent macOS no longer offers it for un-notarized apps.) **That is a first-install step only.** Quarantine is applied by whatever downloaded the file, so an update Kavka installs itself — fetched by Kavka, verified by Kavka, written by Kavka — arrives without the flag, and the command is not needed again. On Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
 
 ### Package managers
 
@@ -78,6 +79,23 @@ Manifests are written and rendered against each release ([`packaging/`](packagin
 | winget | `winget install SahilHirani.Kavka` | Windows code-signing certificate |
 | Chocolatey | `choco install kavka` (elevated — it installs the MSI per-machine) | a chocolatey.org account, and first-package moderation |
 
+### Updating
+
+Kavka checks GitHub for a newer release **at most once a day**, and tells you in the app what it found. **It never downloads or installs anything on its own.** You read what it found, and nothing happens until you click *Install* — at which point Kavka downloads the release, checks its signature against a public key compiled into this app, and only then hands it to the installer. A file whose signature does not verify is refused, not run.
+
+Two channels, chosen in *Settings → Updates*:
+
+| Channel | What it offers |
+|---|---|
+| **Stable** | Versions a human tagged and released. **No stable release exists yet** — everything published so far is an automated build — so this channel currently says exactly that, rather than an error or a reassuring "you're up to date". |
+| **Every build** | The newest `v<version>-build.<n>` pre-release from `main`. Opt-in, and it is what it sounds like: the latest code, which no human has blessed. |
+
+Installing is the same act it always was, just started from inside the app: on Windows Kavka closes so the installer can replace it, and on macOS the app replaces itself and restarts.
+
+The check is on by default, and the switch that turns it off sits beside the channel picker. What it sends is one request to github.com asking what the newest release is — the same question the [Releases page](https://github.com/sahilhirani/kavka/releases) answers for anybody, carrying nothing that identifies you and nothing about your clusters.
+
+**If you installed Kavka from a package manager, update it from there** — `winget upgrade`, `choco upgrade kavka`, `brew upgrade --cask kavka` — so the manager and the app do not disagree about what is on the machine. (None of the three is submitted yet; see above.)
+
 ### Try it without a cluster
 
 Kavka's first-run screen offers to start a single-node Kafka in Docker on `localhost:19092`, seed it, and save a connection called *Playground* — about thirty seconds, one click. **Kavka does not bundle a broker**: Apache Kafka is a JVM application, so bundling one means shipping a Java runtime, which is exactly what this app exists not to be. With Docker installed the button works; without it, the screen says so in one sentence rather than offering a button that cannot.
@@ -86,7 +104,9 @@ The compose file it runs ships inside the app ([`apps/desktop/src-tauri/playgrou
 
 ### What Kavka sends
 
-Nothing. **There is no telemetry endpoint in the app** — not a disabled one, not one behind a flag. There is no analytics, no update ping, no crash reporter phoning home, and no account.
+**One request, and it is the update check.** At most once a day, Kavka asks github.com what the newest release is. It carries nothing that identifies you — no id, no account, no machine fingerprint — and nothing about your clusters, your topics or your data. It is on by default, *Settings → Updates* turns it off, and nothing is downloaded or installed without an explicit click ([Updating](#updating)).
+
+Past that, nothing. **There is no telemetry endpoint in the app** — not a disabled one, not one behind a flag. No analytics, no crash reporter phoning home, no account, and no request anywhere in Kavka that carries a broker address, a topic name or a byte you read out of one.
 
 The one adjacent feature is **opt-in diagnostics**, off by default, in the About panel. Turned on, it writes rotating text files (5 files, 512 KB each, 2.5 MB total) into the app's data directory: Rust panics, uncaught errors in the window, and one line per launch with the version and OS. It never logs payloads, keys, headers or anything read out of your keychain. There is an *Open logs folder* button and a *Delete them* button beside it, and the file is plain text so you can read it before you attach it to an issue.
 

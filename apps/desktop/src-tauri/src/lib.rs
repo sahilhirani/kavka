@@ -3,6 +3,13 @@
 //! Anything that blocks (file I/O, keychain, librdkafka calls — including
 //! client drop) runs on the blocking pool, never the event loop.
 
+/// The one thing in this shell that is not a bridge to kavka-core: Kavka
+/// asking GitHub whether a newer Kavka exists. It is a module rather than a
+/// section of this file because the two channels have real logic — comparators,
+/// tag parsing, a REST client — and that logic is worth unit tests, which
+/// nothing else here has enough of its own thinking to need.
+mod update;
+
 use kavka_core::acl::{AclBinding, AclFilter};
 use kavka_core::admin::{
     self, ConfigEntry, GroupDetail, GroupInfo, GroupOffset, OffsetResetSpec, TopicConfig,
@@ -1576,6 +1583,71 @@ fn mask_rows(rules: &MaskSet, columns: &[SqlColumn], rows: &mut [Vec<serde_json:
 #[tauri::command]
 fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+// ── updates ────────────────────────────────────────────────────────────────
+//
+// Four commands, and between them they are the ONLY reason Kavka contacts a
+// server nobody configured. `updates_check` is a read the user can switch off;
+// the other three run because somebody clicked. Everything that decides
+// anything lives in src/update.rs — these are the bridge, like the rest of this
+// file.
+
+/// Is there a newer Kavka on this channel?
+///
+/// Returns a verdict rather than a `Result`: "we could not ask" is one of the
+/// four things the UI has to be able to say, and a rejected promise would give
+/// it a stack trace to render instead of a sentence. Safe to call concurrently
+/// — nothing in `update` is shared, and this holds no state between calls.
+#[tauri::command]
+async fn updates_check(app: AppHandle, channel: update::Channel) -> update::UpdateCheck {
+    update::check(&app, channel).await
+}
+
+/// Downloads that update, checks its signature against the key baked into this
+/// binary, and hands it to the installer. Never called on its own — there is no
+/// caller in this process, only the Install button.
+///
+/// **On Windows this does not return.** The plugin starts the NSIS installer
+/// and ends the process, because Windows cannot replace a running executable;
+/// [`stop_sessions_before_update_exit`] is the last thing Kavka does. On macOS
+/// it returns once the new bundle is in place and the UI follows with
+/// `updates_restart`.
+#[tauri::command]
+async fn updates_install(app: AppHandle, channel: update::Channel) -> CmdResult<()> {
+    update::install(&app, channel).await
+}
+
+/// Relaunches Kavka after a macOS install.
+///
+/// `request_restart` rather than `restart`: it goes through `RunEvent::Exit`,
+/// which is where `stop_all_sessions` hangs — so a restart puts the tails,
+/// searches, copies and monitor threads down the same way quitting does, rather
+/// than re-execing over the top of a live librdkafka client.
+#[tauri::command]
+fn updates_restart(app: AppHandle) {
+    app.request_restart();
+}
+
+/// The run number of main this binary was built from, or `null` for a stable
+/// or local build. Compile-time — see `update::build_number`.
+#[tauri::command]
+fn updates_build_number() -> Option<u64> {
+    update::build_number()
+}
+
+/// The last code that runs before a Windows update installer takes over.
+///
+/// The updater plugin ends this process with `std::process::exit(0)` the moment
+/// it has launched the installer, which skips `RunEvent::Exit` and therefore
+/// skips the shutdown every other exit path gets. Live sessions each hold a
+/// librdkafka client and the monitors each hold a redb write handle; nothing is
+/// joined here, for the same reason nothing is joined on quit — a hung broker
+/// must never be able to stop Kavka from exiting.
+pub(crate) fn stop_sessions_before_update_exit(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.stop_all_sessions();
+    }
 }
 
 // ── MCP server ─────────────────────────────────────────────────────────────
@@ -5607,6 +5679,24 @@ pub fn run() {
         // person. Granted `notification:default` in capabilities/default.json,
         // and every toast is sent from Rust — the webview never asks for one.
         .plugin(tauri_plugin_notification::init())
+        // The updater. Driven entirely from Rust (src/update.rs) and not
+        // granted to the webview — see the note in capabilities/default.json,
+        // which is the same note the notification plugin already carries.
+        //
+        // It is what verifies the minisign signature on a downloaded installer
+        // against `plugins.updater.pubkey` in tauri.conf.json. That check is
+        // the reason Kavka is willing to install anything at all, and it is
+        // not optional: there is no code path here that downloads and runs a
+        // binary without it.
+        //
+        // `tauri-plugin-process` is deliberately absent, not forgotten. The
+        // macOS relaunch after an install is `updates_restart`, which calls
+        // core Tauri's `request_restart` — through `RunEvent::Exit`, where the
+        // sessions are stopped — rather than the plugin's `relaunch`, which
+        // re-execs over the top of live librdkafka clients. Registering it
+        // would add a dependency and an init call for a webview API no code
+        // here calls and no capability grants.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             // Alert rules sit beside profiles.json in the config dir; the
@@ -5659,6 +5749,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             core_version,
+            updates_check,
+            updates_install,
+            updates_restart,
+            updates_build_number,
             mcp_info,
             sandbox_status,
             sandbox_start,

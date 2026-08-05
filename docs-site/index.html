@@ -172,7 +172,9 @@
             <p class="hero-footnote">
               Connection passwords go to the operating system's keychain.
               Nothing about your clusters leaves the machine — there is no
-              telemetry endpoint in the app.
+              telemetry endpoint in the app. The one request Kavka makes on its
+              own is a check for a new release on github.com, at most once a
+              day; it has an off switch and it installs nothing by itself.
             </p>
           </div>
 
@@ -372,6 +374,20 @@
                   motion switch. Settings opens with nothing connected, there
                   is no Save button, and the accent carries no meaning of its
                   own — so changing it cannot hide a warning.
+                </p>
+              </div>
+
+              <div class="feature">
+                <span class="feature-eyebrow">Updates</span>
+                <h3>Nothing installs unless you click</h3>
+                <p>
+                  Kavka asks github.com for the newest release at most once a
+                  day — nothing identifying, nothing about your clusters — and
+                  tells you what it found. It downloads and installs nothing
+                  until you click <em>Install</em>, and what it downloads is
+                  checked against a signing key built into the app. Two
+                  channels, Stable and opt-in Every build, and one switch in
+                  Settings → Updates that stops the asking.
                 </p>
               </div>
             </div>
@@ -673,7 +689,8 @@
               <dd>
                 Free, forever, for anything — at home, at work, at a company of
                 any size, against production clusters. No registration, no seat
-                count, no phone-home. Nothing is asked of you.
+                count, no activation call, no licence to check. Nothing is asked
+                of you.
               </dd>
 
               <dt>Modifying it</dt>

@@ -138,6 +138,11 @@ const en = {
     "A desktop client for Apache Kafka. Kavka runs entirely on this machine: passwords go to your operating system's keychain, and nothing about your clusters leaves this computer.",
   "about.coreVersion": "Core version",
   "about.versionLoading": "Reading it now…",
+  // Beside the version, and only on an install that carries one. Every build
+  // ships the same `tauri.conf.json` version — MSI can't take a prerelease
+  // string — so on an automated build the version alone cannot tell you which
+  // one you are running, and the run number is the only thing that can.
+  "about.build": "Build {number}",
   "about.licence": "Licence",
   "about.licenceValue": "Free and open source under AGPL-3.0",
   "about.language": "Language",
@@ -859,6 +864,83 @@ const en = {
   "settings.about.help":
     "The About panel carries Kavka's version and licence, the MCP server settings and the crash-diagnostics switch.",
   "settings.about.open": "Open About",
+
+  // ── Updates ─────────────────────────────────────────────────────────────
+  //
+  // THE HONESTY DOCTRINE, IN THE COPY ITSELF. Kavka now makes exactly one
+  // request nobody asked for, and these sentences are the app's account of
+  // it. Every one of them names something the reader can check: the host, the
+  // frequency, what the request does not carry, where the switch is, and that
+  // nothing is downloaded or installed without a press. Do not compress them
+  // into "we check for updates" — that is the sentence this section exists
+  // not to be.
+  "settings.section.updates": "Updates",
+
+  "settings.updates.auto.title": "Check for updates",
+  "settings.updates.auto.label": "Let Kavka look for new releases",
+  "settings.updates.auto.hint":
+    "On by default. Kavka asks github.com what the newest release is, at most once a day — the same question the public Releases page answers for anybody. It carries nothing that identifies you and nothing about your clusters, and it downloads and installs nothing on its own. This is the only request Kavka makes that you didn't ask for; turn this off and there is none.",
+
+  "settings.updates.channel.title": "Which releases",
+  "settings.updates.channel.help":
+    "Stable follows the releases a person tagged on purpose. Every build follows the pre-release published by each merge to main — newer, and not held to the same bar.",
+  "settings.updates.channel.stable": "Stable",
+  "settings.updates.channel.builds": "Every build",
+  "settings.updates.channel.warning":
+    "Builds are published automatically from main. They compile and they pass the checks, but nobody has decided they are good. Take this only if you want the newest work and could reinstall a stable release if one misbehaves.",
+
+  "settings.updates.check.title": "Check now",
+  "settings.updates.check.help":
+    "Asks github.com straight away, whatever the switch above says. Nothing is downloaded.",
+  "settings.updates.check.button": "Check now",
+  "settings.updates.check.checking": "Asking github.com…",
+
+  "settings.updates.result.update":
+    "Kavka {version} is available. The notice at the top of the window has the Install button.",
+  "settings.updates.result.currentStable": "You are on the newest stable release.",
+  "settings.updates.result.currentBuild": "You are on the newest build.",
+  // The stable endpoint answers 404 because no stable release exists yet.
+  // That is a fact about the project, not a failure, and it is said as one.
+  //
+  // TWO THINGS THIS SENTENCE DELIBERATELY DOES NOT DO. It is only ever shown
+  // for an OBSERVED 404 — a rate limit or a GitHub outage is an error and gets
+  // the error surface (see `stable_absence` in src-tauri/src/update.rs), never
+  // this. And it says nothing about what the reader is running: a local
+  // `cargo tauri dev` build carries no build number, so "you are on an
+  // automated build" would have been a small false statement on the honesty
+  // surface. What this install is, is the About panel's build line's job.
+  "settings.updates.result.noStable":
+    "No stable release has been published yet — so far there are only automated builds from main. Switch to Every build to follow those.",
+
+  "settings.updates.lastChecked": "Kavka last checked {when}.",
+  // Never "last checked" over a request that failed: the whole point of the
+  // line is that it can be trusted.
+  "settings.updates.lastCheckedFailed":
+    "Kavka last tried {when} and couldn't reach github.com.",
+  "settings.updates.never": "Kavka hasn't checked yet.",
+
+  "updates.banner.label": "Update notice — Kavka {version}",
+  "updates.banner.title": "Kavka {version} is available",
+  "updates.banner.body":
+    "Nothing has been downloaded. Kavka fetches the installer only when you press Install, and checks it against Kavka's own signing key before anything runs.",
+  "updates.banner.bodyBuild":
+    "This is an automated build from the newest merge to main, not a stable release — nobody has decided it is good. Nothing has been downloaded; Kavka fetches the installer only when you press Install, and checks it against Kavka's own signing key before anything runs.",
+  "updates.banner.willClose":
+    "Installing closes Kavka so the installer can replace it. Finish what you are doing first, then open Kavka again when the installer is done.",
+  "updates.banner.willRestart":
+    "Installing closes Kavka and opens it again once the update is in place. Finish what you are doing first.",
+  "updates.banner.notes": "What changed",
+  "updates.banner.releasePage": "Release page",
+  "updates.banner.install": "Install…",
+  "updates.banner.installing": "Downloading…",
+  "updates.banner.notNow": "Not now",
+
+  "updates.error.unreachable.title": "Kavka couldn't reach github.com",
+  "updates.error.unreachable.detail":
+    "Nothing was downloaded and nothing on this machine changed. Check the connection, or whether a proxy or a firewall sits between you and github.com, then try again.",
+  "updates.error.title": "The update didn't finish",
+  "updates.error.detail":
+    "Nothing was installed and nothing on this machine changed. The full text is under Show details, and the release page has installers you can download yourself.",
 
   "unit.seconds": "{count, plural, one {# second} other {# seconds}}",
   "unit.minutes": "{count, plural, one {# minute} other {# minutes}}",

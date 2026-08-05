@@ -137,6 +137,7 @@ const de: Catalog = {
     "Ein Desktop-Client für Apache Kafka. Kavka läuft vollständig auf diesem Rechner: Passwörter gehen in den Schlüsselbund Ihres Betriebssystems, und nichts über Ihre Cluster verlässt diesen Computer.",
   "about.coreVersion": "Core-Version",
   "about.versionLoading": "Wird gerade gelesen…",
+  "about.build": "Build {number}",
   "about.licence": "Lizenz",
   "about.licenceValue": "Freie und quelloffene Software unter AGPL-3.0",
   "about.language": "Sprache",
@@ -841,6 +842,64 @@ const de: Catalog = {
   "settings.about.help":
     "Das Über-Panel enthält Kavkas Version und Lizenz, die MCP-Servereinstellungen und den Schalter für Absturzdiagnose.",
   "settings.about.open": "Über öffnen",
+
+  // ── Updates ─────────────────────────────────────────────────────────────
+  "settings.section.updates": "Updates",
+
+  "settings.updates.auto.title": "Nach Updates suchen",
+  "settings.updates.auto.label": "Kavka nach neuen Releases sehen lassen",
+  "settings.updates.auto.hint":
+    "Standardmäßig an. Kavka fragt github.com höchstens einmal am Tag, welches das neueste Release ist — dieselbe Frage, die die öffentliche Releases-Seite jedem beantwortet. Die Anfrage enthält nichts, was Sie identifiziert, und nichts über Ihre Cluster, und sie lädt und installiert von sich aus nichts. Das ist die einzige Anfrage, die Kavka ungefragt stellt; schalten Sie sie ab, gibt es keine.",
+
+  "settings.updates.channel.title": "Welche Releases",
+  "settings.updates.channel.help":
+    "Stabil folgt den Releases, die ein Mensch bewusst getaggt hat. Jeder Build folgt der Vorabversion, die jeder Merge nach main veröffentlicht — neuer, und nicht an denselben Maßstab gebunden.",
+  "settings.updates.channel.stable": "Stabil",
+  "settings.updates.channel.builds": "Jeder Build",
+  "settings.updates.channel.warning":
+    "Builds werden automatisch aus main veröffentlicht. Sie kompilieren und bestehen die Prüfungen, aber niemand hat entschieden, dass sie gut sind. Nehmen Sie das nur, wenn Sie die neueste Arbeit wollen und ein stabiles Release neu installieren könnten, falls sich ein Build danebenbenimmt.",
+
+  "settings.updates.check.title": "Jetzt prüfen",
+  "settings.updates.check.help":
+    "Fragt sofort bei github.com nach, unabhängig vom Schalter oben. Es wird nichts heruntergeladen.",
+  "settings.updates.check.button": "Jetzt prüfen",
+  "settings.updates.check.checking": "github.com wird gefragt…",
+
+  "settings.updates.result.update":
+    "Kavka {version} ist verfügbar. Der Hinweis oben im Fenster hat die Schaltfläche zum Installieren.",
+  "settings.updates.result.currentStable":
+    "Sie haben das neueste stabile Release.",
+  "settings.updates.result.currentBuild": "Sie haben den neuesten Build.",
+  "settings.updates.result.noStable":
+    "Es wurde noch kein stabiles Release veröffentlicht — bisher gibt es nur automatische Builds aus main. Wechseln Sie zu „Jeder Build“, um ihnen zu folgen.",
+
+  "settings.updates.lastChecked": "Kavka hat zuletzt {when} geprüft.",
+  "settings.updates.lastCheckedFailed":
+    "Kavka hat es zuletzt {when} versucht und github.com nicht erreicht.",
+  "settings.updates.never": "Kavka hat noch nicht geprüft.",
+
+  "updates.banner.label": "Update-Hinweis — Kavka {version}",
+  "updates.banner.title": "Kavka {version} ist verfügbar",
+  "updates.banner.body":
+    "Es wurde nichts heruntergeladen. Kavka holt das Installationsprogramm erst, wenn Sie auf Installieren drücken, und prüft es gegen Kavkas eigenen Signaturschlüssel, bevor irgendetwas ausgeführt wird.",
+  "updates.banner.bodyBuild":
+    "Das ist ein automatischer Build vom neuesten Merge nach main, kein stabiles Release — niemand hat entschieden, dass er gut ist. Es wurde nichts heruntergeladen; Kavka holt das Installationsprogramm erst, wenn Sie auf Installieren drücken, und prüft es gegen Kavkas eigenen Signaturschlüssel, bevor irgendetwas ausgeführt wird.",
+  "updates.banner.willClose":
+    "Beim Installieren schließt sich Kavka, damit das Installationsprogramm es ersetzen kann. Beenden Sie vorher, was Sie gerade tun, und öffnen Sie Kavka wieder, sobald das Installationsprogramm fertig ist.",
+  "updates.banner.willRestart":
+    "Beim Installieren schließt sich Kavka und öffnet sich wieder, sobald das Update eingespielt ist. Beenden Sie vorher, was Sie gerade tun.",
+  "updates.banner.notes": "Was sich geändert hat",
+  "updates.banner.releasePage": "Release-Seite",
+  "updates.banner.install": "Installieren…",
+  "updates.banner.installing": "Wird heruntergeladen…",
+  "updates.banner.notNow": "Jetzt nicht",
+
+  "updates.error.unreachable.title": "Kavka konnte github.com nicht erreichen",
+  "updates.error.unreachable.detail":
+    "Es wurde nichts heruntergeladen und auf diesem Rechner hat sich nichts geändert. Prüfen Sie die Verbindung oder ob ein Proxy oder eine Firewall zwischen Ihnen und github.com steht, und versuchen Sie es dann erneut.",
+  "updates.error.title": "Das Update wurde nicht abgeschlossen",
+  "updates.error.detail":
+    "Es wurde nichts installiert und auf diesem Rechner hat sich nichts geändert. Der vollständige Text steht unter „Details anzeigen“, und auf der Release-Seite liegen Installationsprogramme, die Sie selbst herunterladen können.",
 
   "unit.seconds": "{count, plural, one {# Sekunde} other {# Sekunden}}",
   "unit.minutes": "{count, plural, one {# Minute} other {# Minuten}}",

@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": ["playground/docker-compose.yml"],
     "icon": [
       "icons/32x32.png",
@@ -34,5 +35,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJCQTcyQTI3RjZBNjA1MTcKUldRWEJhYjJKeXFuSy9rTWZOK21mVkhxR3kvYlZBL2NoWXlJbjhOelRJSXYvSmRzYytMb0lUV2oK",
+      "endpoints": [
+        "https://github.com/sahilhirani/kavka/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
