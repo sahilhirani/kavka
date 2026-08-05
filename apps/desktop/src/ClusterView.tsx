@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import AclsTab from "./AclsTab";
 import AlertsTab from "./AlertsTab";
 import {
@@ -16,21 +16,44 @@ import { ensureMaskRules } from "./masking";
 import MaskingTab from "./MaskingTab";
 import MonitoringTab from "./MonitoringTab";
 import { formatDuration } from "./monitoring";
+import Perch from "./Perch";
 import QuorumPanel from "./QuorumPanel";
 import { EnvChip } from "./Sidebar";
 import StreamsTab from "./StreamsTab";
 import { lsGet, lsSet } from "./storage";
+import { useI18n, type MessageKey } from "./i18n";
 import { ToastStack, useToasts } from "./Toast";
 import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
 
 /**
  * THE CLUSTER WORKSPACE.
  *
- * One connected cluster, six views behind DESIGN's 30px tab strip (§5.1):
- * Overview · Topics · Groups · ACLs · Brokers · Connect. The strip sits under
- * the cluster's identity rather than above it, because the identity — name,
- * environment chip and bootstrap address — is prod guardrail layer 3 and must
- * not scroll or switch away with the content.
+ * One connected cluster, ten screens behind a GROUPED RAIL. Ledger showed the
+ * ten as an undifferentiated strip of equal tabs, which is most of why the app
+ * read as hard to follow: ten peers in a row tell you nothing about which one
+ * answers the question you arrived with.
+ *
+ * Jackdaw names the groups after what their screens are ABOUT, so a user who
+ * does not yet know what an ACL is can still find it under Safety:
+ *
+ *   Cluster       Home · Topics · Consumer groups · Brokers
+ *   Observe       Monitoring · Alerts · Streams
+ *   Safety        ACLs · Masking
+ *   Integrations  Connect
+ *
+ * FULL COVERAGE IS A CONTRACT. Every screen reachable before this redesign is
+ * reachable here. The Jackdaw mockup drew a four-item rail and left ACLs,
+ * Connect, Masking and Streams with no home at all — that was an execution gap
+ * in a static drawing, not the bet the direction is making.
+ *
+ * TabKey VALUES ARE PERSISTED and must not change. They are written into every
+ * user's `kavka.cluster.<id>.view` record; renaming one silently moves people
+ * off the screen they were last on. Only the presentation moved.
+ *
+ * NOT A TABLIST. A `role="tablist"` may not contain group headings, and the
+ * headings are the entire point — so this is a `<nav>` whose current item
+ * carries `aria-current="page"`. Arrow-key roving is a tablist affordance and
+ * goes with it; Tab walks the rail, as it does in every other sidebar.
  *
  * Where the user was is remembered PER CLUSTER, not globally: switching to a
  * prod cluster must never drop you into the view you had open on dev. The
@@ -50,20 +73,172 @@ type TabKey =
   | "masking"
   | "streams";
 
-const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
-  { key: "overview", label: "Overview" },
-  { key: "topics", label: "Topics" },
-  { key: "groups", label: "Groups" },
-  { key: "acls", label: "ACLs" },
-  { key: "brokers", label: "Brokers" },
-  { key: "connect", label: "Connect" },
-  { key: "monitoring", label: "Monitoring" },
-  { key: "alerts", label: "Alerts" },
-  // Beside Alerts on purpose: both are Kavka's own notes about this
-  // connection, stored on this machine, and neither touches the cluster.
-  { key: "masking", label: "Masking" },
-  { key: "streams", label: "Streams" },
+interface TabDef {
+  key: TabKey;
+  labelKey: MessageKey;
+  icon: ReactNode;
+}
+
+interface RailGroup {
+  id: string;
+  labelKey: MessageKey;
+  items: readonly TabDef[];
+}
+
+// One stroke weight, one 24-box, no fills — the rail is a list of words with
+// a glyph in front of each, never a list of glyphs.
+function icon(path: ReactNode): ReactNode {
+  return (
+    <svg
+      className="crail-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {path}
+    </svg>
+  );
+}
+
+const RAIL: readonly RailGroup[] = [
+  {
+    id: "cluster",
+    labelKey: "rail.group.cluster",
+    items: [
+      {
+        key: "overview",
+        labelKey: "rail.item.overview",
+        icon: icon(
+          <>
+            <path d="M4 11.2 12 4l8 7.2" />
+            <path d="M6 10.4V20h12v-9.6" />
+            <path d="M10 20v-5h4v5" />
+          </>,
+        ),
+      },
+      {
+        key: "topics",
+        labelKey: "rail.item.topics",
+        icon: icon(
+          <>
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </>,
+        ),
+      },
+      {
+        key: "groups",
+        labelKey: "rail.item.groups",
+        icon: icon(
+          <>
+            <circle cx="9" cy="8.5" r="3" />
+            <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
+            <path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 19a5.5 5.5 0 0 0-2.4-4.5" />
+          </>,
+        ),
+      },
+      {
+        key: "brokers",
+        labelKey: "rail.item.brokers",
+        icon: icon(
+          <>
+            <rect x="3" y="4" width="18" height="6" rx="2" />
+            <rect x="3" y="14" width="18" height="6" rx="2" />
+            <path d="M7 7h.01M7 17h.01" />
+          </>,
+        ),
+      },
+    ],
+  },
+  {
+    id: "observe",
+    labelKey: "rail.group.observe",
+    items: [
+      {
+        key: "monitoring",
+        labelKey: "rail.item.monitoring",
+        icon: icon(<path d="M3 18l5-6 4 3 5-8 4 5" />),
+      },
+      {
+        key: "alerts",
+        labelKey: "rail.item.alerts",
+        icon: icon(
+          <>
+            <path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+            <path d="M10.5 20a2 2 0 0 0 3 0" />
+          </>,
+        ),
+      },
+      {
+        key: "streams",
+        labelKey: "rail.item.streams",
+        icon: icon(
+          <>
+            <path d="M3 7.5c3-2 6 2 9 0s6-2 9 0" />
+            <path d="M3 12.5c3-2 6 2 9 0s6-2 9 0" />
+            <path d="M3 17.5c3-2 6 2 9 0s6-2 9 0" />
+          </>,
+        ),
+      },
+    ],
+  },
+  {
+    id: "safety",
+    labelKey: "rail.group.safety",
+    items: [
+      {
+        key: "acls",
+        labelKey: "rail.item.acls",
+        icon: icon(
+          <>
+            <path d="M12 3l7 3v6c0 4.2-2.9 7.7-7 9-4.1-1.3-7-4.8-7-9V6z" />
+            <path d="M9.5 12l1.8 1.8L15 10" />
+          </>,
+        ),
+      },
+      // Beside ACLs on purpose: both answer "who can see what". Masking is
+      // Kavka's own note about this connection and never touches the cluster,
+      // which the screen itself says out loud.
+      {
+        key: "masking",
+        labelKey: "rail.item.masking",
+        icon: icon(
+          <>
+            <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+            <circle cx="12" cy="12" r="2.6" />
+            <path d="M4 20L20 4" />
+          </>,
+        ),
+      },
+    ],
+  },
+  {
+    id: "integrations",
+    labelKey: "rail.group.integrations",
+    items: [
+      {
+        key: "connect",
+        labelKey: "rail.item.connect",
+        icon: icon(
+          <>
+            <path d="M9 15l-3 3a3.5 3.5 0 0 1-5-5l3-3" />
+            <path d="M15 9l3-3a3.5 3.5 0 0 1 5 5l-3 3" />
+            <path d="M9.5 14.5l5-5" />
+          </>,
+        ),
+      },
+    ],
+  },
 ];
+
+/** Every key the rail renders — the guard that keeps coverage a contract. */
+const TABS: ReadonlyArray<{ key: TabKey }> = RAIL.flatMap((group) =>
+  group.items.map((item) => ({ key: item.key })),
+);
 
 interface Placement {
   tab: TabKey;
@@ -205,8 +380,9 @@ export default function ClusterView({
   onTopicActions,
   onOpenCluster,
 }: ClusterViewProps) {
+  const { t } = useI18n();
   const [place, setPlace] = useState<Placement>(() => readPlacement(profile.id));
-  const tabRefs = useRef<Partial<Record<TabKey, HTMLButtonElement | null>>>({});
+  const address = profile.bootstrap_servers.join(", ");
 
   useEffect(() => {
     lsSet(placementKey(profile.id), JSON.stringify(place));
@@ -347,24 +523,6 @@ export default function ClusterView({
     onDisconnect(profile.id);
   }, [onDisconnect, profile.id]);
 
-  /** Arrow keys walk the strip — a tablist that only responds to clicks is a
-      row of buttons wearing a costume. */
-  const onTabKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-      let next: number | null = null;
-      if (e.key === "ArrowRight") next = (index + 1) % TABS.length;
-      else if (e.key === "ArrowLeft") next = (index - 1 + TABS.length) % TABS.length;
-      else if (e.key === "Home") next = 0;
-      else if (e.key === "End") next = TABS.length - 1;
-      if (next === null) return;
-      e.preventDefault();
-      const target = TABS[next];
-      goTab(target.key);
-      tabRefs.current[target.key]?.focus();
-    },
-    [goTab],
-  );
-
   // The message browser and search are the two views that own the full height
   // of the workspace: each has its own scrollport, its own status line and a
   // docked inspector, none of which can live inside a page that scrolls as a
@@ -377,89 +535,83 @@ export default function ClusterView({
       place.pane === "search" ||
       place.pane === "sql");
 
+  const currentLabel = t(
+    RAIL.flatMap((g) => g.items).find((i) => i.key === place.tab)?.labelKey ??
+      "rail.item.overview",
+  );
+
   return (
     <div className={`cluster-view${full ? " cluster-view-full" : ""}`}>
-      <header className="view-header">
-        <div className="view-title-row">
-          <div className="view-title-id">
-            <h1 className="view-title">{profile.name}</h1>
+      <nav className="crail" aria-label={t("rail.label")}>
+        {/* Prod guardrail layer 3 lives here now: the name, the environment
+            chip and the bootstrap address are pinned beside every screen
+            rather than above one of them. Most prod accidents are
+            right-action-wrong-cluster. */}
+        <div className="crail-id">
+          <div className="crail-id-line">
+            <h1 className="crail-name">{profile.name}</h1>
             <EnvChip env={profile.environment} />
-            {profile.read_only && (
-              <span
-                className="readonly-chip"
-                title="This connection is read-only. Turn that off in the connection's settings to produce or edit."
-              >
-                read-only
-              </span>
-            )}
           </div>
+          <span className="crail-address" title={address}>
+            {address}
+          </span>
+          {profile.read_only && (
+            <span className="readonly-chip" title={t("app.readonlyTitle")}>
+              {t("app.readonlyChip")}
+            </span>
+          )}
+        </div>
+
+        {RAIL.map((group) => (
+          <div className="crail-group" key={group.id}>
+            <h2 className="crail-label">{t(group.labelKey)}</h2>
+            {group.items.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className="crail-item"
+                // Not aria-selected: this is navigation between screens, not
+                // a tab in a tablist — see the header comment.
+                aria-current={place.tab === item.key ? "page" : undefined}
+                onClick={() => goTab(item.key)}
+              >
+                {item.icon}
+                {t(item.labelKey)}
+                {/* The alert counter. A number in the badge, the word in its
+                    title AND in an sr-only span — never a bare coloured dot.
+                    It is on the rail rather than the status bar because the
+                    status bar belongs to the app shell, not to one cluster. */}
+                {item.key === "alerts" && firing.size > 0 && (
+                  <span
+                    className="crail-badge"
+                    title={t("rail.firingTitle", { count: firing.size })}
+                  >
+                    {firing.size}
+                    <span className="sr-only"> {t("rail.firing")}</span>
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        ))}
+
+        <div className="crail-foot">
           <button
             type="button"
             className="btn"
             onClick={() => onDisconnect(profile.id)}
           >
-            Disconnect
+            {t("rail.disconnect")}
           </button>
         </div>
-        {/* Prod guardrail layer 3: the address stays on screen next to the
-            name, not only in the sidebar. */}
-        <span className="view-address">
-          {profile.bootstrap_servers.join(", ")}
-        </span>
-      </header>
+      </nav>
 
-      <div className="tabstrip" role="tablist" aria-label="Cluster views">
-        {TABS.map((tab, index) => (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            id={`clustertab-${tab.key}`}
-            aria-selected={place.tab === tab.key}
-            // Only ONE panel is mounted, so only the selected tab has a
-            // panel to point at. An `aria-controls` naming an id that is not
-            // in the document is a broken reference on nine tabs out of ten.
-            aria-controls={
-              place.tab === tab.key ? `clusterpanel-${tab.key}` : undefined
-            }
-            tabIndex={place.tab === tab.key ? 0 : -1}
-            ref={(el) => {
-              tabRefs.current[tab.key] = el;
-            }}
-            className={`tab${place.tab === tab.key ? " tab-active" : ""}`}
-            onClick={() => goTab(tab.key)}
-            onKeyDown={(e) => onTabKeyDown(e, index)}
-          >
-            {tab.label}
-            {/* The alert counter §5.1 asks for. It carries a word in its title
-                and a number in the badge, never a bare coloured dot — and it
-                is on the tab rather than the status bar because the status bar
-                belongs to the app shell, not to one cluster. */}
-            {tab.key === "alerts" && firing.size > 0 && (
-              <span
-                className="tab-badge"
-                title={`${firing.size} alert rule${
-                  firing.size === 1 ? " is" : "s are"
-                } firing right now`}
-              >
-                {firing.size}
-                <span className="sr-only"> firing</span>
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div
-        className="tabpanel"
-        role="tabpanel"
-        id={`clusterpanel-${place.tab}`}
-        aria-labelledby={`clustertab-${place.tab}`}
-      >
+      <div className="tabpanel" role="region" aria-label={currentLabel}>
         {place.tab === "overview" && (
           <OverviewTab
             profile={profile}
             overview={overview}
+            firing={firing.size}
             onDanger={reportDanger}
           />
         )}
@@ -551,19 +703,89 @@ export default function ClusterView({
   );
 }
 
+/**
+ * THE REFERENCE PERCH.
+ *
+ * Every other screen's verdict is written against this one, so it is worth
+ * reading as a specimen rather than as a paragraph of markup. Three things
+ * make it honest:
+ *
+ * · It is derived from LIVE state — the broker list the cluster actually
+ *   answered with, and the set of alert rules firing right now. No constant,
+ *   no "looks good" that is true by construction.
+ * · Its worst case is a real case. A cluster that connects and reports zero
+ *   brokers is a real failure mode of a load balancer in front of Kafka, and
+ *   the verdict says so instead of rendering a cheerful "0 brokers".
+ * · It carries a caveat it would be easy to omit: these counts came back at
+ *   the moment of connection and do NOT track the cluster. A banner that let
+ *   a user believe otherwise would be exactly the "cheerful verdict computed
+ *   from stale data" §3 forbids.
+ */
+function OverviewPerch({
+  overview,
+  firing,
+  screen,
+}: {
+  overview: ClusterOverview;
+  firing: number;
+  screen: string;
+}) {
+  const { t } = useI18n();
+  const brokers = overview.brokers.length;
+
+  if (brokers === 0) {
+    return (
+      <Perch screen={screen} tone="problem" caveat={t("perch.overview.noBrokers.next")}>
+        {t("perch.overview.noBrokers")}
+      </Perch>
+    );
+  }
+
+  const counts = t("perch.overview.counts", {
+    brokers,
+    topics: overview.topic_count,
+    partitions: overview.partition_count,
+  });
+
+  if (firing > 0) {
+    return (
+      <Perch screen={screen} tone="watch" caveat={t("perch.overview.snapshot")}>
+        {t("perch.overview.firing", { count: firing, counts })}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch screen={screen} tone="ok" caveat={t("perch.overview.snapshot")}>
+      {counts}
+    </Perch>
+  );
+}
+
 function OverviewTab({
   profile,
   overview,
+  firing,
   onDanger,
 }: {
   profile: ConnectionProfile;
   overview: ClusterOverview;
+  /** How many alert rules are firing right now — live, from the subscription
+      in the parent. The Perch says so. */
+  firing: number;
   /** The quorum panel can raise a banner, and any danger has to reach the
       app root or a prod cluster paints a coral rule behind it (§5.8). */
   onDanger: DangerReport;
 }) {
+  const { t } = useI18n();
   return (
     <>
+      <OverviewPerch
+        overview={overview}
+        firing={firing}
+        screen={t("rail.item.overview")}
+      />
+
       {profile.read_only && (
         <span className="readonly-note">
           This connection is read-only. Turn that off in the connection's

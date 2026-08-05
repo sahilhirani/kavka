@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useI18n } from "./i18n";
 import Overlay from "./Overlay";
 
 /**
@@ -63,6 +64,7 @@ export default function ConfirmModal({
   onCancel,
   onConfirm,
 }: ConfirmModalProps) {
+  const { t, tx } = useI18n();
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const [typed, setTyped] = useState("");
 
@@ -77,9 +79,9 @@ export default function ConfirmModal({
   }, [matches, busy, onConfirm]);
 
   const reason = busy
-    ? (busyLabel ?? "Kavka is working on it")
+    ? (busyLabel ?? t("confirm.busy"))
     : !matches
-      ? `Type ${typeToConfirm} exactly to confirm this`
+      ? t("confirm.type.reason", { name: typeToConfirm ?? "" })
       : undefined;
 
   return (
@@ -89,6 +91,17 @@ export default function ConfirmModal({
       initialFocus={cancelRef}
       onClose={onCancel}
     >
+      {/* LAW 2, AND THE REASON IT IS NEW HERE. Ledger's destructive modal was
+          a red wire on a cold near-black ground; Jackdaw's ground is warm
+          brown, which makes the same hairline read softer at the same
+          contrast ratio. A guardrail may not get quieter because the palette
+          got warmer, so the wire now has a WORD above the title — the state
+          is spelled, not tinted, and the modal stops depending on anyone
+          noticing a 2px edge. */}
+      {tone === "destructive" && (
+        <p className="modal-kicker">{t("confirm.kicker.destructive")}</p>
+      )}
+
       <h2 className="modal-title" id="confirm-title">
         {title}
       </h2>
@@ -97,11 +110,14 @@ export default function ConfirmModal({
       {needsTyping && (
         <div className="field confirm-type">
           <label className="field-label" htmlFor="confirm-type-input">
-            {typePrompt ?? (
-              <>
-                Type <code>{typeToConfirm}</code> to confirm
-              </>
-            )}
+            {/* `tx`, not `t`: the name is a LITERAL the user has to reproduce
+                character for character, so it arrives as a <code> element
+                spliced into the translated sentence rather than as text a
+                catalog could reflow. */}
+            {typePrompt ??
+              tx("confirm.type.label", {
+                name: <code>{typeToConfirm}</code>,
+              })}
           </label>
           <input
             id="confirm-type-input"
@@ -126,7 +142,7 @@ export default function ConfirmModal({
           disabled={busy}
           title={busy ? busyLabel : undefined}
         >
-          Cancel
+          {t("common.cancel")}
         </button>
         {/* A filled red button only ever exists one click from the action —
             and only when the action is actually destructive. */}

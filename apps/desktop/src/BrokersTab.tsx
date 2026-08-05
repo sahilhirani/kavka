@@ -11,6 +11,8 @@ import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { useIsProtected } from "./environments";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import QuotasPanel from "./QuotasPanel";
 import { ToastStack, useToasts } from "./Toast";
@@ -101,10 +103,12 @@ export default function BrokersTab({
   const push = toaster.push;
   const seq = useRef(0);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
+  const screen = t("rail.item.brokers");
 
   const fetchConfigs = useCallback(
     async (id: number) => {
@@ -186,6 +190,23 @@ export default function BrokersTab({
         {error !== null && (
           <ErrorBanner raw={error} onDismiss={() => setError(null)} />
         )}
+
+        {/* The broker list is handed down from the connection, not fetched here,
+            so this verdict never loads — but a cluster that answered with no
+            brokers at all is a real failure mode and it says so. */}
+        <Perch
+          screen={screen}
+          tone={brokers.length === 0 ? "problem" : "ok"}
+          caveat={
+            brokers.length === 0
+              ? t("perch.brokers.noneNext")
+              : t("perch.brokers.caveat")
+          }
+        >
+          {brokers.length === 0
+            ? t("perch.brokers.none")
+            : t("perch.brokers.counts", { count: brokers.length })}
+        </Perch>
 
         <section className="panel">
           <div className="panel-head">
@@ -284,6 +305,25 @@ export default function BrokersTab({
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
+
+      {/* What this broker actually changes from Kafka's defaults, which is the
+          question anyone opening a settings table is really asking. */}
+      <Perch
+        screen={screen}
+        loading={configs === null && loading}
+        tone={configs === null ? "unknown" : "ok"}
+        caveat={configs === null ? undefined : t("perch.broker.caveat")}
+      >
+        {configs === null
+          ? t("perch.broker.unread")
+          : overrides.length === 0
+            ? t("perch.broker.noOverrides", { broker: brokerId })
+            : t("perch.broker.overrides", {
+                broker: brokerId,
+                count: overrides.length,
+                rest: configs.length - overrides.length,
+              })}
+      </Perch>
 
       <section className="panel">
         <div className="panel-head">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   errorMessage,
   groupDetail,
@@ -11,7 +11,9 @@ import {
 import { useDangerSignal, type DangerReport } from "./danger";
 import { groupDigits } from "./format";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
 import OffsetMigrateModal from "./OffsetMigrateModal";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import ResetOffsetsModal from "./ResetOffsetsModal";
 import ShareGroupsPanel from "./ShareGroupsPanel";
@@ -106,9 +108,17 @@ export default function GroupsTab({
   const listSeq = useRef(0);
   const detailSeq = useRef(0);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   const readOnly = profile.read_only;
+  const screen = t("rail.item.groups");
+
+  /** Groups Kafka is mid-rebalance on — the state the list's verdict turns on. */
+  const rebalancing = useMemo(
+    () => (groups ?? []).filter((g) => stateHealth(g.state) === "warn").length,
+    [groups],
+  );
 
   const fetchGroups = useCallback(async () => {
     const seq = ++listSeq.current;
@@ -200,10 +210,49 @@ export default function GroupsTab({
     const totalLag = offsets.reduce((sum, o) => sum + (o.lag ?? 0), 0);
     const maxLag = offsets.reduce((max, o) => Math.max(max, o.lag ?? 0), 0);
     const topicsRead = new Set(offsets.map((o) => o.topic));
+    const worst = offsets.reduce<GroupOffset | null>(
+      (top, o) => ((o.lag ?? 0) > (top?.lag ?? -1) ? o : top),
+      null,
+    );
 
     return (
       <>
         {banner}
+
+        {/* THE VERDICT. Derived from the offsets this screen is showing, so it
+            cannot disagree with the table under it. The caveat is not optional:
+            these numbers were read once and the group keeps moving. */}
+        <Perch
+          screen={screen}
+          loading={loadingDetail && detail === null}
+          tone={
+            detail === null
+              ? "unknown"
+              : detail.members.length === 0
+                ? "watch"
+                : totalLag > 0
+                  ? "watch"
+                  : "ok"
+          }
+          caveat={detail === null ? undefined : t("perch.group.caveat")}
+        >
+          {detail === null
+            ? t("perch.groups.unread")
+            : offsets.length === 0
+              ? t("perch.group.noOffsets", { group })
+              : detail.members.length === 0
+                ? t("perch.group.noMembers", { group })
+                : totalLag <= 0
+                  ? t("perch.group.caughtUp", { group })
+                  : t("perch.group.behind", {
+                      group,
+                      lag: groupDigits(totalLag),
+                      partitions: offsets.length,
+                      topic: worst?.topic ?? "",
+                      partition: worst?.partition ?? 0,
+                      worst: groupDigits(worst?.lag ?? 0),
+                    })}
+        </Perch>
 
         <section className="panel">
           <div className="panel-head">
@@ -445,9 +494,36 @@ export default function GroupsTab({
 
   // ── The list ───────────────────────────────────────────────────────────
 
+  const counts =
+    groups === null ? "" : t("perch.groups.counts", { count: groups.length });
+
   return (
     <>
       {banner}
+
+      {/* The list's verdict. `groups === null` is the failed read, and it gets
+          "unknown" rather than a cheerful zero — an empty list and a list Kavka
+          never got are different facts. */}
+      <Perch
+        screen={screen}
+        loading={groups === null && loadingList}
+        tone={
+          groups === null || listFailed
+            ? "unknown"
+            : rebalancing > 0
+              ? "watch"
+              : "ok"
+        }
+        caveat={groups === null ? undefined : t("perch.groups.caveat")}
+      >
+        {groups === null || listFailed
+          ? t("perch.groups.unread")
+          : groups.length === 0
+            ? t("perch.groups.none")
+            : rebalancing > 0
+              ? t("perch.groups.rebalancing", { unstable: rebalancing, counts })
+              : counts}
+      </Perch>
 
       <section className="panel">
         <div className="panel-head">

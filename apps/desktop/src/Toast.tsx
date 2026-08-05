@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useI18n } from "./i18n";
 
 /**
  * TOASTS — docs/DESIGN.md §5.8's three-surface rule.
@@ -88,6 +89,7 @@ function ToastRow({
   toast: Toast;
   onDismiss: (id: number) => void;
 }) {
+  const { t } = useI18n();
   const transient = toast.kind === "ok" || toast.kind === "info";
   const [paused, setPaused] = useState(false);
   const timer = useRef<number | null>(null);
@@ -138,7 +140,7 @@ function ToastRow({
           className="btn btn-ghost"
           onClick={() => onDismiss(toast.id)}
         >
-          Dismiss
+          {t("common.dismiss")}
         </button>
       </div>
       {/* The 1px progress hairline — only where there is progress to show.

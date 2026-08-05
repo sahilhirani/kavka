@@ -18,6 +18,7 @@ import { looksLikeDlqTopic, replayBlockedWhy } from "./dlq";
 import ExportButton from "./ExportButton";
 import { groupDigits } from "./format";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
 import MessageGrid, { rowKey, type MessageGridHandle } from "./MessageGrid";
 import MessageInspector from "./MessageInspector";
 import {
@@ -27,6 +28,7 @@ import {
   useMasking,
 } from "./masking";
 import { noteJsonFields } from "./nl";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import SeekBar, {
   buildSeek,
@@ -411,7 +413,32 @@ export default function MessagesView({
       : undefined;
 
   return (
-    <section className="messages-view">
+    // The verdict sits on the CANVAS, above the panel — a sibling of the
+    // browser rather than a row inside it, because it is about the screen and
+    // the panel is one thing on the screen. `.tabpanel` is the flex column
+    // that spaces the two.
+    <>
+      {/* Everything that makes this window's rows less than the whole truth —
+          a range instead of a topic, a rolled buffer, dropped batches, a
+          masking rule — is a caveat here, not a footnote below the fold. */}
+      <MessagesPerch
+        topic={topic}
+        rows={rows.length}
+        fetching={fetching}
+        fetched={fetched}
+        error={error ?? tailError}
+        isProtected={isProtected}
+        tailing={tailing}
+        quiet={quiet}
+        seen={seen}
+        dropped={dropped}
+        trimmed={trimmed}
+        topicIsEmpty={topicIsEmpty}
+        totalMessages={totalMessages}
+        maskedRules={masking.enabled}
+      />
+
+      <section className="messages-view">
       <div className="messages-head">
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
@@ -708,6 +735,119 @@ export default function MessagesView({
           </span>
         </span>
       </div>
-    </section>
+      </section>
+    </>
+  );
+}
+
+/**
+ * THE BROWSER'S VERDICT.
+ *
+ * The hard part of this screen is not what is on it, it is what ISN'T: a fetch
+ * shows a RANGE and a tail shows a WINDOW, and both look exactly like a table
+ * of everything in the topic. So the caveat is assembled from every fact that
+ * makes the rows less than the whole story — the range, the 5 000-row cap, the
+ * batches the session dropped, the masking rules that rewrote payloads on the
+ * way in — and none of them is allowed behind a disclosure.
+ *
+ * The tone is about the ANSWER's completeness, not the cluster's health: a
+ * live tail that has dropped a batch is "watch" even though nothing is broken,
+ * because what is on screen no longer matches what went past.
+ */
+function MessagesPerch({
+  topic,
+  rows,
+  fetching,
+  fetched,
+  error,
+  isProtected,
+  tailing,
+  quiet,
+  seen,
+  dropped,
+  trimmed,
+  topicIsEmpty,
+  totalMessages,
+  maskedRules,
+}: {
+  topic: string;
+  rows: number;
+  fetching: boolean;
+  fetched: boolean;
+  error: string | null;
+  isProtected: boolean;
+  tailing: boolean;
+  quiet: boolean;
+  /** Everything this tail session delivered, buffer cap included. */
+  seen: number;
+  dropped: number;
+  trimmed: boolean;
+  topicIsEmpty: boolean;
+  totalMessages: number;
+  maskedRules: number;
+}) {
+  const { t } = useI18n();
+  const shared = {
+    screen: t("perch.screen.messages"),
+    error,
+    errorContext: { environmentProtected: isProtected },
+  };
+
+  /** Every reason the rows on screen are not the whole truth, in one place. */
+  const notes: string[] = [];
+  if (tailing) {
+    if (trimmed) notes.push(t("perch.messages.trimmed", { cap: TAIL_BUFFER }));
+    if (dropped > 0)
+      notes.push(t("perch.messages.dropped", { count: dropped }));
+  } else if (rows > 0 && !topicIsEmpty) {
+    notes.push(t("perch.messages.notWhole", { topic, total: totalMessages }));
+  }
+  if (maskedRules > 0) notes.push(t("perch.messages.masked"));
+  const caveat = notes.length === 0 ? undefined : notes.join(" ");
+
+  if (tailing) {
+    return (
+      <Perch
+        {...shared}
+        tone={dropped > 0 || trimmed ? "watch" : "ok"}
+        caveat={caveat}
+      >
+        {quiet
+          ? t("perch.messages.liveQuiet", { topic })
+          : t("perch.messages.live", { count: seen, topic })}
+      </Perch>
+    );
+  }
+
+  if (fetching && rows === 0) {
+    return (
+      <Perch {...shared} tone="unknown" loading>
+        {t("perch.messages.waiting")}
+      </Perch>
+    );
+  }
+
+  if (!fetched) {
+    return (
+      <Perch {...shared} tone="unknown">
+        {t("perch.messages.waiting")}
+      </Perch>
+    );
+  }
+
+  if (rows === 0) {
+    return (
+      <Perch {...shared} tone={topicIsEmpty ? "ok" : "watch"} caveat={caveat}>
+        {topicIsEmpty
+          ? t("perch.messages.topicEmpty", { topic })
+          : t("perch.messages.none")}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch {...shared} tone="ok" caveat={caveat}>
+      {t("perch.messages.range", { count: rows })}
+    </Perch>
   );
 }

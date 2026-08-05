@@ -27,6 +27,7 @@ import Palette, {
 import AboutDialog from "./AboutDialog";
 import ImportExportDialog, { type TransferTab } from "./ImportExportDialog";
 import Playground from "./Playground";
+import SettingsView from "./SettingsView";
 import { useI18n, type MessageKey } from "./i18n";
 import type { TopicActions } from "./TopicsTab";
 
@@ -81,6 +82,12 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [transfer, setTransfer] = useState<TransferTab | null>(null);
+  // Settings is a VIEW, not an overlay, and deliberately not a dialog: it has
+  // to be reachable with nothing connected, it is where somebody goes to make
+  // the app readable before they can read anything, and a modal over an empty
+  // workspace is a modal over nothing. It does not clear the selection —
+  // closing it puts you back on the cluster you were already on.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // A danger banner inside the transfer dialog is still danger on screen, and
   // §5.8's prod damper reads one attribute on the app root — so the dialog
   // reports its banner up here rather than the guardrail missing it.
@@ -354,7 +361,12 @@ export default function App() {
   const masking = useMasking(selected?.id ?? null);
 
   let main: React.ReactNode;
-  if (profiles === null) {
+  if (settingsOpen) {
+    // First branch on purpose: Settings answers "I cannot read this app", and
+    // that has to work in every other state the workspace can be in —
+    // including the one where reading the connection file failed.
+    main = <SettingsView onOpenAbout={openAbout} />;
+  } else if (profiles === null) {
     // Never a full-screen spinner. A sentence says what we are waiting for.
     main = (
       <div className="empty-state">
@@ -574,9 +586,20 @@ export default function App() {
           selectedId={creating ? null : selectedId}
           connections={connections}
           creating={creating}
-          onSelect={select}
-          onNew={startCreating}
+          settingsOpen={settingsOpen}
+          // Picking a cluster or starting a new one is a request to look at
+          // that, so both close Settings on the way. Toggling Settings does
+          // NOT clear the selection — closing it returns you where you were.
+          onSelect={(id) => {
+            setSettingsOpen(false);
+            select(id);
+          }}
+          onNew={() => {
+            setSettingsOpen(false);
+            startCreating();
+          }}
           onAbout={openAbout}
+          onSettings={() => setSettingsOpen((open) => !open)}
         />
 
         <main className="workspace">

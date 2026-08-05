@@ -50,9 +50,16 @@ interface SidebarProps {
   selectedId: string | null;
   connections: Record<string, ConnState>;
   creating: boolean;
+  /**
+   * True while the app-level Settings surface is on screen. It is not a
+   * connection, so it does not deselect one — the sidebar just stops claiming
+   * a profile is what you are looking at.
+   */
+  settingsOpen: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
   onAbout: () => void;
+  onSettings: () => void;
 }
 
 export default function Sidebar({
@@ -60,9 +67,11 @@ export default function Sidebar({
   selectedId,
   connections,
   creating,
+  settingsOpen,
   onSelect,
   onNew,
   onAbout,
+  onSettings,
 }: SidebarProps) {
   const { t } = useI18n();
   // Read once for the whole list rather than per row: a hook cannot be called
@@ -155,6 +164,22 @@ export default function Sidebar({
       <footer className="sidebar-footer">
         <span className="app-name">Kavka</span>
         <div className="sidebar-footer-links">
+          {/* Settings is app-level and reachable with NOTHING connected: the
+              two preferences people want on first launch are the theme and
+              the font size, and on first launch there is no cluster. It
+              carries aria-current rather than a pressed state — it is a place
+              you go, not a switch you hold down. */}
+          <button
+            type="button"
+            className="support-link"
+            aria-current={settingsOpen ? "page" : undefined}
+            onClick={onSettings}
+          >
+            {t("sidebar.settings")}
+          </button>
+          <span className="footer-sep" aria-hidden="true">
+            ·
+          </span>
           {/* Same look as the support link, so the footer reads as one line
               of quiet text rather than a button next to a link. */}
           <button type="button" className="support-link" onClick={onAbout}>

@@ -21,6 +21,8 @@ import LineChart, { readoutTime, type ChartPoint, type ChartSeries } from "./Cha
 import { useDangerSignal, type DangerReport } from "./danger";
 import { approxCount, formatAge, groupDigits } from "./format";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
+import Perch from "./Perch";
 import {
   bucketWidth,
   formatSeriesValue,
@@ -191,8 +193,17 @@ export default function MonitoringTab({
 }: MonitoringTabProps) {
   const [range, setRange] = useState<HistoryRange>(HISTORY_RANGES[0]);
   const [groups, setGroups] = useState<HistoryGroup[] | null>(null);
+  /**
+   * The history read FAILED, which is not the same fact as a history file
+   * with nothing in it. Kept separate from `error` because that one is shared
+   * with the metrics status call and is cleared by dismissing the banner —
+   * neither of which makes the readings appear.
+   */
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [group, setGroup] = useState<string | null>(null);
   const [samples, setSamples] = useState<LagSample[] | null>(null);
+  /** The same distinction one level down: this window's read, not the index. */
+  const [samplesFailed, setSamplesFailed] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [loadingLag, setLoadingLag] = useState(false);
 
@@ -213,6 +224,7 @@ export default function MonitoringTab({
   /** What the auto-hide decision was last made for. See `defaultHidden`. */
   const hiddenFor = useRef<string>("");
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   /**
@@ -277,6 +289,7 @@ export default function MonitoringTab({
       .then((list) => {
         if (groupsSeq.current !== mine) return;
         setGroups(list);
+        setHistoryFailed(false);
         // The group with the freshest sample is the one someone opening this
         // tab is most likely to be asking about.
         setGroup((prev) => {
@@ -287,7 +300,11 @@ export default function MonitoringTab({
       })
       .catch((err: unknown) => {
         if (groupsSeq.current !== mine) return;
+        // The empty array settles "Still checking…"; the flag is what keeps
+        // the verdict from reading it as an empty history file and telling
+        // someone to wait for samples that are failing to arrive.
         setGroups([]);
+        setHistoryFailed(true);
         setError(errorMessage(err));
       });
     return () => {
@@ -307,6 +324,7 @@ export default function MonitoringTab({
       .then((list) => {
         if (lagSeq.current !== mine) return;
         setSamples(list);
+        setSamplesFailed(false);
         const key = `${group}:${range.key}`;
         if (hiddenFor.current !== key) {
           hiddenFor.current = key;
@@ -315,7 +333,11 @@ export default function MonitoringTab({
       })
       .catch((err: unknown) => {
         if (lagSeq.current !== mine) return;
+        // Same rule as the index above: no readings and no read are different
+        // facts, and "try a longer window" is advice that cannot work when the
+        // query is the thing that failed.
         setSamples([]);
+        setSamplesFailed(true);
         setError(errorMessage(err));
       })
       .finally(() => {
@@ -467,11 +489,84 @@ export default function MonitoringTab({
 
   const chosenGroup = groups?.find((g) => g.group_id === group) ?? null;
 
+  /**
+   * WHAT THE VERDICT DOESN'T COVER, in the order that matters.
+   *
+   * A sampler that has stopped outranks the downsampling note, because a chart
+   * nobody is feeding is a chart whose last point is not "now" — and every
+   * sentence above it is about a moment that may be hours old.
+   */
+  const samplerCaveat = (() => {
+    if (sampler === null) return t("perch.monitoring.caveat.unknownSampler");
+    if (!sampler.running) return t("perch.monitoring.caveat.stopped");
+    if (
+      sampler.last_sample_ms !== null &&
+      Date.now() - sampler.last_sample_ms > sampler.interval_ms * 3
+    )
+      return t("perch.monitoring.caveat.stale", {
+        ago: formatAge(Math.max(0, Date.now() - sampler.last_sample_ms)),
+      });
+    return t("perch.monitoring.caveat.sampled");
+  })();
+
+  const lagVerdict = (() => {
+    const shared = {
+      group: group ?? "",
+      lag: approxCount(summary.lagNow),
+      partitions: summary.partitions,
+      topic: summary.peak?.topic ?? "",
+      partition: summary.peak?.partition ?? 0,
+      peak: groupDigits(summary.peak?.lag ?? 0),
+    };
+    // Outranks every branch below it. `noHistory` tells the reader the first
+    // points will appear within one interval, which is a promise Kavka cannot
+    // keep for readings it could not read — and `noWindow` would blame the
+    // window for a file that never opened.
+    if (historyFailed || samplesFailed)
+      return { tone: "unknown" as const, text: t("perch.monitoring.unread") };
+    if (groups !== null && groups.length === 0)
+      return {
+        tone: "unknown" as const,
+        text: t("perch.monitoring.noHistory", {
+          interval: formatSpan(sampler?.interval_ms ?? 15_000),
+        }),
+      };
+    if (group === null || summary.partitions === 0)
+      return {
+        tone: "unknown" as const,
+        text: t("perch.monitoring.noWindow", { group: group ?? "" }),
+      };
+    if (summary.lagNow <= 0)
+      return { tone: "ok" as const, text: t("perch.monitoring.caughtUp", shared) };
+    if (trend.word === "rising")
+      return { tone: "problem" as const, text: t("perch.monitoring.rising", shared) };
+    if (trend.word === "falling")
+      return { tone: "ok" as const, text: t("perch.monitoring.falling", shared) };
+    return { tone: "watch" as const, text: t("perch.monitoring.steady", shared) };
+  })();
+
   return (
     <>
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
+
+      {/* THE SHOWCASE VERDICT. Two facts, in this order: what the numbers say,
+          and where they came from. The second is not decoration — a lag chart
+          is the one screen in Kavka whose data Kafka does not hold, and a
+          reader who doesn't know that will read a gap as an outage. */}
+      <Perch
+        screen={t("rail.item.monitoring")}
+        loading={groups === null}
+        tone={lagVerdict.tone}
+        caveat={
+          <>
+            {t("perch.monitoring.origin")} {samplerCaveat}
+          </>
+        }
+      >
+        {lagVerdict.text}
+      </Perch>
 
       {/* THE SAMPLER COMES FIRST. Every chart below it is only as trustworthy
           as this panel says it is. */}
@@ -547,6 +642,11 @@ export default function MonitoringTab({
 
         {groups === null ? (
           <p className="table-note">Reading Kavka's history file…</p>
+        ) : historyFailed ? (
+          // Same sentence as the verdict, for the same reason: the empty
+          // state below says the first points arrive within one interval,
+          // and that is a promise about a read that did not happen.
+          <p className="table-note">{t("perch.monitoring.unread")}</p>
         ) : groups.length === 0 ? (
           <p className="table-note">
             No lag history yet. Kavka starts sampling as soon as a connection is
@@ -581,62 +681,100 @@ export default function MonitoringTab({
               )}
             </div>
 
-            <div className="stat-grid">
-              <div className="stat">
-                <span className="stat-label">Lag at the last reading</span>
-                <span className="stat-value">{groupDigits(summary.lagNow)}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-label">Peak in this window</span>
-                <span className="stat-value">
-                  {summary.peak === null ? (
-                    <span className="absent">∅</span>
-                  ) : (
-                    groupDigits(summary.peak.lag ?? 0)
-                  )}
-                </span>
-              </div>
-              <div className="stat">
-                <span className="stat-label">Trend</span>
-                <span className={`stat-value stat-value-word trend-${trend.tone}`}>
-                  <span aria-hidden="true">{trend.glyph}</span> {trend.word}
-                </span>
-              </div>
-              <div className="stat">
-                <span className="stat-label"><Term name="partition">Partitions</Term> tracked</span>
-                <span className="stat-value">{summary.partitions}</span>
-              </div>
-            </div>
+            {/* A FAILED QUERY GETS NEITHER TILES NOR ADVICE. Every figure in
+                them is computed from the empty array the catch left behind, so
+                a tile reading 0 is a measurement Kavka never took — and "try a
+                longer window" cannot work when the query is what failed. */}
+            {samplesFailed ? (
+              <p className="table-note">{t("perch.monitoring.unread")}</p>
+            ) : (
+              <>
+                {/* Jackdaw tiles: the number, then the WORD for what it counts.
+                    `stat-grid-tiles` is an opt-in modifier — the bare
+                    `.stat-grid` stays a floating row everywhere else. */}
+                <div className="stat-grid stat-grid-tiles">
+                  <div className="stat">
+                    <span className="stat-label">
+                      {t("monitoring.tile.lagNow")}
+                    </span>
+                    <span className="stat-value">
+                      {groupDigits(summary.lagNow)}
+                    </span>
+                    <span className="stat-sub">
+                      {t("monitoring.tile.lagNowSub")}
+                    </span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">{t("monitoring.tile.peak")}</span>
+                    <span className="stat-value">
+                      {summary.peak === null ? (
+                        <span className="absent">∅</span>
+                      ) : (
+                        groupDigits(summary.peak.lag ?? 0)
+                      )}
+                    </span>
+                    <span className="stat-sub">
+                      {t("monitoring.tile.peakSub")}
+                    </span>
+                  </div>
+                  <div
+                    className={`stat${trend.tone === "warn" ? " stat-attn" : ""}`}
+                  >
+                    <span className="stat-label">
+                      {t("monitoring.tile.trend")}
+                    </span>
+                    <span
+                      className={`stat-value stat-value-word trend-${trend.tone}`}
+                    >
+                      <span aria-hidden="true">{trend.glyph}</span> {trend.word}
+                    </span>
+                    <span className="stat-sub">
+                      {t("monitoring.tile.trendSub")}
+                    </span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">
+                      <Term name="partition">Partitions</Term> tracked
+                    </span>
+                    <span className="stat-value">{summary.partitions}</span>
+                    <span className="stat-sub">
+                      {t("monitoring.tile.partitionsSub")}
+                    </span>
+                  </div>
+                </div>
 
-            <p className="table-note">
-              {summary.partitions === 0 ? (
-                <>
-                  Kavka has no readings for this group in the last{" "}
-                  {formatSpan(range.ms).replace(/^1 /, "")}. Try a longer window,
-                  or check the sampler above.
-                </>
-              ) : (
-                <>
-                  Right now this group is about{" "}
-                  <strong>{approxCount(summary.lagNow)} messages</strong> behind
-                  across {summary.partitions} partition
-                  {summary.partitions === 1 ? "" : "s"}, and it is{" "}
-                  <strong>{trend.word}</strong> compared with the start of this
-                  window
-                  {summary.peak !== null && (summary.peak.lag ?? 0) > summary.lagNow
-                    ? `. The worst point was ${groupDigits(
-                        summary.peak.lag ?? 0,
-                      )} on ${summary.peak.topic} partition ${
-                        summary.peak.partition
-                      }, at ${readoutTime(summary.peak.ts_ms)}`
-                    : ""}
-                  .
-                  {summary.anyUncommitted
-                    ? " Some partitions have no committed offset in this window, so they contribute no lag rather than zero lag — they show as gaps."
-                    : ""}
-                </>
-              )}
-            </p>
+                <p className="table-note">
+                  {summary.partitions === 0 ? (
+                    <>
+                      Kavka has no readings for this group in the last{" "}
+                      {formatSpan(range.ms).replace(/^1 /, "")}. Try a longer
+                      window, or check the sampler above.
+                    </>
+                  ) : (
+                    <>
+                      Right now this group is about{" "}
+                      <strong>{approxCount(summary.lagNow)} messages</strong>{" "}
+                      behind across {summary.partitions} partition
+                      {summary.partitions === 1 ? "" : "s"}, and it is{" "}
+                      <strong>{trend.word}</strong> compared with the start of
+                      this window
+                      {summary.peak !== null &&
+                      (summary.peak.lag ?? 0) > summary.lagNow
+                        ? `. The worst point was ${groupDigits(
+                            summary.peak.lag ?? 0,
+                          )} on ${summary.peak.topic} partition ${
+                            summary.peak.partition
+                          }, at ${readoutTime(summary.peak.ts_ms)}`
+                        : ""}
+                      .
+                      {summary.anyUncommitted
+                        ? " Some partitions have no committed offset in this window, so they contribute no lag rather than zero lag — they show as gaps."
+                        : ""}
+                    </>
+                  )}
+                </p>
+              </>
+            )}
 
             {byTopic.map(({ topic, series }) => (
               <div className="chart-block" key={topic}>
@@ -712,7 +850,9 @@ function SamplerLine({ status }: { status: SamplerStatus | null }) {
 
   return (
     <>
-      <p className="sampler-line">
+      {/* The dot pulses only while readings are genuinely arriving. A heartbeat
+          on a stopped sampler is the one animation this app must never show. */}
+      <p className={`sampler-line${tone === "ok" ? " sampler-line-live" : ""}`}>
         <span className={`health health-${tone}`}>
           <i className="dot" aria-hidden="true" />
           {word}
@@ -846,36 +986,73 @@ function MetricsSection({
     return (
       <section className="panel">
         <div className="panel-head">
-          <h2 className="panel-title">Throughput and storage</h2>
+          <h2 className="panel-title">
+            Throughput and storage
+            <span className="panel-count">not available</span>
+          </h2>
         </div>
-        <p className="table-note">
-          This connection has no metrics endpoint, so Kavka can't show throughput,
-          storage growth or replication health for it.
-        </p>
-        <p className="table-note">
-          Kafka's brokers don't serve these figures over the Kafka protocol —
-          they publish them as JMX, and almost everyone puts a Prometheus
-          exporter in front of that. If you run the brokers, the usual setup is
-          the <code>jmx_exporter</code> Java agent on each one (
-          <code>-javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml</code>),
-          which answers on something like{" "}
-          <code>http://broker-1.internal:7071/metrics</code>. A Prometheus server
-          that already scrapes those brokers works too — give Kavka its address
-          instead.
-        </p>
-        <p className="table-note">
-          The lag history above needs none of this: Kavka reads that from the
-          brokers itself.
-        </p>
-        <div className="panel-tools">
-          <button
-            type="button"
-            className="btn"
-            title="Kavka only edits a connection while it is disconnected, so this disconnects first"
-            onClick={onEditConnection}
-          >
-            Open connection settings
-          </button>
+
+        {/* THE TEACHING EMPTY STATE. Not "no data": what you would get, how to
+            switch it on, and what does not depend on it. The mark is a broken
+            chart line — decorative, and every word beside it is the signal. */}
+        <div className="teach">
+          <div className="teach-art" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              focusable="false"
+            >
+              <path d="M3 18l5-6 4 3 5-8 4 5" />
+              <path d="M4 4l16 16" />
+            </svg>
+          </div>
+          <div className="teach-body">
+            <h3 className="teach-title">
+              This connection has no metrics endpoint, so there is nothing to
+              draw
+            </h3>
+            <p className="teach-text">
+              Kafka's brokers don't serve throughput, storage growth or
+              replication health over the Kafka protocol — they publish them as
+              JMX, and almost everyone puts a Prometheus exporter in front of
+              that. Kavka would rather show you nothing than draw a line it made
+              up.
+            </p>
+            <ul className="teach-list">
+              <li>
+                What you would get: bytes in and out per second, messages in per
+                second, log size on disk, and the under-replicated and offline
+                partition counts.
+              </li>
+              <li>
+                How to switch it on: the <code>jmx_exporter</code> Java agent on
+                each broker (
+                <code>-javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml</code>
+                ), which answers on something like{" "}
+                <code>http://broker-1.internal:7071/metrics</code>. A Prometheus
+                server that already scrapes those brokers works too — give Kavka
+                its address instead.
+              </li>
+              <li>
+                Nothing above depends on it: Kavka reads the lag history from
+                the brokers itself.
+              </li>
+            </ul>
+            <div className="empty-actions">
+              <button
+                type="button"
+                className="btn"
+                title="Kavka only edits a connection while it is disconnected, so this disconnects first"
+                onClick={onEditConnection}
+              >
+                Open connection settings
+              </button>
+            </div>
+          </div>
         </div>
       </section>
     );

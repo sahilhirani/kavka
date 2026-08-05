@@ -15,6 +15,8 @@ import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { useIsProtected } from "./environments";
 import { countChanges, diffLines, toLines, tooBigToDiff, type DiffRow } from "./diff";
+import { useI18n } from "./i18n";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -322,43 +324,67 @@ export default function SchemasPanel({
 
   if (!hasRegistry) {
     return (
-      <section className="panel">
-        <div className="panel-head">
-          <h2 className="panel-title">
-            <button
-              type="button"
-              className="btn btn-ghost crumb-btn"
-              onClick={onBack}
-            >
-              ← {topic}
+      <>
+        <SchemasPerch
+          registry={false}
+          loading={false}
+          error={null}
+          missing={false}
+          subject={subject}
+          versions={null}
+          level={null}
+          levelUnknown={false}
+        />
+
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">
+              <button
+                type="button"
+                className="btn btn-ghost crumb-btn"
+                onClick={onBack}
+              >
+                ← {topic}
+              </button>
+              <span className="topic-name">Schemas</span>
+            </h2>
+          </div>
+          <p className="table-note">
+            This connection has no Schema Registry, so there is nothing to read
+            schemas from. A registry is a separate service with its own address —
+            Confluent, Apicurio and Redpanda all speak the same API.
+          </p>
+          <p className="table-note">
+            Add its address under <em>Schema Registry</em> in this connection's
+            settings, usually something like <code>http://localhost:8081</code>.
+          </p>
+          <div className="empty-actions">
+            <button type="button" className="btn" onClick={onEditConnection}>
+              Open connection settings
             </button>
-            <span className="topic-name">Schemas</span>
-          </h2>
-        </div>
-        <p className="table-note">
-          This connection has no Schema Registry, so there is nothing to read
-          schemas from. A registry is a separate service with its own address —
-          Confluent, Apicurio and Redpanda all speak the same API.
-        </p>
-        <p className="table-note">
-          Add its address under <em>Schema Registry</em> in this connection's
-          settings, usually something like <code>http://localhost:8081</code>.
-        </p>
-        <div className="empty-actions">
-          <button type="button" className="btn" onClick={onEditConnection}>
-            Open connection settings
-          </button>
-        </div>
-        <p className="table-note">
-          Opening the settings disconnects this cluster — Kavka reconnects when
-          you press Connect again.
-        </p>
-      </section>
+          </div>
+          <p className="table-note">
+            Opening the settings disconnects this cluster — Kavka reconnects when
+            you press Connect again.
+          </p>
+        </section>
+      </>
     );
   }
 
   return (
     <>
+      <SchemasPerch
+        registry
+        loading={loading && versions === null}
+        error={error}
+        missing={missing}
+        subject={subject}
+        versions={versions}
+        level={effectiveLevel}
+        levelUnknown={subjectLevelUnknown}
+      />
+
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
@@ -991,5 +1017,78 @@ export default function SchemasPanel({
 
       <ToastStack {...toaster} />
     </>
+  );
+}
+
+/**
+ * THE SCHEMA SCREEN'S VERDICT.
+ *
+ * The interesting honesty here is the FOURTH state: "this subject has no
+ * compatibility setting of its own" and "Kavka could not read this subject's
+ * setting" are different claims, and only the first justifies telling anyone
+ * which level is in force. `levelUnknown` is what keeps the verdict from
+ * naming a level it inferred rather than read.
+ */
+function SchemasPerch({
+  registry,
+  loading,
+  error,
+  missing,
+  subject,
+  versions,
+  level,
+  levelUnknown,
+}: {
+  /** Whether this connection has a Schema Registry address at all. */
+  registry: boolean;
+  loading: boolean;
+  error: string | null;
+  /** The registry answered, and it has no such subject. */
+  missing: boolean;
+  subject: string;
+  versions: SubjectVersion[] | null;
+  /** The level actually in force, subject-level or inherited. */
+  level: string | null;
+  levelUnknown: boolean;
+}) {
+  const { t } = useI18n();
+  const shared = { screen: t("perch.screen.schemas"), error };
+
+  if (!registry) {
+    return (
+      <Perch
+        {...shared}
+        tone="unknown"
+        caveat={t("perch.schemas.noRegistry.next")}
+      >
+        {t("perch.schemas.noRegistry")}
+      </Perch>
+    );
+  }
+
+  if (versions === null || loading) {
+    return (
+      <Perch
+        {...shared}
+        tone="unknown"
+        loading={loading}
+        caveat={missing ? t("perch.schemas.missing.next") : undefined}
+      >
+        {t("perch.schemas.missing", { subject })}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch
+      {...shared}
+      tone="ok"
+      caveat={levelUnknown ? t("perch.schemas.levelUnknown") : undefined}
+    >
+      {t("perch.schemas.versions", { count: versions.length })}
+      {!levelUnknown && level !== null
+        ? ` ${t("perch.schemas.level", { level })}`
+        : ""}
+    </Perch>
   );
 }

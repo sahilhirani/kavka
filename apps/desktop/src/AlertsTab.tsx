@@ -22,6 +22,7 @@ import { useDangerSignal, type DangerReport } from "./danger";
 import { classifyError } from "./errors";
 import { groupDigits } from "./format";
 import { readoutTime } from "./Chart";
+import { useI18n } from "./i18n";
 import {
   formatDuration,
   formatSpan,
@@ -30,6 +31,7 @@ import {
   seriesLabel,
 } from "./monitoring";
 import Overlay from "./Overlay";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -268,7 +270,18 @@ export default function AlertsTab({
   eventNonce,
 }: AlertsTabProps) {
   const [rules, setRules] = useState<AlertRule[] | null>(null);
+  /**
+   * A read that FAILED, kept apart from a read that returned nothing.
+   *
+   * `error` cannot stand in for this: it is shared with saving, deleting and
+   * the channels call, and the user can dismiss the banner that clears it —
+   * neither of which says anything about whether Kavka knows what is being
+   * watched. This flag is the only thing that does, and it survives both.
+   */
+  const [listFailed, setListFailed] = useState(false);
   const [history, setHistory] = useState<AlertEvent[] | null>(null);
+  /** The same distinction for the log, which is where "firing" comes from. */
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [channels, setChannels] = useState<AlertChannels | null>(null);
   const [groups, setGroups] = useState<string[]>([]);
   const [available, setAvailable] = useState<string[]>([]);
@@ -283,17 +296,26 @@ export default function AlertsTab({
   const rulesSeq = useRef(0);
   const historySeq = useRef(0);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   const reloadRules = useCallback(() => {
     const mine = ++rulesSeq.current;
     alertsList(profile.id)
       .then((list) => {
-        if (rulesSeq.current === mine) setRules(list);
+        if (rulesSeq.current !== mine) return;
+        setRules(list);
+        setListFailed(false);
       })
       .catch((err: unknown) => {
         if (rulesSeq.current !== mine) return;
+        // The empty array is what lets "Still checking…" settle; the flag is
+        // what stops that empty array being read as an absence. Saying "no
+        // rules on this cluster" after a failed read is the one wrong claim
+        // this screen can make that sends someone off to recreate rules that
+        // are already there.
         setRules([]);
+        setListFailed(true);
         setError(errorMessage(err));
       });
   }, [profile.id]);
@@ -311,11 +333,19 @@ export default function AlertsTab({
     const mine = ++historySeq.current;
     alertsHistory(profile.id, HISTORY_LIMIT)
       .then((list) => {
-        if (historySeq.current === mine) setHistory(list);
+        if (historySeq.current !== mine) return;
+        setHistory(list);
+        setHistoryFailed(false);
       })
       .catch((err: unknown) => {
         if (historySeq.current !== mine) return;
+        // The firing state on this screen is derived ENTIRELY from the log,
+        // so a log Kavka could not read is a screen that cannot say whether
+        // anything is firing. Without this flag the empty array reads as
+        // "nothing is firing", which is the worst sentence an alerting
+        // surface can get wrong.
         setHistory([]);
+        setHistoryFailed(true);
         setError(errorMessage(err));
       });
     return () => {
@@ -393,13 +423,44 @@ export default function AlertsTab({
     }
   }, [profile.id, removing, push]);
 
-  /** Rules currently firing, by id — drives the "firing now" mark in the list. */
+  /**
+   * The unresolved event per rule — the live half of this screen.
+   *
+   * A Set of ids was enough to paint a chip; the Jackdaw verdict has to name
+   * WHEN it started and WHAT tripped it, and both of those live on the event.
+   * The oldest unresolved event per rule wins, because that is when the
+   * incident began rather than when Kavka last noticed it.
+   */
   const firing = useMemo(() => {
-    const set = new Set<string>();
-    for (const event of history ?? [])
-      if (event.resolved_ms === null) set.add(event.rule_id);
-    return set;
+    const map = new Map<string, AlertEvent>();
+    for (const event of history ?? []) {
+      if (event.resolved_ms !== null) continue;
+      const seen = map.get(event.rule_id);
+      if (seen === undefined || event.fired_ms < seen.fired_ms)
+        map.set(event.rule_id, event);
+    }
+    return map;
   }, [history]);
+
+  /** Firing rules, oldest incident first — the order someone triages in. */
+  const firingRules = useMemo(
+    () =>
+      (rules ?? [])
+        .filter((rule) => firing.has(rule.id))
+        .sort(
+          (a, b) =>
+            (firing.get(a.id)?.fired_ms ?? 0) - (firing.get(b.id)?.fired_ms ?? 0),
+        ),
+    [rules, firing],
+  );
+
+  const oldest = firingRules[0] ?? null;
+  const oldestEvent = oldest === null ? null : (firing.get(oldest.id) ?? null);
+  /** No channel means a firing never leaves this window. Said in the caveat. */
+  const silent =
+    channels !== null &&
+    !channels.os_notification &&
+    (channels.webhook_url ?? "").trim().length === 0;
 
   return (
     <>
@@ -407,11 +468,77 @@ export default function AlertsTab({
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
 
+      {/* THE SHOWCASE VERDICT. A firing rule names itself, when it started and
+          what tripped it, because "1 alert firing" is a number somebody still
+          has to go and decode. The caveat is the promise Kavka cannot make:
+          it has to be running to notice anything at all. */}
+      <Perch
+        screen={t("rail.item.alerts")}
+        loading={rules === null || history === null}
+        tone={
+          rules === null || listFailed
+            ? "unknown"
+            : rules.length === 0
+              ? "unknown"
+              : historyFailed
+                ? "unknown"
+                : firingRules.length > 0
+                  ? "problem"
+                  : "ok"
+        }
+        caveat={
+          silent && rules !== null && !listFailed && rules.length > 0
+            ? t("perch.alerts.caveat.silent")
+            : t("perch.alerts.caveat.desktop")
+        }
+      >
+        {rules === null || listFailed
+          ? t("perch.alerts.unread")
+          : rules.length === 0
+            ? /* True whatever the log did: with no rules there is nothing that
+                 could have fired. */
+              t("perch.alerts.none")
+            : historyFailed
+              ? t("perch.alerts.unreadHistory")
+              : firingRules.length === 1 &&
+                  oldest !== null &&
+                  oldestEvent !== null
+                ? t("perch.alerts.firingOne", {
+                    rule: oldest.name,
+                    time: readoutTime(oldestEvent.fired_ms),
+                    detail: oldestEvent.detail,
+                  })
+                : firingRules.length > 1 &&
+                    oldest !== null &&
+                    oldestEvent !== null
+                  ? t("perch.alerts.firingMany", {
+                      count: firingRules.length,
+                      rule: oldest.name,
+                      time: readoutTime(oldestEvent.fired_ms),
+                    })
+                  : t("perch.alerts.quiet", { count: rules.length })}
+      </Perch>
+
+      {/* Every firing rule gets a surface of its own, above the table. A row in
+          a list is the right shape for a rule that is quiet and the wrong one
+          for a rule that is waking somebody up. */}
+      {firingRules.map((rule) => (
+        <FiringRulePanel
+          key={rule.id}
+          rule={rule}
+          event={firing.get(rule.id) ?? null}
+          onEdit={() => setEditing(rule)}
+          onDelete={() => setRemoving(rule)}
+        />
+      ))}
+
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">
             Alert rules
-            {rules !== null && <span className="panel-count">{rules.length}</span>}
+            {rules !== null && !listFailed && (
+              <span className="panel-count">{rules.length}</span>
+            )}
           </h2>
           <div className="panel-tools">
             <button
@@ -446,6 +573,12 @@ export default function AlertsTab({
 
         {rules === null ? (
           <p className="table-note">Reading this connection's alert rules…</p>
+        ) : listFailed ? (
+          // The same sentence the verdict gives, for the same reason: the
+          // empty state below invites someone to write the rules they think
+          // are missing, and after a failed read Kavka does not know that
+          // they are.
+          <p className="table-note">{t("perch.alerts.unread")}</p>
         ) : rules.length === 0 ? (
           <p className="table-note">
             No rules yet. The two most people start with are "tell me when this
@@ -536,7 +669,7 @@ export default function AlertsTab({
         <div className="panel-head">
           <h2 className="panel-title">
             What has fired
-            {history !== null && (
+            {history !== null && !historyFailed && (
               <span className="panel-count">
                 {history.length === HISTORY_LIMIT
                   ? `last ${HISTORY_LIMIT}`
@@ -558,6 +691,8 @@ export default function AlertsTab({
 
         {history === null ? (
           <p className="table-note">Reading the alert log…</p>
+        ) : historyFailed ? (
+          <p className="table-note">{t("perch.alerts.unreadHistory")}</p>
         ) : history.length === 0 ? (
           <p className="table-note">
             Nothing has fired yet. Firings are kept on this machine alongside the
@@ -565,52 +700,59 @@ export default function AlertsTab({
             to reconstruct an incident from afterwards.
           </p>
         ) : (
-          <div className="table-wrap">
-            <table className="data-table data-table-flush data-table-tall">
-              <caption className="sr-only">
-                Alerts that have fired on {profile.name}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Rule</th>
-                  <th scope="col">Fired</th>
-                  <th scope="col">Resolved</th>
-                  <th scope="col" className="col-num">
-                    Lasted
-                  </th>
-                  <th scope="col">What tripped it</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((event, i) => (
-                  <tr key={`${event.rule_id}:${event.fired_ms}:${i}`}>
-                    <td>{event.rule_name}</td>
-                    <td className="cell-mono">{readoutTime(event.fired_ms)}</td>
-                    <td className="cell-mono">
-                      {event.resolved_ms === null ? (
-                        <span
-                          className="health health-danger"
-                          title="This condition is still true."
-                        >
-                          <i className="dot" aria-hidden="true" />
-                          Still firing
-                        </span>
-                      ) : (
-                        readoutTime(event.resolved_ms)
-                      )}
-                    </td>
-                    <td className="col-num cell-num">
-                      {formatDuration(
-                        (event.resolved_ms ?? Date.now()) - event.fired_ms,
-                      )}
-                      {event.resolved_ms === null ? " so far" : ""}
-                    </td>
-                    <td className="rule-sentence">{event.detail}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          /* A log is a list of moments, not a grid of cells. Every fact the
+             table carried is still here — rule, when, whether it cleared, how
+             long it lasted and what tripped it — in the order someone reads
+             them out loud. The <ol> keeps it a real list for a screen reader. */
+          <ol className="history">
+            {history.map((event, i) => {
+              const open = event.resolved_ms === null;
+              const lasted = formatDuration(
+                (event.resolved_ms ?? Date.now()) - event.fired_ms,
+              );
+              return (
+                <li
+                  className="history-item"
+                  key={`${event.rule_id}:${event.fired_ms}:${i}`}
+                >
+                  {/* Law 2: the dot repeats what the title already says in
+                      words — "started" or "cleared" — and never carries it. */}
+                  <span
+                    className={`history-mark history-mark-${open ? "open" : "closed"}`}
+                    aria-hidden="true"
+                  />
+                  <div className="history-body">
+                    <p className="history-title">
+                      {open
+                        ? t("alerts.history.started", { rule: event.rule_name })
+                        : t("alerts.history.cleared", { rule: event.rule_name })}
+                    </p>
+                    <p className="history-sub">
+                      {event.detail}{" "}
+                      {open
+                        ? t("alerts.history.stillFiring", { duration: lasted })
+                        : /* The clearing time was a column of its own before
+                             this. It is a fact, so it moves into the sentence
+                             rather than out of the screen. */
+                          t("alerts.history.lasted", {
+                            duration: lasted,
+                            time: readoutTime(event.resolved_ms ?? 0),
+                          })}
+                    </p>
+                  </div>
+                  <span className="history-time">
+                    {readoutTime(event.fired_ms)}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        {/* The gap in a desktop app's log is the fact the log itself can't
+            show. It is not folded away, because it qualifies every row. */}
+        {history !== null && history.length > 0 && (
+          <p className="panel-foot">{t("alerts.history.gap")}</p>
         )}
       </section>
 
@@ -654,6 +796,121 @@ export default function AlertsTab({
 
       <ToastStack {...toaster} />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A rule that is firing right now
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE FIRING RULE, GIVEN A SURFACE.
+ *
+ * The sentence leads, because the sentence IS the rule — the same one the
+ * builder wrote live, the same one the delete confirmation opens with. Under
+ * it sits what actually tripped it, in the core's own words.
+ *
+ * The `Details` fold holds the mechanics and NOTHING ELSE. What tripped the
+ * rule, when it started and how long it has been firing are all outside it:
+ * folding an honesty caveat is how a caveat stops being read (§7).
+ */
+function FiringRulePanel({
+  rule,
+  event,
+  onEdit,
+  onDelete,
+}: {
+  rule: AlertRule;
+  event: AlertEvent | null;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useI18n();
+  const dwell = "for_ms" in rule ? rule.for_ms : 0;
+
+  return (
+    <section className="panel panel-firing">
+      <div className="panel-head">
+        <h2 className="panel-title">
+          {rule.name}
+          {/* Law 2: a word inside the pill, not a colour around the name. */}
+          <span className="rule-state">
+            <span aria-hidden="true">▲</span>
+            {t("alerts.state.firing")}
+          </span>
+        </h2>
+        {event !== null && (
+          <div className="panel-tools">
+            <span className="rule-since">
+              {t("alerts.since", { time: readoutTime(event.fired_ms) })}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <p className="rule-sentence rule-sentence-lead">{alertSentence(rule)}</p>
+
+      {event !== null && (
+        <p className="rule-tripped">
+          {event.detail}{" "}
+          {t("alerts.history.stillFiring", {
+            duration: formatDuration(Date.now() - event.fired_ms),
+          })}
+        </p>
+      )}
+
+      <div className="panel-tools">
+        <button
+          type="button"
+          className="btn"
+          title={`Change what ${rule.name} watches for`}
+          onClick={onEdit}
+        >
+          Edit rule
+        </button>
+        <button
+          type="button"
+          className="btn btn-danger"
+          title={`Stop watching for ${rule.name}`}
+          onClick={onDelete}
+        >
+          Delete rule
+        </button>
+      </div>
+
+      <details className="disclose">
+        <summary>
+          <svg
+            className="caret"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M6 4l4 4-4 4" />
+          </svg>
+          {t("alerts.details.summary")}
+          <span className="sum-note">{t("alerts.details.note")}</span>
+        </summary>
+        <dl className="facts">
+          <dt>{t("alerts.facts.kind")}</dt>
+          <dd>{KIND_LABEL[rule.kind]}</dd>
+          <dt>{t("alerts.facts.waitsFor")}</dt>
+          <dd>{dwell > 0 ? formatSpan(dwell) : t("alerts.facts.noWait")}</dd>
+          <dt>{t("alerts.facts.checked")}</dt>
+          <dd>{t("alerts.facts.checkedValue")}</dd>
+          {event !== null && (
+            <>
+              <dt>{t("alerts.facts.since")}</dt>
+              <dd className="facts-mono">{readoutTime(event.fired_ms)}</dd>
+            </>
+          )}
+        </dl>
+      </details>
+    </section>
   );
 }
 

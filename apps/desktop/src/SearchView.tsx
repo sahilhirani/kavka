@@ -17,6 +17,7 @@ import { classifyError } from "./errors";
 import ExportButton from "./ExportButton";
 import { approxCount, groupDigits } from "./format";
 import HelpPopover from "./HelpPopover";
+import { useI18n } from "./i18n";
 import MessageGrid, {
   rowKey,
   type MessageGridHandle,
@@ -30,6 +31,7 @@ import {
 } from "./masking";
 import { noteJsonFields } from "./nl";
 import NlQueryBar from "./NlQueryBar";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import SeekBar, {
   buildSeek,
@@ -420,7 +422,29 @@ export default function SearchView({
   const masking = useMasking(profile.id);
 
   return (
-    <section className="messages-view">
+    // The verdict is a sibling of the panel, not a row inside it — see the
+    // note in MessagesView.
+    <>
+      {/* A scan's verdict is a statement about COVERAGE first and matches
+          second: "12 matches" from a capped, stopped or hour-wide scan is a
+          different claim from "12 matches" out of the whole topic, and the
+          table cannot tell the two apart on its own. */}
+      <SearchPerch
+          topic={topic}
+          started={run !== null}
+          running={running}
+          stopped={stopped}
+          error={error}
+          progress={progress}
+          matched={matched}
+          scanned={scanned}
+          buffered={buffered}
+          capped={capped}
+          unevaluated={unevaluated}
+          maskedRules={masking.enabled}
+        />
+
+      <section className="messages-view">
       <div className="messages-head">
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
@@ -1042,7 +1066,114 @@ export default function SearchView({
           </span>
         </span>
       </div>
-    </section>
+      </section>
+    </>
+  );
+}
+
+/**
+ * THE SEARCH'S VERDICT.
+ *
+ * Tone here is about how much of the range the answer actually covers, not
+ * about the cluster: a scan that finished reports "ok" whether it found forty
+ * matches or none, because in both cases the screen can say what it read. A
+ * scan the user stopped, or one whose buffer capped, is "watch" — the numbers
+ * are real but they are numbers about a slice.
+ *
+ * "Nothing matched" is never said while a scan is still moving, and never said
+ * about a scan that stopped early. Those are two different claims, and only
+ * one of them is about the range the user asked for.
+ */
+function SearchPerch({
+  topic,
+  started,
+  running,
+  stopped,
+  error,
+  progress,
+  matched,
+  scanned,
+  buffered,
+  capped,
+  unevaluated,
+  maskedRules,
+}: {
+  topic: string;
+  /** A search has been asked for — `run !== null`. */
+  started: boolean;
+  running: boolean;
+  stopped: boolean;
+  error: string | null;
+  progress: SearchProgress | null;
+  matched: number;
+  scanned: number;
+  /** How many of the matches Kavka actually kept. */
+  buffered: number;
+  capped: boolean;
+  unevaluated: number;
+  maskedRules: number;
+}) {
+  const { t } = useI18n();
+  const shared = { screen: t("perch.screen.search"), error };
+
+  const notes: string[] = [];
+  if (capped)
+    notes.push(t("perch.search.capped", { matched, kept: buffered }));
+  if (unevaluated > 0)
+    notes.push(t("perch.search.unevaluated", { count: unevaluated }));
+  if (maskedRules > 0) notes.push(t("perch.search.masked"));
+  const caveat = notes.length === 0 ? undefined : notes.join(" ");
+
+  if (!started) {
+    return (
+      <Perch {...shared} tone="unknown">
+        {t("perch.search.waiting")}
+      </Perch>
+    );
+  }
+
+  if (running) {
+    // Nothing has come back yet — rule 1, say so rather than render zeroes.
+    if (progress === null) {
+      return (
+        <Perch {...shared} tone="unknown" loading>
+          {t("perch.search.waiting")}
+        </Perch>
+      );
+    }
+    return (
+      <Perch
+        {...shared}
+        tone="unknown"
+        caveat={[t("perch.search.running.note"), caveat]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {t("perch.search.running", { count: matched, topic })}
+      </Perch>
+    );
+  }
+
+  if (stopped) {
+    return (
+      <Perch {...shared} tone="watch" caveat={caveat}>
+        {t("perch.search.stopped", { scanned })}
+      </Perch>
+    );
+  }
+
+  if (matched === 0) {
+    return (
+      <Perch {...shared} tone="ok" caveat={caveat}>
+        {t("perch.search.none", { scanned })}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch {...shared} tone={capped ? "watch" : "ok"} caveat={caveat}>
+      {t("perch.search.matches", { count: matched, scanned })}
+    </Perch>
   );
 }
 

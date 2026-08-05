@@ -19,6 +19,8 @@ import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
+import { useI18n } from "./i18n";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -264,10 +266,32 @@ export default function ConnectTab({
   const push = toaster.push;
   const seq = useRef(0);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   const isProtected = useIsProtected(profile.environment);
   const readOnly = profile.read_only;
+  const screen = t("rail.item.connect");
+
+  /** Every task on every connector, so the list's verdict is about the whole
+      Connect cluster rather than about whichever row happens to be first. */
+  const fleet = useMemo(() => {
+    let running = 0;
+    let failed = 0;
+    let pausedTasks = 0;
+    let total = 0;
+    let pausedConnectors = 0;
+    for (const c of connectors ?? []) {
+      const counts = countTasks(c.tasks);
+      running += counts.running;
+      failed += counts.failed;
+      pausedTasks += counts.paused;
+      total += counts.total;
+      if ((c.connector_state ?? "").toUpperCase() === "PAUSED")
+        pausedConnectors += 1;
+    }
+    return { running, failed, pausedTasks, total, pausedConnectors };
+  }, [connectors]);
 
   const fetchConnectors = useCallback(
     async (name: string) => {
@@ -384,6 +408,15 @@ export default function ConnectTab({
 
   if (clusters.length === 0) {
     return (
+      <>
+      <Perch
+        screen={screen}
+        tone="unknown"
+        caveat={t("perch.connect.noClustersNext")}
+      >
+        {t("perch.connect.noClusters")}
+      </Perch>
+
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">Kafka Connect</h2>
@@ -409,6 +442,7 @@ export default function ConnectTab({
           you press Connect again.
         </p>
       </section>
+      </>
     );
   }
 
@@ -492,6 +526,41 @@ export default function ConnectTab({
         {error !== null && (
           <ErrorBanner raw={error} onDismiss={() => setError(null)} />
         )}
+
+        {/* A connector's verdict is a task count, because a connector reported
+            RUNNING with every task FAILED is Connect's most common lie and the
+            state chip alone repeats it. */}
+        <Perch
+          screen={screen}
+          loading={current === null && loading}
+          tone={
+            current === null
+              ? "unknown"
+              : counts.failed > 0
+                ? "problem"
+                : paused || counts.total === 0
+                  ? "watch"
+                  : "ok"
+          }
+          caveat={current === null ? undefined : t("perch.connector.caveat")}
+        >
+          {current === null
+            ? t("perch.connect.unread")
+            : counts.failed > 0
+              ? t("perch.connector.failed", {
+                  name: connector,
+                  failed: counts.failed,
+                })
+              : paused
+                ? t("perch.connector.paused", { name: connector })
+                : counts.total === 0
+                  ? t("perch.connector.noTasks", { name: connector })
+                  : t("perch.connector.running", {
+                      name: connector,
+                      running: counts.running,
+                      total: counts.total,
+                    })}
+        </Perch>
 
         <section className="panel">
           <div className="panel-head">
@@ -736,6 +805,46 @@ export default function ConnectTab({
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
+
+      {/* The whole Connect cluster in one line. A failed task outranks a paused
+          connector: a pause is a decision somebody made, a failure is not. */}
+      <Perch
+        screen={screen}
+        loading={connectors === null && loading}
+        tone={
+          connectors === null || failed
+            ? "unknown"
+            : fleet.failed > 0
+              ? "problem"
+              : fleet.pausedConnectors > 0 || connectors.length === 0
+                ? "watch"
+                : "ok"
+        }
+        caveat={
+          connectors === null || failed
+            ? undefined
+            : t("perch.connect.caveat")
+        }
+      >
+        {connectors === null || failed
+          ? t("perch.connect.unread")
+          : connectors.length === 0
+            ? t("perch.connect.empty", { cluster: activeName ?? "" })
+            : fleet.failed > 0
+              ? t("perch.connect.failed", {
+                  failed: fleet.failed,
+                  cluster: activeName ?? "",
+                })
+              : fleet.pausedConnectors > 0
+                ? t("perch.connect.paused", {
+                    paused: fleet.pausedConnectors,
+                    cluster: activeName ?? "",
+                  })
+                : t("perch.connect.allRunning", {
+                    count: connectors.length,
+                    cluster: activeName ?? "",
+                  })}
+      </Perch>
 
       <section className="panel">
         <div className="panel-head">

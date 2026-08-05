@@ -13,9 +13,21 @@
  * measured height and fails loudly, because a density change, a font change
  * or a platform override that moves the row silently would misplace every
  * row on screen.
+ *
+ * DENSITY IS A LIVE PREFERENCE, not a startup constant: `data-density` on
+ * <html> rewrites `--row-h` under a list somebody is already scrolling. The
+ * observer re-measures, and `useVirtualRows` re-anchors the viewport on the
+ * row it was showing — or on the bottom, if that is where it was, so a live
+ * tail is still a live tail after the switch.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 export interface RowMetrics {
   /** `--row-h`, in px. */
@@ -112,20 +124,76 @@ export function useVirtualRows(
   const [viewport, setViewport] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
 
+  /**
+   * WHERE THE VIEWPORT WAS, IN ROWS — the density preference's landing gear.
+   *
+   * `--row-h` moves when the user switches Comfortable/Compact, and every row
+   * is placed from that token: the same scrollTop is a DIFFERENT record either
+   * side of the change, and a live tail sitting at the bottom stops being at
+   * the bottom. So the position is remembered as a row index and a "was I
+   * pinned", not as a pixel offset.
+   *
+   * It is recorded here, on movement, rather than read inside the effect that
+   * reacts to the change — by the time the attribute lands on <html>, style
+   * recalculation has already re-laid the rows out and the old geometry is
+   * gone.
+   */
+  const anchor = useRef({ index: 0, pinned: false });
+  // Read by `note` without making it a dependency: a new `onScroll` identity
+  // on every density change would re-run MessageGrid's follow effect and
+  // useImperativeHandle for a fact neither of them uses.
+  const rowHRef = useRef(metrics.rowH);
+  rowHRef.current = metrics.rowH;
+
+  const note = useCallback((el: HTMLElement) => {
+    anchor.current = {
+      index: Math.round(el.scrollTop / rowHRef.current),
+      pinned: isPinnedToBottom(el),
+    };
+  }, []);
+
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    note(el);
     // Only commit real movement: a horizontal scroll or a rubber-band bounce
     // otherwise re-renders the whole window for nothing.
     setScrollTop((prev) => (prev === el.scrollTop ? prev : el.scrollTop));
-  }, [scrollRef]);
+  }, [scrollRef, note]);
 
   const remeasure = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     setViewport((prev) => (prev === el.clientHeight ? prev : el.clientHeight));
     setScrollTop((prev) => (prev === el.scrollTop ? prev : el.scrollTop));
-  }, [scrollRef]);
+    note(el);
+  }, [scrollRef, note]);
+
+  /**
+   * Put the viewport back on the row it was on, at the new row height.
+   *
+   * Layout, not passive: this runs in the same commit that renders the spacer
+   * rows at the new height — so `scrollHeight` is already correct — and before
+   * paint, so the list never shows one frame aimed at the wrong record.
+   */
+  const lastRowH = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const before = lastRowH.current;
+    lastRowH.current = metrics.rowH;
+    // The first measure is not a change: it replaces the fallback before
+    // anything has been scrolled.
+    if (el === null || before === null || before === metrics.rowH) return;
+    // Pinned outranks the index. A tail that was following the stream must
+    // still be following it, and the newest row is the one it was on.
+    const next = anchor.current.pinned
+      ? el.scrollHeight
+      : anchor.current.index * metrics.rowH;
+    if (el.scrollTop !== next) el.scrollTop = next;
+    // The assignment's scroll event arrives a frame later; the window has to
+    // agree with the scrollport in THIS commit or one frame paints blanks.
+    setScrollTop(el.scrollTop);
+  }, [metrics.rowH, scrollRef]);
 
   useEffect(() => {
     const el = scrollRef.current;

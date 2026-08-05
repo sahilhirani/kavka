@@ -21,7 +21,9 @@ import { useIsProtected } from "./environments";
 import { replayHeaders } from "./dlq";
 import { approxCount, groupDigits } from "./format";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
 import MessagesView from "./MessagesView";
+import Perch from "./Perch";
 import {
   PartitionResultsNote,
   ReassignModal,
@@ -127,6 +129,17 @@ export default function TopicsTab({
   const [detail, setDetail] = useState<TopicDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showDefaults, setShowDefaults] = useState(false);
+  /**
+   * Progressive disclosure on the partition table (Jackdaw): the replica list,
+   * the in-sync list and the two watermarks are folded away by default,
+   * because nine columns is what made this screen "hard to follow" and four of
+   * them only answer a question you are already deep in.
+   *
+   * HEALTH IS NOT IN THE FOLD, and must never be: a guardrail behind a
+   * disclosure is a guardrail nobody reads. Neither is the leader, which is
+   * what the election acts on.
+   */
+  const [showReplicaDetail, setShowReplicaDetail] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -191,6 +204,7 @@ export default function TopicsTab({
 
   const listSeq = useRef(0);
   const detailSeq = useRef(0);
+  const { t } = useI18n();
 
   useDangerSignal(error !== null, onDanger);
 
@@ -515,6 +529,15 @@ export default function TopicsTab({
     );
   }, [detail]);
 
+  /** Partitions holding fewer in-sync copies than replicas — the Perch's
+      loudest branch, and the one thing on this screen worth acting on. */
+  const underReplicated = useMemo(
+    () =>
+      detail?.partitions.filter((p) => p.isr.length < p.replicas.length)
+        .length ?? 0,
+    [detail],
+  );
+
   const banner =
     error === null ? null : (
       <ErrorBanner raw={error} onDismiss={() => setError(null)} />
@@ -688,6 +711,20 @@ export default function TopicsTab({
 
       return (
         <>
+          {/* The verdict comes before the data it is about, on every screen.
+              It is named after the TOPIC rather than after the tab, because
+              that is what the sentence underneath is about. */}
+          <TopicPerch
+            screen={topic}
+            detail={detail}
+            loading={loadingDetail && detail === null}
+            error={error}
+            isProtected={isProtected}
+            underReplicated={underReplicated}
+            unpreferred={unpreferred}
+            records={approxRecords}
+          />
+
           {banner}
 
           <section className="panel">
@@ -849,6 +886,18 @@ export default function TopicsTab({
                   </span>
                 </h2>
                 <div className="panel-tools">
+                  {/* The fold. It moves COLUMNS, never a guardrail: Health and
+                      its "N missing" stay on screen at both settings. */}
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={showReplicaDetail}
+                      onChange={(e) => setShowReplicaDetail(e.target.checked)}
+                    />
+                    <span title={t("topics.partitions.detailTitle")}>
+                      {t("topics.partitions.detail")}
+                    </span>
+                  </label>
                   {/* A write action renders danger-outlined on prod even when
                       it is routine (§6 layer 7). */}
                   <button
@@ -917,16 +966,20 @@ export default function TopicsTab({
                       <th scope="col" className="col-num">
                         Leader
                       </th>
-                      <th scope="col">Replicas</th>
-                      <th scope="col">
-                        <Term name="isr">In sync</Term>
-                      </th>
-                      <th scope="col" className="col-num">
-                        Earliest
-                      </th>
-                      <th scope="col" className="col-num">
-                        Latest
-                      </th>
+                      {showReplicaDetail && (
+                        <>
+                          <th scope="col">Replicas</th>
+                          <th scope="col">
+                            <Term name="isr">In sync</Term>
+                          </th>
+                          <th scope="col" className="col-num">
+                            Earliest
+                          </th>
+                          <th scope="col" className="col-num">
+                            Latest
+                          </th>
+                        </>
+                      )}
                       <th scope="col" className="col-num">
                         Messages
                       </th>
@@ -941,6 +994,7 @@ export default function TopicsTab({
                       <PartitionRow
                         key={p.partition}
                         partition={p}
+                        detailed={showReplicaDetail}
                         readOnly={readOnly}
                         isProtected={isProtected}
                         busy={electBusy}
@@ -1198,6 +1252,17 @@ export default function TopicsTab({
 
     return (
       <>
+        <TopicsPerch
+          screen={t("rail.item.topics")}
+          topics={topics}
+          loading={topics === null && loadingTopics}
+          error={error}
+          isProtected={isProtected}
+          shown={visibleTopics.length}
+          internal={showInternal ? 0 : internalCount}
+          readOnly={readOnly}
+        />
+
         {banner}
 
         <section className="panel">
@@ -1442,6 +1507,166 @@ export default function TopicsTab({
 }
 
 /**
+ * THE TOPIC LIST'S VERDICT.
+ *
+ * The caveat is not decoration. This list is read once on arrival and again
+ * only when Refresh is pressed, so a count stated without saying that is the
+ * "cheerful verdict computed from stale data" §3 forbids. An empty cluster and
+ * an unreadable one are different sentences, because they are different facts.
+ */
+function TopicsPerch({
+  screen,
+  topics,
+  loading,
+  error,
+  isProtected,
+  shown,
+  internal,
+  readOnly,
+}: {
+  screen: string;
+  topics: TopicInfo[] | null;
+  loading: boolean;
+  error: string | null;
+  isProtected: boolean;
+  /** How many rows the table is actually showing. */
+  shown: number;
+  /** How many of Kafka's own topics the filter is holding back. */
+  internal: number;
+  readOnly: boolean;
+}) {
+  const { t } = useI18n();
+
+  const caveat = (
+    <>
+      {t("perch.topics.snapshot")}
+      {readOnly ? ` ${t("perch.topics.readOnly")}` : ""}
+    </>
+  );
+  const shared = {
+    screen,
+    error,
+    errorContext: { environmentProtected: isProtected },
+  };
+
+  if (topics === null) {
+    return (
+      <Perch
+        {...shared}
+        tone="unknown"
+        loading={loading}
+        caveat={t("perch.topics.unreadable.next")}
+      >
+        {t("perch.topics.unreadable")}
+      </Perch>
+    );
+  }
+
+  if (topics.length === 0) {
+    return (
+      <Perch {...shared} tone="watch" caveat={caveat}>
+        {t("perch.topics.empty")}
+      </Perch>
+    );
+  }
+
+  if (shown === 0) {
+    return (
+      <Perch {...shared} tone="watch" caveat={caveat}>
+        {t("perch.topics.internalOnly")}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch {...shared} tone="ok" caveat={caveat}>
+      {internal > 0 ? (
+        <>
+          {t("perch.topics.countsHidden", { count: shown })}{" "}
+          {t("perch.topics.hiddenNote", { count: internal })}
+        </>
+      ) : (
+        t("perch.topics.counts", { count: shown })
+      )}
+    </Perch>
+  );
+}
+
+/**
+ * ONE TOPIC'S VERDICT.
+ *
+ * Ordered by what someone would act on: a partition short of a copy outranks a
+ * partition led by the wrong broker, which outranks "everything is where it
+ * should be". The caveat rides on all three because the Messages figure below
+ * is on screen in all three, and that figure is a subtraction of watermarks —
+ * it counts records retention and compaction have already taken away.
+ */
+function TopicPerch({
+  screen,
+  detail,
+  loading,
+  error,
+  isProtected,
+  underReplicated,
+  unpreferred,
+  records,
+}: {
+  screen: string;
+  detail: TopicDetail | null;
+  loading: boolean;
+  error: string | null;
+  isProtected: boolean;
+  underReplicated: number;
+  unpreferred: number;
+  records: number;
+}) {
+  const { t } = useI18n();
+  const shared = {
+    screen,
+    error,
+    errorContext: { environmentProtected: isProtected },
+  };
+
+  if (detail === null) {
+    return (
+      <Perch
+        {...shared}
+        tone="unknown"
+        loading={loading}
+        caveat={t("perch.topic.unreadable.next")}
+      >
+        {t("perch.topic.unreadable", { topic: screen })}
+      </Perch>
+    );
+  }
+
+  const caveat = t("perch.topic.approx");
+
+  if (underReplicated > 0) {
+    return (
+      <Perch {...shared} tone="problem" caveat={caveat}>
+        {t("perch.topic.underReplicated", { count: underReplicated })}
+      </Perch>
+    );
+  }
+
+  if (unpreferred > 0) {
+    return (
+      <Perch {...shared} tone="watch" caveat={caveat}>
+        {t("perch.topic.unpreferred", { count: unpreferred })}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch {...shared} tone="ok" caveat={caveat}>
+      {t("perch.topic.healthy", { count: detail.partitions.length })}{" "}
+      {t("perch.topic.records", { records })}
+    </Perch>
+  );
+}
+
+/**
  * One partition. Law 2 in its most load-bearing form: under-replication gets a
  * dot AND a word AND the numbers it was derived from, never a colour alone.
  *
@@ -1453,6 +1678,7 @@ export default function TopicsTab({
  */
 function PartitionRow({
   partition,
+  detailed,
   readOnly,
   isProtected,
   busy,
@@ -1461,6 +1687,9 @@ function PartitionRow({
   onReassign,
 }: {
   partition: PartitionDetail;
+  /** The replica list, the in-sync list and both watermarks. Folded by
+      default — see the note on `showReplicaDetail`. */
+  detailed: boolean;
   readOnly: boolean;
   isProtected: boolean;
   busy: boolean;
@@ -1506,16 +1735,21 @@ function PartitionRow({
           </span>
         )}
       </td>
-      <td className="cell-mono">{partition.replicas.join(", ")}</td>
-      <td className="cell-mono">{partition.isr.join(", ")}</td>
-      {/* An offset is a literal you could paste into a seek command, so it is
-          mono. The message count is a quantity Kavka computed, so it is not. */}
-      <td className="col-num cell-mono cell-mono-num">
-        {groupDigits(partition.earliest_offset)}
-      </td>
-      <td className="col-num cell-mono cell-mono-num">
-        {groupDigits(partition.latest_offset)}
-      </td>
+      {detailed && (
+        <>
+          <td className="cell-mono">{partition.replicas.join(", ")}</td>
+          <td className="cell-mono">{partition.isr.join(", ")}</td>
+          {/* An offset is a literal you could paste into a seek command, so it
+              is mono. The message count is a quantity Kavka computed, so it is
+              not. */}
+          <td className="col-num cell-mono cell-mono-num">
+            {groupDigits(partition.earliest_offset)}
+          </td>
+          <td className="col-num cell-mono cell-mono-num">
+            {groupDigits(partition.latest_offset)}
+          </td>
+        </>
+      )}
       <td className="col-num cell-num">{groupDigits(messages)}</td>
       <td>
         <span className={`health ${healthy ? "health-ok" : "health-warn"}`}>

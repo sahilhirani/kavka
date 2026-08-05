@@ -10,6 +10,8 @@ import {
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { Term } from "./Glossary";
+import { useI18n } from "./i18n";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 
 /**
@@ -227,12 +229,19 @@ export default function StreamsTab({
   onDanger,
 }: StreamsTabProps) {
   const [groups, setGroups] = useState<string[] | null>(null);
+  /**
+   * The group list FAILED, which is a different fact from a cluster with no
+   * groups on it — and the one the picker cannot show. `failure` is the
+   * topology's; this is the list's, and it survives dismissing the banner.
+   */
+  const [listFailed, setListFailed] = useState(false);
   const [topology, setTopology] = useState<StreamsTopology | null>(null);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
 
+  const { t } = useI18n();
   const note = failure === null ? null : notStreamsNote(failure);
   // A group that simply isn't a Streams app is a fact, not a danger — only an
   // unexplained failure reaches the prod damper. Same rule as QuorumPanel.
@@ -244,10 +253,12 @@ export default function StreamsTab({
       .then((list) => {
         if (cancelled) return;
         setGroups(list.map((g) => g.group_id));
+        setListFailed(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setGroups([]);
+        setListFailed(true);
         setError(errorMessage(err));
       });
     return () => {
@@ -302,6 +313,48 @@ export default function StreamsTab({
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
+
+      {/* THE INFERENCE, SAID FIRST. The whole screen is a guess, so the guess
+          belongs in the verdict rather than only in the note above the picture:
+          a caveat under a diagram is a caveat people quote the diagram without.
+
+          An unexplained failure is NOT passed in as `error`. The panel below
+          already renders it through `classifyError` with its raw text and a
+          dismiss, and two banners carrying the same classified sentence is one
+          banner too many — so the verdict says it can't answer and points at
+          the one place that says why. */}
+      <Perch
+        screen={t("rail.item.streams")}
+        loading={loading}
+        tone={topology !== null && topology.nodes.length > 0 ? "watch" : "unknown"}
+        caveat={
+          topology !== null && topology.nodes.length > 0
+            ? t("perch.streams.caveat")
+            : undefined
+        }
+      >
+        {/* A group list Kavka never got is not a cluster with no groups on it.
+            The sentence is the Groups screen's because the fact is that
+            screen's — this read IS `groupsList` — and borrowing the translated
+            one beats a second string saying the same thing in six catalogs. */}
+        {group === null
+          ? listFailed
+            ? t("perch.groups.unread")
+            : groups !== null && groups.length === 0
+              ? t("perch.streams.noGroups")
+              : t("perch.streams.pick")
+          : note !== null
+            ? t("perch.streams.notStreams", { group })
+            : failure !== null
+              ? t("perch.streams.unread", { group })
+              : topology === null || topology.nodes.length === 0
+                ? t("perch.streams.notStreams", { group })
+                : t("perch.streams.inferred", {
+                  app: topology.app_id,
+                  nodes: topology.nodes.length,
+                  edges: topology.edges.length,
+                })}
+      </Perch>
 
       <section className="panel">
         <div className="panel-head">
@@ -371,9 +424,11 @@ export default function StreamsTab({
 
         {group === null ? (
           <p className="table-note">
-            {groups !== null && groups.length === 0
-              ? "This cluster has no consumer groups yet, so there is nothing to work a topology out from."
-              : "Pick an application above and Kavka will work out what it reads, what it writes and what it keeps in between."}
+            {listFailed
+              ? t("perch.groups.unread")
+              : groups !== null && groups.length === 0
+                ? "This cluster has no consumer groups yet, so there is nothing to work a topology out from."
+                : "Pick an application above and Kavka will work out what it reads, what it writes and what it keeps in between."}
           </p>
         ) : loading ? (
           <p className="table-note">

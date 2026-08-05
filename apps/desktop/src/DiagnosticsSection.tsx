@@ -155,36 +155,54 @@ export default function DiagnosticsSection() {
         </span>
       </div>
 
-      <h4 className="mcp-subhead">What goes in the file</h4>
-      <ul className="mcp-tools">
-        <li className="mcp-tool">
-          <code>panic</code>
-          <span className="mcp-tool-what">
-            A Rust crash: the message and the source file, line and column it
-            came from.
+      {/* THE ONLY FOLD IN THIS SECTION, and the asymmetry is the point.
+          "What goes in the file" is a specification — four record kinds a
+          reader checks once and then never again — so it earns a disclosure.
+          "What never goes in it" is the honest LIMIT of the no-telemetry
+          claim, and a limit behind a fold is a limit that gets quoted
+          without it (docs/DESIGN.md §7), so it stays open below.
+
+          The summary carries the heading text verbatim: this section is
+          English in every locale by the i18n wave's own scope decision, and
+          folding it must not be the thing that introduces a half-translated
+          file. */}
+      <details className="fold">
+        <summary className="fold-summary">
+          <span className="fold-caret" aria-hidden="true">
+            ▸
           </span>
-        </li>
-        <li className="mcp-tool">
-          <code>error</code>
-          <span className="mcp-tool-what">
-            An uncaught error in the window: its message and JavaScript stack.
-          </span>
-        </li>
-        <li className="mcp-tool">
-          <code>rejection</code>
-          <span className="mcp-tool-what">
-            A promise nobody caught — usually a command that failed while
-            nothing was watching.
-          </span>
-        </li>
-        <li className="mcp-tool">
-          <code>session</code>
-          <span className="mcp-tool-what">
-            One line per launch: Kavka's version, the operating system and the
-            processor architecture.
-          </span>
-        </li>
-      </ul>
+          <span className="fold-title">What goes in the file</span>
+        </summary>
+        <ul className="mcp-tools fold-body">
+          <li className="mcp-tool">
+            <code>panic</code>
+            <span className="mcp-tool-what">
+              A Rust crash: the message and the source file, line and column it
+              came from.
+            </span>
+          </li>
+          <li className="mcp-tool">
+            <code>error</code>
+            <span className="mcp-tool-what">
+              An uncaught error in the window: its message and JavaScript stack.
+            </span>
+          </li>
+          <li className="mcp-tool">
+            <code>rejection</code>
+            <span className="mcp-tool-what">
+              A promise nobody caught — usually a command that failed while
+              nothing was watching.
+            </span>
+          </li>
+          <li className="mcp-tool">
+            <code>session</code>
+            <span className="mcp-tool-what">
+              One line per launch: Kavka's version, the operating system and the
+              processor architecture.
+            </span>
+          </li>
+        </ul>
+      </details>
 
       <h4 className="mcp-subhead">What never goes in it</h4>
       <p className="dialog-note">

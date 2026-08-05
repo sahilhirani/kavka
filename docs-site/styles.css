@@ -1,20 +1,36 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   KAVKA — the site. Hand-rolled CSS on the Ledger tokens (docs/DESIGN.md).
+   KAVKA — the site. Hand-rolled CSS on the JACKDAW tokens (docs/DESIGN.md).
 
    NO BUILD SYSTEM, ON PURPOSE. One HTML file, one stylesheet, no fonts to
    fetch, no script to run, no npm install and nothing to keep up to date. A
    marketing page for a desktop app that needs a toolchain to publish is a page
    that stops getting published.
 
-   NO CARDS — Law 1. Grouping is whitespace plus a top hairline, everywhere,
-   including the feature grid. The loudest pixels on the page are words, not
-   chrome. If a rule here looks like it is reaching for a box shadow, it is
-   wrong; the tokens do not even define a third shadow.
+   SOFT RAISED PANELS — Law 1, as Jackdaw rewrote it. The app used to group by
+   whitespace and a top hairline and ask the eye to infer every boundary; it
+   does not any more. A panel here is what a panel is in the product: its own
+   warm ground, one hairline, a radius and exactly one shadow. There are three
+   shadow tokens in the app and this page uses one of them. If a rule looks
+   like it is reaching for a fourth elevation, it is wrong.
 
-   THE LEDGER RULE IS THE SIGNATURE (§2). Every section carries a mono label in
-   a fixed left gutter, then a 1px vertical rule, then the content — the same
-   device the app uses for offsets, broker ids and line numbers. It collapses
-   below 900px, exactly as the app's does when the table runs out of width.
+   TWO SIGNATURES, BOTH REAL (§2). The Perch — bird, a state in words, one
+   sentence of plain English — opens the hero, because that is how every screen
+   in the app opens. And the ledger rule still runs down the left of every
+   section, a mono address in a fixed gutter then a 1px rule, exactly as it
+   runs down every table in the app. It collapses below 900px, as the app's
+   does when a table runs out of width.
+
+   THE ACCENT IS BRASS AND IT MEANS NOTHING. In the product it appears only on
+   things you can click and things that are selected — that is what makes the
+   accent picker in Settings safe. On the page it is the wire, the primary
+   button, link underlines and one word in the headline; it never encodes a
+   state, here or there.
+
+   BOTH THEMES, BECAUSE THE APP SHIPS BOTH. Dark warm brown-grey is the
+   default; the light block below is the app's warm paper, not a bleached copy
+   of the dark one. Every colour token is declared exactly twice, once per
+   theme, for the same reason the app does it: a token declared in only one of
+   them is a half-themed control waiting to happen.
 
    TOKENS ARE COPIED, NOT IMPORTED, and the copy is deliberate: this file must
    render from a static host with no relationship to the app's build. The
@@ -25,61 +41,86 @@
 :root {
   color-scheme: dark;
 
-  --bg-canvas: #0f1317;
-  --bg-rail: #090b0d;
-  --bg-sunken: #0a0d10;
-  --bg-raised: #161b20;
+  /* ── Surfaces — a warm ladder, each step a real elevation ───────────── */
+  --bg-canvas: #191512;
+  --bg-app: #100e0b;
+  --bg-panel: #221d18;
+  --bg-panel-hi: #2a241e;
+  --bg-inset: #14110e;
 
-  --text-primary: #e6ebf0;
-  --text-secondary: #a2aebb;
-  --text-tertiary: #808d9a;
-  --text-absent: #7e8a97;
-  --text-mono: #c9d4df;
-  --text-inverse: #0b0e11;
+  /* ── Text — three inks. Hierarchy is weight plus these ──────────────── */
+  --t1: #f4efe8;
+  --t2: #c6bcaf;
+  --t3: #a0958a;
+  --t-mono: #e6ded3;
+  --on-brass: #1a1206;
 
-  --hairline: #1b2127;
-  --hairline-strong: #262e36;
-  --border-control: #636f7c;
+  /* ── Lines. --line-strong is the only one with a floor: it is what says
+        "this is operable" on a transparent-filled control (SC 1.4.11). ── */
+  --line: #342d26;
+  --line-mid: #463d34;
+  --line-strong: #8a7d6e;
+  --focus: #ffd489;
 
-  --accent: #4fc3b0;
-  --accent-quiet: #3c9788;
-  --accent-tint: #12241f;
-  --focus: #6fe3cd;
-  --fill-primary-hover: #ffffff;
+  /* ── Accent — brass, the app's default of four ──────────────────────── */
+  --brass: #e9a94e;
+  --brass-quiet: #c08c3e;
+  --brass-fill: #e9a94e;
+  --brass-hover: #f5ba65;
 
-  --ok: #56c08a;
-  --warn: #d9a441;
-  --danger: #e5786b;
+  --ok: #6fcb92;
+  --warn: #e4b85e;
+  --warn-tint: #261e10;
+  --selection: #3e3320;
 
-  --rule: #242b33;
+  /* THE LEDGER RULE, in the colour a `green` environment gets — the one the
+     dev cluster in the screenshots is marked with. The app has seven, chosen
+     per environment by the user; protection is a separate flag and paints the
+     ground and the wire, not this. */
+  --rule: #5d9971;
 
-  --syn-key: #8fa6bc;
+  /* ── The Perch ──────────────────────────────────────────────────────── */
+  --perch-bg: #2a2214;
+  --perch-line: #6a5227;
+  --perch-ink: #ebd5a6;
+  --perch-title: #f7e7c4;
+
+  /* ── Payload syntax. Fixed, and deliberately not derived from the
+        accent — a different accent must not recolour every JSON number. ─ */
+  --syn-key: #8cbee4;
   --syn-string: #9fd5a8;
   --syn-number: #e0b36a;
-  --syn-punct: #7b8899;
+  --syn-punct: #a6998b;
+
+  --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.34), 0 2px 6px rgba(0, 0, 0, 0.26);
+
+  /* ── Theme-independent below this line ──────────────────────────────── */
 
   --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo,
     Consolas, monospace;
 
+  /* Jackdaw's steps. Body is 15px, not the 13px the old direction shipped:
+     prose, labels and controls read at --t-md, and only genuinely tabular
+     things — offsets, commands, file names — drop back to --t-base. */
   --t-micro: 10.5px;
   --lh-micro: 14px;
   --t-xs: 11px;
   --t-sm: 12px;
   --t-base: 13px;
   --t-md: 15px;
-  --t-lg: 19px;
-  --t-xl: 24px;
-  --t-display: 30px;
+  --t-title: 17px;
+  --t-lg: 20px;
+  --t-xl: 26px;
   --lh-prose: 1.6;
 
   --w-normal: 400;
   --w-medium: 500;
   --w-semi: 600;
   --w-bold: 700;
-  --track-eyebrow: 0.08em;
-  --track-tight: -0.011em;
+  --track-eyebrow: 0.09em;
+  --track-tight: -0.018em;
 
   --s-1: 2px;
   --s-2: 4px;
@@ -94,7 +135,10 @@
   --s-11: 56px;
   --s-12: 72px;
 
-  --r-control: 4px;
+  /* Panels have a radius now (Law 1). */
+  --r-sm: 7px;
+  --r-md: 11px;
+  --r-control: var(--r-sm);
   --measure: 62ch;
   --hit-min: 24px;
 
@@ -105,6 +149,60 @@
 
   --dur-fast: 120ms;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* ── LIGHT — warm paper, not clinical white ───────────────────────────────
+   The app's light theme is real, tokened and swept; the page follows the
+   reader's OS the same way the app's "System" setting does. Every colour
+   token above is redeclared here and nothing else is, because everything
+   else — type, space, shape, motion — does not vary with theme. */
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg-canvas: #f6f1e8;
+    --bg-app: #eae3d8;
+    --bg-panel: #fffdf8;
+    --bg-panel-hi: #f0e9dc;
+    --bg-inset: #f1ebe0;
+
+    --t1: #23201b;
+    --t2: #564f45;
+    --t3: #6a6155;
+    --t-mono: #2e2a24;
+    --on-brass: #ffffff;
+
+    --line: #ded5c6;
+    --line-mid: #cdc3b2;
+    --line-strong: #82786a;
+    --focus: #7a4b00;
+
+    --brass: #82540c;
+    --brass-quiet: #96691b;
+    --brass-fill: #8a5a0e;
+    --brass-hover: #6e4508;
+
+    --ok: #186639;
+    --warn: #7e5209;
+    --warn-tint: #faedd2;
+    --selection: #f3e1b8;
+
+    --rule: #2f7a4b;
+
+    --perch-bg: #fcf2dc;
+    --perch-line: #c9a961;
+    --perch-ink: #5e4712;
+    --perch-title: #3f3009;
+
+    --syn-key: #1f5f86;
+    --syn-string: #1c6b3f;
+    --syn-number: #8a5510;
+    --syn-punct: #655c50;
+
+    --shadow-1: 0 1px 1px rgba(90, 74, 52, 0.1),
+      0 2px 6px rgba(90, 74, 52, 0.1);
+  }
 }
 
 /* ── Reset, as small as it can be ─────────────────────────────────────── */
@@ -118,7 +216,7 @@
 body {
   margin: 0;
   background: var(--bg-canvas);
-  color: var(--text-secondary);
+  color: var(--t2);
   font-family: var(--font-ui);
   font-size: var(--t-md);
   line-height: var(--lh-prose);
@@ -157,23 +255,23 @@ pre {
 }
 
 a {
-  color: var(--text-primary);
-  text-decoration-color: var(--accent-quiet);
+  color: var(--t1);
+  text-decoration-color: var(--brass-quiet);
   text-underline-offset: 3px;
 }
 
 a:hover {
-  text-decoration-color: var(--accent);
+  text-decoration-color: var(--brass);
 }
 
-/* SC 2.4.11: always offset, so the ring never sits on a light fill. */
+/* SC 2.4.11: always offset, so the ring never sits on a fill. */
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: rgba(79, 195, 176, 0.28);
+  background: var(--selection);
 }
 
 .skip-link {
@@ -182,11 +280,12 @@ a:hover {
   top: -100px;
   z-index: 10;
   padding: var(--s-3) var(--s-5);
-  background: var(--bg-raised);
-  color: var(--text-primary);
-  border: 1px solid var(--border-control);
+  background: var(--bg-panel);
+  color: var(--t1);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-control);
-  font-size: var(--t-sm);
+  box-shadow: var(--shadow-1);
+  font-size: var(--t-base);
   text-decoration: none;
 }
 
@@ -205,11 +304,16 @@ a:hover {
   white-space: nowrap;
 }
 
-/* ── The wire, the app's guardrail layer 2 at site scale ──────────────── */
+/* ── The wire ─────────────────────────────────────────────────────────────
+   In the app this 2px bar is transparent until you open a connection whose
+   environment is marked protected, and then it lights warm-red across the top
+   of the window. It cannot mean that here — this page is not connected to
+   anything — so it is brass and it is decoration: the app's silhouette, at
+   site scale, carrying no state. */
 
 .wire {
   height: 2px;
-  background: var(--accent);
+  background: var(--brass);
 }
 
 /* ── Shell ────────────────────────────────────────────────────────────── */
@@ -236,15 +340,15 @@ a:hover {
   font-size: var(--t-lg);
   font-weight: var(--w-semi);
   letter-spacing: var(--track-tight);
-  color: var(--text-primary);
+  color: var(--t1);
   text-decoration: none;
 }
 
 .wordmark-note {
-  font-size: var(--t-xs);
+  font-size: var(--t-sm);
   font-weight: var(--w-normal);
   letter-spacing: 0;
-  color: var(--text-tertiary);
+  color: var(--t3);
 }
 
 .topnav {
@@ -258,14 +362,14 @@ a:hover {
   min-height: var(--hit-min);
   display: inline-flex;
   align-items: center;
-  font-size: var(--t-sm);
-  color: var(--text-tertiary);
+  font-size: var(--t-base);
+  color: var(--t3);
   text-decoration: none;
   transition: color var(--dur-fast) var(--ease);
 }
 
 .topnav a:hover {
-  color: var(--text-primary);
+  color: var(--t1);
 }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
@@ -284,21 +388,22 @@ a:hover {
   line-height: 1.12;
   font-weight: var(--w-bold);
   letter-spacing: -0.02em;
-  color: var(--text-primary);
+  color: var(--t1);
 }
 
-/* The one place the accent is allowed to carry a word. It means live
-   everywhere else in the product; here it is the same promise — the app is
-   alive and free — and it appears exactly once on the page. */
+/* The accent carries no meaning in the product — it marks what you can click
+   and what is selected, and that is exactly what makes it user-selectable in
+   Settings. The page spends it once on a word, which is a page's licence and
+   not the app's: nothing on screen depends on reading this colour. */
 .hero-title em {
   font-style: normal;
-  color: var(--accent);
+  color: var(--brass);
 }
 
 .hero-lede {
   max-width: 46ch;
   font-size: var(--t-md);
-  color: var(--text-secondary);
+  color: var(--t2);
 }
 
 .hero-lede + .hero-lede {
@@ -316,8 +421,8 @@ a:hover {
 .hero-footnote {
   margin-top: var(--s-6);
   max-width: 44ch;
-  font-size: var(--t-sm);
-  color: var(--text-tertiary);
+  font-size: var(--t-base);
+  color: var(--t3);
 }
 
 /* ── Buttons — §5.5. Exactly one primary per surface ─────────────────── */
@@ -329,12 +434,14 @@ a:hover {
   gap: var(--s-3);
   min-height: var(--control-h-lg);
   padding: 0 var(--s-6);
-  border: 1px solid var(--border-control);
+  /* A button's boundary is the only thing saying "operable" when the fill is
+     transparent, so it takes --line-strong and never a decorative hairline. */
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-control);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--t1);
   font-family: inherit;
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
   font-weight: var(--w-medium);
   text-decoration: none;
   cursor: pointer;
@@ -342,17 +449,23 @@ a:hover {
 }
 
 .btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-panel-hi);
 }
 
+/* Jackdaw moved the primary fill from near-white to the accent: the old
+   direction reserved its accent for a meaning and could not spend it on a
+   button, and this one cannot mean anything, so the one thing per surface you
+   are meant to click is exactly what it is for. */
 .btn-primary {
-  border-color: transparent;
-  background: var(--text-primary);
-  color: var(--text-inverse);
+  border-color: var(--brass-fill);
+  background: var(--brass-fill);
+  color: var(--on-brass);
+  font-weight: var(--w-semi);
 }
 
 .btn-primary:hover {
-  background: var(--fill-primary-hover);
+  border-color: var(--brass-hover);
+  background: var(--brass-hover);
 }
 
 .btn-sub {
@@ -360,28 +473,99 @@ a:hover {
   opacity: 0.75;
 }
 
-/* ── The ledger motif — the site's signature (§2) ─────────────────────── */
+/* ── The hero vignette — the Perch, then the ledger rule (§2) ──────────────
+   Both of the app's signatures, at the size a page can honestly show them.
+   The Perch above is the real component's shape: bird, a kicker naming the
+   screen and the state IN WORDS, one sentence of verdict, and the caveat
+   beside it rather than behind a disclosure. Tone is a 4px edge — decoration,
+   because the kicker already said it (Law 2).
+   Under it, two rows on the ledger rule: the address in a fixed gutter, the
+   1px rule the app colours by environment, then the payload. */
+
+.vignette {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.perch {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  padding: var(--s-5) var(--s-6);
+  background: var(--perch-bg);
+  border: 1px solid var(--perch-line);
+  border-left: 4px solid var(--perch-edge, var(--perch-line));
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+.perch-ok {
+  --perch-edge: var(--ok);
+}
+
+.perch-bird {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-top: 1px;
+  color: var(--perch-title);
+}
+
+.perch-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.perch-kicker {
+  font-size: var(--t-xs);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--perch-title);
+}
+
+.perch-verdict {
+  font-size: var(--t-md);
+  line-height: 1.5;
+  color: var(--perch-ink);
+}
+
+/* The caveat is the honesty layer's own honesty layer. Never behind a
+   disclosure: a qualification one click away gets quoted without it. */
+.perch-caveat {
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+  color: var(--perch-ink);
+  opacity: 0.86;
+}
 
 .ledger {
   font-family: var(--font-mono);
   font-size: var(--t-base);
   line-height: 26px;
-  color: var(--text-mono);
-  background: var(--bg-sunken);
-  padding: var(--s-6) 0;
+  color: var(--t-mono);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+  padding: var(--s-5) 0;
   overflow-x: auto;
 }
 
 .ledger-row {
   display: grid;
   grid-template-columns: 88px 1fr;
-  min-width: 460px;
+  min-width: 400px;
 }
 
 .ledger-addr {
   padding-right: var(--s-5);
   text-align: right;
-  color: var(--text-tertiary);
+  color: var(--t3);
   border-right: 1px solid var(--rule);
 }
 
@@ -390,10 +574,10 @@ a:hover {
   white-space: nowrap;
 }
 
-.ledger-caption {
-  margin-top: var(--s-4);
-  font-size: var(--t-xs);
-  color: var(--text-tertiary);
+.vignette-caption {
+  margin-top: var(--s-5);
+  font-size: var(--t-sm);
+  color: var(--t3);
 }
 
 .k {
@@ -417,10 +601,12 @@ a:hover {
   gap: 0;
   padding-top: var(--s-10);
   margin-top: var(--s-10);
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--line);
 }
 
-/* The gutter carries the section's address, in the app's own vocabulary. */
+/* The gutter carries the section's address, in the app's own vocabulary. It
+   is a decorative separator rather than an environment's rule, so it takes a
+   hairline token and not --rule. */
 .section-gutter {
   padding-right: var(--s-6);
   text-align: right;
@@ -429,8 +615,8 @@ a:hover {
   line-height: var(--lh-micro);
   letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
-  color: var(--text-tertiary);
-  border-right: 1px solid var(--rule);
+  color: var(--t3);
+  border-right: 1px solid var(--line-mid);
 }
 
 .section-body {
@@ -444,12 +630,12 @@ a:hover {
   line-height: 1.25;
   font-weight: var(--w-semi);
   letter-spacing: var(--track-tight);
-  color: var(--text-primary);
+  color: var(--t1);
 }
 
 .section-lede {
   max-width: var(--measure);
-  color: var(--text-secondary);
+  color: var(--t2);
 }
 
 .section-lede + .section-lede {
@@ -459,14 +645,18 @@ a:hover {
 .section-lede code,
 .feature p code,
 .download-note code {
-  color: var(--text-mono);
-  background: var(--bg-sunken);
+  color: var(--t-mono);
+  background: var(--bg-inset);
   padding: 1px 5px;
   border-radius: var(--r-control);
   font-size: 0.92em;
 }
 
-/* ── Feature grid — no cards. A top hairline and space, nothing else ──── */
+/* ── Feature grid — raised panels, as Law 1 now reads ──────────────────────
+   The old direction grouped these with a top hairline and whitespace and
+   nothing else. That is the change Jackdaw made in the product and it is the
+   change here: a panel is a surface, so the eye is told where one thing ends
+   and the next begins instead of being asked to infer it. */
 
 .features {
   display: grid;
@@ -476,22 +666,28 @@ a:hover {
 }
 
 .feature {
-  padding-top: var(--s-5);
-  border-top: 1px solid var(--hairline-strong);
+  padding: var(--s-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
 }
 
 .feature h3 {
-  margin: 0 0 var(--s-3);
-  font-size: var(--t-md);
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-title);
   font-weight: var(--w-semi);
-  color: var(--text-primary);
+  letter-spacing: var(--track-tight);
+  color: var(--t1);
 }
 
 .feature p {
-  font-size: var(--t-sm);
-  color: var(--text-secondary);
+  font-size: var(--t-md);
+  color: var(--t2);
 }
 
+/* Section eyebrows are tertiary in the app, not accent — the accent is for
+   things you can click. */
 .feature-eyebrow {
   display: block;
   margin-bottom: var(--s-3);
@@ -500,7 +696,7 @@ a:hover {
   line-height: var(--lh-micro);
   letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
-  color: var(--accent-quiet);
+  color: var(--t3);
 }
 
 /* ── Screenshots ──────────────────────────────────────────────────────── */
@@ -509,10 +705,12 @@ a:hover {
    top of index.html for why the path is `screenshots/…` and what that costs a
    local preview.
 
-   NO CARDS HERE EITHER (Law 1). A screenshot already has a window frame drawn
-   inside it; wrapping that in a second frame with a radius and a shadow is the
-   thing this design system exists to refuse. Grouping is the top hairline and
-   the whitespace above it, the same as every other block on the page.
+   NO PANEL AROUND THESE. A capture already has a window frame drawn around
+   it and the app's own raised panels drawn inside it; a third surface with
+   its own radius and shadow wrapped around that is a frame around a frame
+   around a frame. Grouping is the hairline above and the whitespace, which is
+   still the right answer for a picture even where it stopped being the right
+   answer for a paragraph.
 
    The reset above already gives every image `max-width: 100%; height: auto`,
    so `width: 100%` here only stops a narrow capture (the 972px GIF) sitting
@@ -524,8 +722,8 @@ a:hover {
 
 .shot img {
   width: 100%;
-  background: var(--bg-sunken);
-  border-top: 1px solid var(--hairline-strong);
+  background: var(--bg-inset);
+  border-top: 1px solid var(--line-mid);
 }
 
 /* The GIF is 972px wide against the stills' 1296. At the current --page-w the
@@ -538,8 +736,8 @@ a:hover {
 
 .shot figcaption {
   margin-top: var(--s-4);
-  font-size: var(--t-sm);
-  color: var(--text-tertiary);
+  font-size: var(--t-base);
+  color: var(--t3);
 }
 
 /* ── Downloads ────────────────────────────────────────────────────────── */
@@ -552,15 +750,19 @@ a:hover {
 }
 
 .download {
-  padding-top: var(--s-5);
-  border-top: 1px solid var(--hairline-strong);
+  padding: var(--s-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
 }
 
 .download h3 {
   margin: 0 0 var(--s-4);
-  font-size: var(--t-md);
+  font-size: var(--t-title);
   font-weight: var(--w-semi);
-  color: var(--text-primary);
+  letter-spacing: var(--track-tight);
+  color: var(--t1);
 }
 
 .download ul {
@@ -571,21 +773,25 @@ a:hover {
 }
 
 .download li {
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
 }
 
 .download li code {
-  color: var(--text-mono);
-  font-size: var(--t-xs);
+  color: var(--t-mono);
+  font-size: var(--t-sm);
 }
 
+/* The app's banner idiom at page scale: a tint, a bar down the left edge in
+   the semantic colour, and the sentence. */
 .download-note {
   margin-top: var(--s-8);
-  padding-left: var(--s-5);
-  border-left: 2px solid var(--warn);
+  padding: var(--s-5) var(--s-6);
+  background: var(--warn-tint);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
   max-width: var(--measure);
-  font-size: var(--t-sm);
-  color: var(--text-secondary);
+  font-size: var(--t-md);
+  color: var(--t2);
 }
 
 .pm-list {
@@ -600,12 +806,12 @@ a:hover {
   align-items: baseline;
   gap: var(--s-5);
   flex-wrap: wrap;
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
 }
 
 .pm-name {
   flex: 0 0 96px;
-  color: var(--text-tertiary);
+  color: var(--t3);
   font-size: var(--t-micro);
   line-height: var(--lh-micro);
   letter-spacing: var(--track-eyebrow);
@@ -613,16 +819,16 @@ a:hover {
 }
 
 .pm-cmd {
-  color: var(--text-mono);
-  background: var(--bg-sunken);
+  color: var(--t-mono);
+  background: var(--bg-inset);
   padding: 2px var(--s-4);
   border-radius: var(--r-control);
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
 }
 
 .pm-when {
-  color: var(--text-tertiary);
-  font-size: var(--t-xs);
+  color: var(--t3);
+  font-size: var(--t-sm);
 }
 
 /* ── Code block ───────────────────────────────────────────────────────── */
@@ -630,9 +836,11 @@ a:hover {
 .code {
   margin-top: var(--s-6);
   padding: var(--s-6);
-  background: var(--bg-sunken);
-  color: var(--text-mono);
-  font-size: var(--t-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--t-mono);
+  font-size: var(--t-base);
   line-height: 20px;
   overflow-x: auto;
   white-space: pre;
@@ -652,16 +860,16 @@ a:hover {
   align-items: baseline;
   gap: var(--s-5);
   flex-wrap: wrap;
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
 }
 
 .tools code {
   flex: 0 0 auto;
-  color: var(--text-mono);
+  color: var(--t-mono);
 }
 
 .tools span {
-  color: var(--text-secondary);
+  color: var(--t2);
 }
 
 /* ── Support ──────────────────────────────────────────────────────────── */
@@ -681,21 +889,21 @@ a:hover {
   grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--s-4) var(--s-7);
   margin-top: var(--s-7);
-  font-size: var(--t-sm);
+  font-size: var(--t-md);
 }
 
 .licence dt {
-  color: var(--text-tertiary);
+  color: var(--t3);
   font-size: var(--t-micro);
   line-height: var(--lh-micro);
   letter-spacing: var(--track-eyebrow);
   text-transform: uppercase;
-  padding-top: 3px;
+  padding-top: 6px;
 }
 
 .licence dd {
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--t2);
 }
 
 /* ── Footer ───────────────────────────────────────────────────────────── */
@@ -703,14 +911,14 @@ a:hover {
 .site-footer {
   margin-top: var(--s-12);
   padding: var(--s-8) 0 var(--s-11);
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-6);
   flex-wrap: wrap;
-  font-size: var(--t-xs);
-  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  color: var(--t3);
 }
 
 .site-footer nav {
@@ -720,14 +928,14 @@ a:hover {
 }
 
 .site-footer a {
-  color: var(--text-tertiary);
+  color: var(--t3);
   min-height: var(--hit-min);
   display: inline-flex;
   align-items: center;
 }
 
 .site-footer a:hover {
-  color: var(--text-primary);
+  color: var(--t1);
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────── */
@@ -754,7 +962,7 @@ a:hover {
     text-align: left;
     padding: 0 0 var(--s-4);
     border-right: 0;
-    border-bottom: 1px solid var(--rule);
+    border-bottom: 1px solid var(--line-mid);
     margin-bottom: var(--s-6);
   }
 
@@ -778,11 +986,45 @@ a:hover {
   }
 }
 
-/* ── Print, because somebody will ─────────────────────────────────────── */
+/* ── Print, because somebody will ─────────────────────────────────────────
+   Paper is neither theme. The tokens are re-pointed to greyscale rather than
+   left as they are: a warm dark ink on white paper is an empty page, and the
+   Perch is the one block on this page whose whole job is to be read. */
 
 @media print {
   :root {
     color-scheme: light;
+
+    --bg-canvas: #fff;
+    --bg-app: #fff;
+    --bg-panel: #fff;
+    --bg-panel-hi: #fff;
+    --bg-inset: #fff;
+    --perch-bg: #fff;
+    --warn-tint: #fff;
+
+    --t1: #000;
+    --t2: #1a1a1a;
+    --t3: #444;
+    --t-mono: #111;
+    --perch-ink: #1a1a1a;
+    --perch-title: #000;
+
+    --line: #bbb;
+    --line-mid: #999;
+    --line-strong: #666;
+    --brass: #000;
+    --brass-quiet: #666;
+    --rule: #666;
+    --ok: #666;
+    --warn: #666;
+
+    --syn-key: #1a1a1a;
+    --syn-string: #1a1a1a;
+    --syn-number: #1a1a1a;
+    --syn-punct: #444;
+
+    --shadow-1: none;
   }
 
   body {
@@ -790,8 +1032,8 @@ a:hover {
     color: #000;
   }
 
-  /* Screenshots of a dark UI print as solid black rectangles and tell a reader
-     on paper nothing the caption does not. The captions stay. */
+  /* Screenshots of the app print as solid rectangles and tell a reader on
+     paper nothing the caption does not. The captions stay. */
   .wire,
   .topnav,
   .hero-actions,

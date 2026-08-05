@@ -1,0 +1,418 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   JACKDAW — SHELL SURFACES.  OWNER: the shell sweep agent.
+   Nobody else appends to this file; that is what keeps four agents out of
+   one merge conflict.
+
+   SCOPE: the connections sidebar and profile editor, the command palette,
+   modals and toasts, the About dialog, import/export, the environments
+   manager, the playground, the glossary popover.
+
+   NOTE ON OWNERSHIP: styles.css, index.html, App.tsx, Sidebar.tsx,
+   ClusterView.tsx, Perch.tsx, SettingsView.tsx and appearance.ts belong to
+   the foundation. This file is for everything the foundation did not touch.
+
+   RULES THIS FILE INHERITS AND MAY NOT BREAK
+   · Loaded AFTER styles.css, so at equal specificity these rules win. Use
+     that to restyle an existing class in place rather than renaming it.
+   · Overlays (modal, palette, popover, toast) are the only surfaces allowed
+     --shadow-2. Panels get --shadow-1.
+   · Colour comes from tokens only. A literal hex here is a token that escaped
+     the theme system and will be wrong in light.
+
+   WHAT THIS SWEEP CHANGED, IN ONE LIST
+   1. The profile editor's sections became raised panels and its three
+      optional ones became disclosures. It is the front door and it was a
+      column of thirty controls with nothing between them.
+   2. Every long modal section (MCP, diagnostics, the About facts) became a
+      legible block instead of prose separated by one hairline.
+   3. The protected environment reads as protected in the ONE list whose
+      subject is which environments are protected — in both themes.
+   4. Overlays gained an edge. A shadow alone separates a raised surface
+      from a dark ground; on warm paper it does almost nothing.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE PROFILE EDITOR — the front door
+
+   Ledger rendered this as one column: view header, then thirty controls,
+   then the buttons. Everything a user needed to *not* fill in looked
+   exactly like everything they did. Jackdaw's landmark 1 is the answer —
+   each section is a surface with an edge, and the three sections most
+   connections leave empty are folded.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* --stack, not --s-6: the gap between panels is a density token, so
+   Comfortable and Compact change the form's rhythm and nothing else. */
+.editor {
+  gap: var(--stack);
+}
+
+/* Every direct-child fieldset is a panel. Scoped to `>` on purpose: the
+   import dialog's strategy fieldset and the environment manager's live
+   inside modals, where a raised surface on a raised surface is a step
+   nobody can see.
+
+   This rule is why WasmSerdesFields — which this sweep does not own and did
+   not edit — arrives dressed correctly: it renders `.fieldset` as a direct
+   child of `.editor`, so it inherits Jackdaw for free. */
+.editor > .fieldset,
+.editor > .fold {
+  padding: var(--pad-panel);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* THE FLOAT IS LOAD-BEARING, NOT A HACK.
+   A <legend> whose computed `float` is `none` and whose computed `position`
+   is `static` is the fieldset's RENDERED LEGEND, and a rendered legend cuts
+   a notch out of the fieldset's top border and is positioned against the
+   border box rather than the padding box. `.fieldset` shipped with
+   `border: 0`, so neither mattered; the rule above gives it a border, and
+   without this the panel would have a gap punched through its top edge and
+   a heading sitting outside its own padding.
+   Setting `float: left` fails the rendered-legend test, so the legend is
+   laid out as an ordinary child. Floats are ignored on flex items — and
+   `.fieldset` is `display: flex` — so nothing actually floats. */
+.editor > .fieldset > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 var(--s-5);
+}
+
+/* The last panel before the actions still needs air under it; `.editor`'s
+   own gap handles the rest. */
+.editor > .fieldset:last-of-type {
+  margin-bottom: 0;
+}
+
+/* Kafka Connect repeats its block N times inside a fold. Sunken, so the
+   rows read as items ON the panel rather than as more panels. */
+.editor .connect-cluster {
+  background: var(--bg-sunken);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DISCLOSURE — `.fold`
+
+   PROGRESSIVE DISCLOSURE IS NOT CONCEALMENT, and the difference is the note
+   on the summary. A fold says whether it holds anything before it is
+   opened, and ProfileEditor opens it by default when it does. Nothing that
+   is a guardrail or an honesty caveat is ever put behind one — read-only,
+   the protected hint, the Perch caveat and diagnostics' "what never goes in
+   the file" are all deliberately outside.
+
+   Two dresses, one behaviour, exactly as the mockup drew it: on the canvas
+   a fold is a panel; inside a modal it is a sunken inline block, because a
+   raised surface on a raised surface is a step nobody can see.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.fold {
+  background: var(--bg-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+/* Inside a modal a fold has no shadow and no lift — see above. Restated
+   rather than inherited so the two dresses are legible in one place. */
+.modal .fold {
+  box-shadow: none;
+}
+
+/* The panel dress adds its own padding, so the summary supplies the rest of
+   the inset itself and the fold's own padding is zeroed. */
+.editor > .fold {
+  padding: 0;
+}
+
+.fold-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-height: var(--hit-min);
+  padding: var(--s-5) var(--pad-panel);
+  cursor: pointer;
+  /* Both are needed: `list-style` covers Chromium and Gecko, the
+     pseudo-element covers WebKit, and macOS ships WKWebView. */
+  list-style: none;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+
+.fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold-summary:hover {
+  background: var(--bg-panel-hi);
+}
+
+/* A sunken fold has to hover UPWARD or the feedback is invisible: against
+   warm paper, --bg-inset (#F1EBE0) and --bg-panel-hi (#F0E9DC) are one
+   value apart, so the modal variant hovers to the panel colour instead. */
+.modal .fold-summary:hover {
+  background: var(--bg-panel);
+}
+
+.fold-title {
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+/* THE HALF THAT KEEPS THIS HONEST. "Set up" / "Not set up" / "3 clusters"
+   is the answer to the question a closed fold otherwise hides, and it is
+   read from live form state — see `srConfigured` and friends in
+   ProfileEditor.tsx. Tertiary, because it qualifies the title rather than
+   competing with it. */
+.fold-note {
+  margin-left: auto;
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-tertiary);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* Decoration. `<details>` carries the state to assistive tech and the
+   summary's own hit area carries it to everyone else — this only points. */
+.fold-caret {
+  flex: none;
+  width: 0.9em;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.fold[open] > .fold-summary .fold-caret {
+  transform: rotate(90deg);
+}
+
+/* A `.fieldset` in here already carries `display: flex` and its own gap; the
+   body only supplies the inset the summary's padding established. */
+.fold-body {
+  padding: 0 var(--pad-panel) var(--pad-panel);
+  margin: 0;
+  border: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   OVERLAYS — modal, palette, popovers, toast
+
+   ALL FOUR GAINED AN EDGE, and light is the reason. Against Ledger's cold
+   near-black a drop shadow was enough to say "this floats". Jackdaw's warm
+   paper light theme puts a #FFFDF8 surface on a #F6F1E8 ground with a soft
+   warm shadow, and that separation is nearly invisible at a glance. The
+   1px --border-control edge is the same one every operable boundary in the
+   app carries (3:1, SC 1.4.11) and it works in both themes.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.modal,
+.palette {
+  border: 1px solid var(--border-control);
+}
+
+/* THE DESTRUCTIVE MODAL, LOUDER THAN LEDGER LEFT IT.
+   The 2px wire across the top is unchanged, but a red hairline on a warm
+   brown ground reads softer than the same ratio on a cold one — so the
+   guardrail no longer rests on it. `.modal-kicker` in ConfirmModal.tsx puts
+   the WORD above the title (Law 2: no state by colour alone), and the wire
+   goes to 3px so the two agree about how serious this is. */
+.modal-destructive {
+  border-top: 3px solid var(--danger-fill);
+}
+
+.modal-kicker {
+  margin: 0 0 var(--s-3);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  /* --danger, not --danger-fill: the fill is a button ground and is only
+     ever measured against --on-danger. As ink this needs to clear 4.5:1 on
+     every surface a modal can sit on, including the six protected ones,
+     which is what --danger is swept for. */
+  color: var(--danger);
+}
+
+/* A toast is an overlay, so it takes --shadow-2 and an edge like the rest.
+   The 4px left tone bar and its `.toast-{kind}` colours are untouched —
+   every toast still leads with a sentence, and the bar only agrees with it. */
+.toast {
+  border: 1px solid var(--border-control);
+  border-left-width: 4px;
+  box-shadow: var(--shadow-2);
+}
+
+/* Both popovers float over a surface that may be the same colour they are.
+   The edge is what makes them a separate thing; the shadow only says how
+   far above. */
+.term-pop,
+.help-pop {
+  border: 1px solid var(--border-control);
+  box-shadow: var(--shadow-2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   GLOSSARY TERMS — the floor under the jargon
+
+   Jackdaw is glossary-forward, and Ledger's underline was --text-disabled:
+   a dotted line at roughly 1.3:1, which is a teaching affordance nobody can
+   see. Tertiary is legible without shouting, and the accent on hover/focus
+   says the same thing the accent says everywhere else in this direction —
+   "this does something when you point at it". That is the ONLY meaning
+   Jackdaw's accent carries, which is what makes it safe to spend here.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.term {
+  border-bottom: 1px dotted var(--text-tertiary);
+  transition: color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+
+.term:hover,
+.term:focus-visible {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE ENVIRONMENTS MANAGER — protection is the ground, in BOTH themes
+
+   This list is the one screen in the app whose SUBJECT is which
+   environments are protected, and it was answering with a 26px chip. The
+   flag now rides on the row (see EnvironmentsManager.tsx), which hands the
+   whole row the protected substrate every other protected surface in the
+   app already gets — warm ground and the --env-wire spine, tokened, so it
+   is correct in dark and in warm paper without a second rule.
+
+   Law 2 is what makes the ground safe to add rather than sufficient on its
+   own: `.env-list-meta` says "protected" in words on every row, and the
+   chip still carries the environment's own colour as identity.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.env-list-row[data-env-protected="true"] {
+  background: var(--bg-prod-row);
+  box-shadow: inset 3px 0 0 var(--env-wire);
+  /* Bleed to the modal's edges (`.modal` pads --s-7) so a protected row is
+     a BAND across the dialog rather than an inset stripe — visible in
+     peripheral vision, which is the only kind of visible that helps at 3am. */
+  margin-inline: calc(var(--s-7) * -1);
+  padding-inline: var(--s-7);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE ABOUT DIALOG — three long sections, three legible blocks
+
+   About is the longest scroller in the app: version facts, the MCP server's
+   whole write-gating story, and the diagnostics privacy claim. Ledger
+   separated them with one hairline each, which is exactly the "hard to
+   follow" this direction exists to answer.
+
+   THE SURFACE LADDER INSIDE A MODAL runs DOWN, not up: the modal is
+   --bg-panel, a section inside it is --bg-canvas, and a code block inside
+   that is --bg-inset. Three steps that stay distinct in both themes, and
+   the reason these are not raised panels — you cannot stack raised on
+   raised and have anyone see the join.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.mcp-section,
+.about-facts {
+  padding: var(--pad-panel);
+  background: var(--bg-canvas);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+/* The `border` shorthand above replaces styles.css's top-only hairline
+   outright — later file, equal specificity — so the separator it used to
+   draw is now the block's own edge. */
+.mcp-section {
+  gap: var(--s-5);
+  margin-top: var(--stack);
+}
+
+.about-facts {
+  gap: var(--s-4);
+  margin-top: var(--stack);
+}
+
+/* The section heading is a heading, not a caption floating above a block. */
+.mcp-section > .eyebrow {
+  color: var(--text-secondary);
+}
+
+/* THE WRITE GATES ARE A GUARDRAIL AND ARE NEVER FOLDED — they are the two
+   environment variables that let an AI assistant write to somebody's
+   brokers. Sunken and edged so the pair reads as a unit inside the section
+   rather than as two more paragraphs. */
+.mcp-gates {
+  gap: var(--s-5);
+  padding: var(--s-5);
+  background: var(--bg-sunken);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-sm);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE PLAYGROUND — a panel now
+
+   Its base rule in styles.css is Ledger's — whitespace and a hairline, on
+   the "zero cards" law Jackdaw retired (see the landmarks at the top of
+   that file). The playground is an OFFER sitting under an
+   empty state's primary action, and an offer that looks like a continuation
+   of the paragraph above it is an offer nobody reads. It keeps its
+   secondary heading and its lack of a primary button — the empty state is
+   allowed exactly one, and it is not this.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.playground {
+  gap: var(--s-5);
+  margin-top: var(--stack);
+  padding: var(--pad-panel);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* Nested one step down, so a Docker failure's verbatim output reads as a
+   quotation inside the panel rather than as a hole in it. */
+.playground .banner-raw {
+  background: var(--bg-sunken);
+  border-radius: var(--r-sm);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FORCED COLORS — restate every indicator this file added
+
+   Same doctrine as styles.css: a box-shadow, a background and a border
+   colour are all discarded in forced-colors mode, so anything that carries
+   meaning is restated POSITIVELY with one system colour per meaning. The
+   folds need nothing — `<details>` is a native control and the summary's
+   text is the signal.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* The protected band's ground and inset spine both vanish. `Mark` is the
+     same colour styles.css gives the protected profile row, so the two
+     protected surfaces still rhyme. */
+  .env-list-row[data-env-protected="true"] {
+    border-left: 3px solid Mark;
+  }
+
+  /* The destructive wire survives as a real border already; the kicker's
+     colour does not, and the kicker is the word that replaces it. */
+  .modal-kicker {
+    color: Mark;
+  }
+
+  /* The gates' left edge is meaning, not decoration. */
+  .mcp-gates {
+    border-left-color: Mark;
+  }
+}
