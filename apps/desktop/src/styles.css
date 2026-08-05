@@ -1,344 +1,668 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   KAVKA — LEDGER design system
-   See docs/DESIGN.md for the rules this file implements. Three laws:
+   KAVKA — JACKDAW design system
+   See docs/DESIGN.md for the rules this file implements. Jackdaw replaces
+   LEDGER. The honesty doctrine did not change; the way the app is read did.
 
-   1. Elevation is colour and one hairline. Shadows exist only on true
-      overlays (modal, palette, popover, toast). There are two shadow tokens.
-   2. No state is ever encoded by colour alone. Every dot has a word.
-   3. Nothing inside a scrolling table gets a transition, filter,
-      backdrop-filter, border-radius or box-shadow. --row-h is a fixed token
-      the virtualizer reads at runtime.
+   THE THREE LANDMARKS (the bet against "hard to follow"):
+   1. SOFT RAISED PANELS. A junior engineer needs to see where one thing ends
+      and the next begins. `.panel` is a real surface with a hairline, a
+      radius and one soft shadow — the Ledger "zero cards" law is retired.
+   2. AN ANSWER BEFORE THE DATA. Every screen opens with `.perch`: one line
+      of plain English derived from LIVE state. Never cheerful about data it
+      does not have — see Perch.tsx and DESIGN.md §3.
+   3. A FLOOR UNDER THE JARGON. 15px body type, dotted-underline glossary
+      terms, expert tables folded behind disclosure.
 
-   Dark ships. Light is specced and audited but must not be user-toggleable
-   until every component composition is verified in it (Phase 6).
-   Environment substrate swaps via [data-env] on the app root.
-   No color-mix(): macOS 12 ships WKWebView/Safari 15.6.
+   WHAT DID NOT CHANGE
+   · Law 2 — no state is EVER encoded by colour alone. Every dot has a word.
+   · Law 3 — nothing inside a scrolling table gets a transition, filter,
+     backdrop-filter, border-radius or box-shadow. `--row-h` is a fixed token
+     the virtualizer reads at runtime (src/virtual.ts).
+   · The nine production guardrail layers, in BOTH themes.
+   · No color-mix(): macOS 12 ships WKWebView/Safari 15.6.
+
+   THE THEME RUNTIME
+   `<html>` carries five attributes, all stamped before first paint by the
+   inline script in index.html and thereafter by src/appearance.ts:
+
+     data-theme     dark | light          RESOLVED — never "system"
+     data-density   comfortable | compact
+     data-accent    brass | moss | sky | plum
+     data-fontsize  s | m | l
+     data-motion    system | reduce
+
+   TOKEN LAYERS. Colour tokens are declared TWICE and only twice — once in
+   the dark block, once in the light block — so flipping data-theme cannot
+   leave a half-themed control behind. Everything else (type, space, metrics,
+   shape, motion) is theme-independent and declared once on :root.
+
+   THE LEGACY ALIAS LAYER is the reason a 5000-line stylesheet re-themed for
+   free. Ledger's token names (--text-primary, --bg-canvas, --accent, …) are
+   still declared, as `var()` references to their Jackdaw equivalents. They
+   resolve against whichever theme block won, because both land on the same
+   element. Do NOT give an alias a literal colour — that is how a token
+   escapes the theme system.
+
+   NAMING TRAP, inherited from the mockup and worth restating: the chart
+   series are --ser0…--ser5, NOT --s0…--s5, because --s-1…--s-12 is the
+   spacing scale. And Jackdaw's text ramp is --t1/--t2/--t3 while the TYPE
+   scale is --t-xs/--t-sm/--t-base/… — one hyphen apart, different things.
+
+   CONTRAST is measured, not estimated (WCAG 2.1 relative luminance), and
+   swept across every surface each token can land on — including the six
+   protected surfaces. Every figure below is a worst case. Body text is held
+   to 4.5:1, operable boundaries and meaningful graphics to 3:1. Purely
+   decorative hairlines are 1.4.11-exempt and carry no floor.
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* ══ THEME-INDEPENDENT — type, space, metrics, shape, motion ══════════════ */
+
 :root {
-  color-scheme: dark;
-
-  /* ── SURFACES ─────────────────────────────────────────────────────── */
-  --bg-rail:         #090B0D;  /* sidebar — recedes behind the stage      */
-  --bg-canvas:       #0F1317;  /* the stage; all data lives here          */
-  --bg-raised:       #161B20;  /* palette, modals, toasts, popovers ONLY  */
-  --bg-sunken:       #0A0D10;  /* inputs, payload inspector, code         */
-  --bg-row-hover:    #161C22;
-  --bg-row-selected: #152227;  /* teal-tinted; primary text 13.57:1       */
-  /* Prod sidebar rows (guardrail layer 6). Named, not inlined, so the
-     theme blocks can move them. Primary text 13.80:1 on the lightest.    */
-  --bg-row-prod-hover:    #241816;
-  --bg-row-prod-selected: #2A1B18;
-  --bg-scrim:        rgba(5, 7, 9, 0.55);       /* no blur — perf         */
-  --selection:       rgba(79, 195, 176, 0.28);  /* precomputed, not color-mix */
-  --skeleton:        #28313A;  /* 1.41:1 — a placeholder, never content   */
-
-  /* ── TEXT — six values; hierarchy lives here, not in boxes ────────── */
-  --text-primary:   #E6EBF0;   /* 15.55:1  values, headings, topic names  */
-  --text-secondary: #A2AEBB;   /*  8.27:1  prose, help text               */
-  --text-tertiary:  #808D9A;   /*  5.50:1  labels, column heads, metadata */
-  --text-disabled:  #657280;   /*  3.79:1  :disabled controls ONLY. Never
-                                  a placeholder — a placeholder is text a
-                                  sighted user is expected to read.       */
-  /* Placeholders and ∅ are different ROLES that the contrast floor puts on
-     the same value: §9 sweeps every --text-* token against all twelve
-     dark+prod surfaces at 4.5:1, and 4.5:1 on a selected row is the binding
-     constraint for both. They stay two tokens because they are two
-     decisions — a future theme can separate them; a shared literal must not
-     let one drift by accident.                                           */
-  --text-placeholder: #7E8A97; /*  4.63:1 worst (selected row)            */
-  --text-absent:    #7E8A97;   /*  4.63:1 worst (selected row) — the ∅
-                                  glyph is TEXT that carries meaning, so
-                                  it clears 4.5:1, not merely 3:1.        */
-  --text-mono:      #C9D4DF;   /* 12.41:1  literals copied out of Kafka   */
-  --text-inverse:   #0B0E11;   /* 16.13:1  on the near-white primary fill */
-
-  /* ── LINES ────────────────────────────────────────────────────────── */
-  --hairline:        #1B2127;  /* decorative separation — 1.4.11 exempt   */
-  --hairline-strong: #262E36;  /* header underline, dock edges            */
-  --border-control:  #636F7C;  /* REQUIRED on every operable boundary.
-                                  Clears 3:1 on ALL 12 dark+prod surfaces,
-                                  worst 3.17 on a selected row. The sunken
-                                  fill is only 1.13:1 against canvas, so
-                                  this border is the ONLY thing satisfying
-                                  SC 1.4.11.                              */
-
-  /* ── ACCENT — means LIVE, and nothing else ────────────────────────── */
-  --accent:       #4FC3B0;     /*  8.67:1  connected · live tail · selected */
-  --accent-quiet: #3C9788;     /*  5.31:1  hairline-weight accent         */
-  --accent-tint:  #12241F;     /*          chip bg; accent on it 7.52:1   */
-  --focus:        #6FE3CD;     /* 12.03:1 — always with outline-offset    */
-  --fill-primary-hover: #FFFFFF; /* the primary button's hover fill       */
-
-  /* ── SEMANTIC ─────────────────────────────────────────────────────── */
-  --ok:          #56C08A;      /*  8.26:1 */
-  --warn:        #D9A441;      /*  8.29:1 */
-  --danger:      #E5786B;      /*  6.42:1 */
-  --danger-fill: #A63C31;      /*  6.34:1 with --on-danger-fill           */
-  --danger-fill-hover: #B84439;/*  5.35:1 with --on-danger-fill           */
-  --on-danger-fill: #FFFFFF;
-  /* The outlined danger button's boundary is operable, so SC 1.4.11
-     applies. Precomputed and OPAQUE: an rgba() border composites against
-     whatever is behind it and collapsed to 2.20:1 on the canvas.         */
-  --danger-border: #A85C50;    /*  3.34:1 worst, on a selected dark row
-                                  (3.56 on --bg-raised, 3.83 on canvas)   */
-  --ok-tint:     #101E18;
-  --warn-tint:   #241D0F;
-  --danger-tint: #1B1315;      /*  --danger on it = 6.28:1               */
-
-  /* Empty half of a lag meter. The FILL is the meaningful indicator and
-     clears 3:1 on every surface; this is the adjacent colour inside the
-     meter, so every fill must also clear 3:1 against IT (ok 4.96, warn
-     4.98, danger 3.86). --hairline-strong was 1.36:1 on canvas: the
-     meter's extent was invisible, so "proportional" meant nothing.       */
-  --track-empty: #333C46;
-
-  /* ── ENVIRONMENT — the ledger rule carries the signal ─────────────────
-     Environments are USER-DEFINED. Two attributes carry them into CSS and
-     they mean different things:
-
-       [data-env-color]      IDENTITY. Seven closed tokens. Colours the
-                             ledger rule, the chip and the picker segment.
-       [data-env-protected]  THE GUARDRAIL. Present or absent, never
-                             "false". Swaps the warm substrate, lights the
-                             top wire, fills the chip, and dampens the rule
-                             behind a danger banner.
-
-     `data-env` used to carry both in one token, which is exactly what made
-     the set closed: `[data-env="prod"]` is a NAME check, and a name is now
-     user data. Every default below is `slate` — the token an environment
-     Kavka has never heard of resolves to.
-
-     The four chip tokens per colour are declared in the [data-env-color]
-     blocks further down; these are the slate fallback, so a chip with no
-     colour attribute still paints something legible.                      */
-  --rule:      #242B33;        /* slate: decorative (1.30:1) BY DESIGN —
-                                  slate has no warning to give, and the
-                                  absence of a coloured rule is itself the
-                                  signal: it means Kavka does not know this
-                                  environment.                             */
-  --env-ink:   #A2AEBB;        /*  7.27:1 on --env-tint                    */
-  --env-tint:  #1A2027;
-  --env-badge-ink:  #E9EDF1;   /*  6.48:1 on --env-badge-fill              */
-  --env-badge-fill: #4A555F;
-  --env-wire:  transparent;    /* 2px bar under the native title bar      */
-
-  /* ── DATA SERIES — one lightness band, so no series shouts ────────── */
-  --series-1: #4FC3B0;  --series-2: #6FA8DC;  --series-3: #B99BD4;
-  --series-4: #D9A441;  --series-5: #E5786B;  --series-6: #86C98A;
-  --grid-line: var(--hairline);
-
-  /* ── PAYLOAD SYNTAX — all AA on --bg-sunken AND on --syn-match ────── */
-  --syn-key:    #8FA6BC;       /*  7.74:1 */
-  --syn-string: #9FD5A8;       /* 11.65:1 */
-  --syn-number: #E0B36A;       /* 10.04:1 */
-  --syn-atom:   #B99BD4;       /*  8.07:1  true / false / null           */
-  --syn-punct:  #7B8899;       /*  5.40:1  braces carry structure = AA   */
-  --syn-match:  #132028;       /* search hit — neutral-cool, so the WORST
-                                  syntax token still clears 4.60:1. Always
-                                  paired with a 2px --accent underline:
-                                  the hit must not be colour-only.       */
-
-  /* ── TYPE ─────────────────────────────────────────────────────────── */
-  --font-ui: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI",
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
              Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+  --font-mono: "Cascadia Mono", ui-monospace, "SF Mono", "Segoe UI Mono",
                Menlo, Consolas, monospace;
 
-  --t-micro:   10.5px;  --lh-micro:   14px;  /* uppercase eyebrow, tracked */
-  --t-xs:      11px;    --lh-xs:      15px;  /* kbd, footnotes, status bar */
-  --t-sm:      12px;    --lh-sm:      17px;  /* secondary UI, chips        */
-  --t-base:    13px;    --lh-base:    19px;  /* DEFAULT — all data         */
-  --t-md:      15px;    --lh-md:      21px;  /* panel + modal titles       */
-  --t-lg:      19px;    --lh-lg:      25px;  /* page title                 */
-  --t-xl:      24px;    --lh-xl:      30px;  /* empty-state headline       */
-  --t-display: 30px;    --lh-display: 36px;  /* hero stat numerals         */
-  --lh-prose:  1.55;                          /* banners, hints, empties   */
+  /* The font-size preference multiplies ONE number. Nothing in the app
+     hard-codes a px font size — if a rule needs a size it takes a step. */
+  --fs: 1;
+  --f11: calc(11px * var(--fs));
+  --f12: calc(12px * var(--fs));
+  --f13: calc(13px * var(--fs));
+  --f15: calc(15px * var(--fs));   /* BODY — deliberately larger than the
+                                      13px Ledger shipped                  */
+  --f17: calc(17px * var(--fs));
+  --f20: calc(20px * var(--fs));
+  --f26: calc(26px * var(--fs));
+  --f34: calc(34px * var(--fs));
+
+  /* Ledger's type scale, re-expressed on the Jackdaw steps so the whole app
+     answers the font-size preference without touching 5000 lines. */
+  --t-micro:   calc(10.5px * var(--fs));  --lh-micro:   calc(14px * var(--fs));
+  --t-xs:      var(--f11);                --lh-xs:      calc(15px * var(--fs));
+  --t-sm:      var(--f12);                --lh-sm:      calc(17px * var(--fs));
+  --t-base:    var(--f13);                --lh-base:    calc(19px * var(--fs));
+  --t-md:      var(--f15);                --lh-md:      calc(22px * var(--fs));
+  --t-lg:      var(--f20);                --lh-lg:      calc(27px * var(--fs));
+  --t-xl:      var(--f26);                --lh-xl:      calc(33px * var(--fs));
+  --t-display: var(--f34);                --lh-display: calc(41px * var(--fs));
+  --lh-prose:  1.55;
 
   --w-normal: 400;  --w-medium: 500;  --w-semi: 600;  --w-bold: 700;
-  --track-eyebrow: 0.08em;     /* uppercase micro labels ONLY             */
-  --track-tight:  -0.011em;    /* >= 19px only                            */
+  --track-eyebrow: 0.09em;
+  --track-tight:  -0.018em;
   --nums-tabular: tabular-nums lining-nums;
 
-  /* ── SPACE (4px base) ─────────────────────────────────────────────── */
+  /* Space (4px base). --s1…--s9 is the mockup's ladder; --s-1…--s-12 is
+     Ledger's, kept because every existing rule uses it. */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px;
+  --s6:24px; --s7:32px; --s8:40px; --s9:56px;
   --s-1:  2px;  --s-2:  4px;  --s-3:  6px;  --s-4:  8px;
   --s-5: 12px;  --s-6: 16px;  --s-7: 20px;  --s-8: 24px;
   --s-9: 32px;  --s-10:40px;  --s-11:56px;  --s-12:72px;
 
-  /* ── METRICS ──────────────────────────────────────────────────────── */
-  --rail-w:        240px;   /* resizable 200–360, Ctrl/Cmd+B             */
+  /* Shape. Jackdaw has radii: the raised panel is the direction. */
+  --r-sm: 7px;  --r-md: 11px;  --r-lg: 15px;
+  --r-control:  var(--r-sm);
+  --r-popover:  var(--r-md);
+  --r-overlay:  var(--r-lg);
+  --r-pill:     999px;
+
+  /* Metrics */
+  --rail-w:        248px;   /* the connections sidebar                     */
+  --nav-w:         224px;   /* the cluster rail inside the workspace       */
   --topbar-h:       44px;
-  --tabstrip-h:     30px;
-  --statusbar-h:    24px;
-  --row-h:          30px;   /* virtualizer reads this token at runtime   */
-  --row-h-head:     28px;
-  --control-h:      28px;
-  --control-h-lg:   32px;   /* search bar, primary form inputs           */
-  --gutter-w:       72px;   /* THE LEDGER GUTTER                         */
-  --gutter-w-code:  40px;   /* inspector line numbers                    */
-  --inspector-w:   480px;   /* resizable 320–60%, Ctrl/Cmd+I             */
+  --statusbar-h:    26px;
+  /* INLINE tabs only — the modal's Export/Import pair, the inspector's
+     panes, the producer's modes. The cluster's ten-tab strip is gone; it
+     is a grouped rail now. Aliased to a control height so a bare .tab
+     cannot fall under the 24px SC 2.5.8 floor at any density. */
+  --tabstrip-h:    var(--control-h-lg);
+  --gutter-w:       72px;   /* THE LEDGER GUTTER — Jackdaw keeps it: the
+                               row's address in Kafka's own vocabulary is
+                               the one thing a raised panel cannot replace */
+  --gutter-w-code:  40px;
+  --inspector-w:   480px;
   --palette-w:     580px;
-  --measure:        62ch;   /* max width of ANY prose block              */
-  --hit-min:        24px;   /* nothing operable may be smaller — SC 2.5.8 */
+  --measure:        74ch;   /* max width of ANY prose block                */
+  --hit-min:        24px;   /* nothing operable may be smaller — SC 2.5.8  */
 
-  /* ── SHAPE ────────────────────────────────────────────────────────── */
-  --r-control:  4px;
-  --r-popover:  6px;
-  --r-overlay: 10px;
-  --r-pill:   999px;
-  /* Tables, panels, page sections, stat blocks and banners have NO radius
-     and NO border by design. If you are reaching for a card, use space.  */
-
-  /* ── ELEVATION — exactly two, both overlay-only ───────────────────── */
-  --shadow-popover: 0 6px 20px -6px rgba(0, 0, 0, 0.6),
-                    0 0 0 1px var(--hairline-strong);
-  --shadow-overlay: 0 20px 56px -16px rgba(0, 0, 0, 0.75),
-                    0 0 0 1px var(--hairline-strong);
-
-  /* ── MOTION ───────────────────────────────────────────────────────── */
-  --dur-instant:   0ms;   /* row hover, cell select — data answers NOW   */
-  --dur-fast:    120ms;   /* buttons, chips, checkboxes, chevrons        */
-  --dur-base:    180ms;   /* banners, toasts, tab crossfade              */
-  --dur-slow:    260ms;   /* inspector slide, sidebar collapse           */
+  /* Motion. `--dur-*` are Ledger's names and every transition uses them,
+     which is what makes [data-motion="reduce"] a two-line override. */
+  --dur-instant:   0ms;
+  --dur-fast:    120ms;
+  --dur-base:    180ms;
+  --dur-slow:    260ms;
   --ease:        cubic-bezier(0.22, 0.61, 0.36, 1);
-  --ease-settle: cubic-bezier(0.34, 1.26, 0.64, 1); /* PALETTE + TOAST ONLY */
+  --ease-settle: cubic-bezier(0.34, 1.26, 0.64, 1);
 
-  /* ── FOCUS (SC 2.4.11 / 1.4.11) ───────────────────────────────────── */
   --focus-ring:   2px solid var(--focus);
-  --focus-offset: 2px;    /* always offset — the ring must never sit on a
-                             light fill, where it would drop to 1.29:1   */
+  --focus-offset: 2px;
 }
 
-/* ══ DENSITY — 3 steps, persisted. The message browser defaults ONE step
-   denser than the app; the app-level toggle sets the preference, the
-   browser's default is only its initial value, never a lock. ══════════ */
-[data-density="compact"] { --row-h: 24px; --t-base: 12px; --gutter-w: 64px; }
-[data-density="relaxed"] { --row-h: 34px; --row-h-head: 32px; }
+/* ══ DENSITY — two steps, persisted ═══════════════════════════════════════
+   COMFORTABLE is Jackdaw as drawn and the default. COMPACT restores the row
+   height Ledger shipped (30px) for anyone who reads 10k-row tables all day —
+   it is the answer to the one fair criticism of the mockup, and it changes
+   ONLY rhythm: no colour, no type weight, no affordance moves with it.
 
-/* ══ ENVIRONMENT IDENTITY — seven colours, one shape ══════════════════
-   Each block declares exactly five tokens and nothing else, because
-   identity must not move the ground: the tag pair (--env-ink on
-   --env-tint), the badge pair (--env-badge-ink on --env-badge-fill), and
-   the ledger rule.
+   --row-h is fixed px and never multiplied by --fs. src/virtual.ts places
+   every windowed row from this token, and its dev-mode assertion compares it
+   against a laid-out row; a value that moved with the font preference would
+   need the observer to watch data-fontsize too. Rows are tall enough that
+   the largest step still fits — see DESIGN.md §3. ═══════════════════════ */
 
-   RATIOS ARE MEASURED, and both members of every pair are OPAQUE — which
-   is what makes a single number honest: an opaque ink on an opaque fill
-   has the same ratio on every surface underneath, so these clear SC 1.4.3
-   on all fifteen dark, protected and protected-row surfaces at once.
-   §9 gate 1 applies to the rule as a graphic (≥3:1) and it is swept
-   across all fifteen; the worst figure is quoted per token.
+[data-density="comfortable"], :root {
+  --row-h:        44px;
+  --row-h-head:   34px;
+  --control-h:    32px;
+  --control-h-lg: 36px;
+  --pad-panel:    20px;   /* a raised panel's inner padding */
+  --stack:        18px;   /* vertical gap between panels    */
+}
 
-   The chip FILLS are not indicators and are held to no floor: the chip
-   contains the environment's NAME (Law 2), so the fill is a container,
-   not a signal. They measure 1.93–3.11:1 against the surface set, quoted
-   here so nobody re-derives them believing they are a gate.              */
+[data-density="compact"] {
+  --row-h:        30px;
+  --row-h-head:   28px;
+  --control-h:    28px;
+  --control-h-lg: 32px;
+  --pad-panel:    13px;
+  --stack:        12px;
+}
+
+/* ══ FONT SIZE — three steps, persisted ══════════════════════════════════ */
+[data-fontsize="s"] { --fs: 0.9; }
+[data-fontsize="m"] { --fs: 1; }
+[data-fontsize="l"] { --fs: 1.15; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK — the default. A warm brown-grey ground, not blue-black.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ── SURFACES — a warm ladder. Each step is a real elevation. ───────── */
+  --bg-desk:      #0A0908;   /* behind the app window                     */
+  --bg-app:       #100E0B;   /* sidebar, rail, status bar — recedes       */
+  --bg-canvas:    #191512;   /* the working ground                        */
+  --bg-panel:     #221D18;   /* raised surface: every panel sits here     */
+  --bg-panel-hi:  #2A241E;   /* hover on a raised surface                 */
+  --bg-inset:     #14110E;   /* inputs, payloads, code — pressed in       */
+  --bg-row-hover: #2A241E;
+  --bg-row-sel:   #33291C;   /* selected row, accent-tinted               */
+  --bg-prod-row:  #2A1815;
+  --bg-prod-hi:   #33201C;
+  --bg-prod-sel:  #3A241F;
+  --bg-scrim:     rgba(8, 6, 5, 0.62);
+
+  /* ── LINES ─────────────────────────────────────────────────────────── */
+  --line:         #342D26;   /* decorative separation — 1.4.11 exempt     */
+  --line-mid:     #463D34;   /* heavier decoration: dock edges, wells     */
+  --line-strong:  #8A7D6E;   /* REQUIRED on anything you can operate.
+                                3.55:1 worst (selected row) · 4.12 panel
+                                · 5.16 sidebar · 4.71 canvas              */
+  --focus:        #FFD489;   /* 10.19:1 worst · 13.79 sidebar             */
+
+  /* ── TEXT — three values. Hierarchy is weight + these, not boxes. ───── */
+  --t1:      #F4EFE8;   /* 12.45:1 worst (selected row) · 15.86 canvas    */
+  --t2:      #C6BCAF;   /*  7.60:1 worst · 9.69 canvas                    */
+  --t3:      #A0958A;   /*  4.86:1 worst · 6.19 canvas                    */
+  --t-mono:  #E6DED3;   /* 14.11:1 on inset — literals from Kafka         */
+  --t-inv:   #1A1206;
+  --t-off:   #8A7E70;   /*  3.59:1 worst — :disabled controls ONLY, which
+                            SC 1.4.3 exempts. Never a placeholder.        */
+
+  /* ── ACCENT — brass. Jackdaws collect bright things. ──────────────────
+     RULE: the accent only ever appears on something you can click or
+     something that is selected. It carries no meaning of its own, which is
+     what makes it safe to let the user change it. */
+  --brass:        #E9A94E;   /* 6.95:1 worst · 8.86 canvas                */
+  --brass-tint:   #2B2113;   /* brass on it 7.71:1                        */
+  --brass-fill:   #E9A94E;   /* --on-brass on it 9.05:1                   */
+  --brass-hover:  #F5BA65;
+  --brass-quiet:  #C08C3E;   /* 4.79:1 worst — hairline-weight accent     */
+  --on-brass:     #1A1206;
+
+  /* ── SEMANTIC ──────────────────────────────────────────────────────── */
+  --ok:     #6FCB92;   /* 7.21:1 worst */
+  --warn:   #E4B85E;   /* 7.67:1 worst */
+  --danger: #F49182;   /* 6.25:1 worst */
+  --info:   #8CBEE4;   /* 7.19:1 worst */
+  --ok-tint:     #12241A;   /* ok on it     8.22:1 */
+  --warn-tint:   #261E10;   /* warn on it   8.87:1 */
+  --danger-tint: #2A1714;   /* danger on it 7.49:1 */
+  --info-tint:   #121D28;   /* info on it   8.60:1 */
+  --danger-solid:       #A8412F;   /* white on it 6.07:1 */
+  --danger-solid-hover: #BC4C38;   /* white on it 4.97:1 */
+  --danger-edge:        #B0685A;   /* 3.37:1 worst — the operable boundary
+                                      of a danger button. The SOLID fill is
+                                      2.35:1 on a selected row, so the edge
+                                      is what satisfies SC 1.4.11, not the
+                                      fill.                               */
+  --on-danger:   #FFFFFF;
+
+  /* Meter track. The FILL is the indicator; this is the colour beside it,
+     so every fill must clear 3:1 against IT — ok 4.69 · warn 5.00 ·
+     danger 4.07 · brass 4.52. The track's own extent is carried by a
+     --line-strong border, not by this fill. */
+  --track-empty: #4E463C;
+
+  --skeleton:    #332B24;   /* 1.31:1 — a placeholder, never content      */
+  --selection:   #3E3320;   /* --t1 on it 10.80:1                         */
+
+  /* ── THE PERCH — the signature note ────────────────────────────────── */
+  --perch-bg:    #2A2214;
+  --perch-line:  #6A5227;   /* DECORATIVE: the perch is identified by its
+                               ground, its bird and its heading, never by
+                               this line alone                            */
+  --perch-ink:   #EBD5A6;   /* 10.92:1 on the perch ground */
+  --perch-title: #F7E7C4;   /* 12.85:1 on the perch ground */
+
+  /* ── PAYLOAD SYNTAX — AA on --bg-inset AND on --syn-match ───────────
+     Fixed, and deliberately NOT derived from the accent: a plum accent
+     must not recolour every JSON number in the app. */
+  --syn-key:    #8CBEE4;   /* 7.70:1 worst */
+  --syn-string: #9FD5A8;   /* 9.12:1 worst */
+  --syn-number: #E0B36A;   /* 7.86:1 worst */
+  --syn-atom:   #BBA0F0;   /* 6.82:1 worst */
+  --syn-punct:  #A6998B;   /* 5.48:1 worst — braces carry structure = AA  */
+  --syn-match:  #2E2412;   /* search hit; always paired with a 2px accent
+                              underline, so the hit is never colour-only  */
+
+  /* ── CHART SERIES — never colour alone; every series has a label on the
+     plot and a number in the legend. ─────────────────────────────────── */
+  --ser0:#E9A94E; --ser1:#7FC8A9; --ser2:#F4897A;
+  --ser3:#84B9EA; --ser4:#BBA0F0; --ser5:#CBBFAF;
+  --grid: #2E2822;
+
+  /* ── ELEVATION — the direction's bet, stated in three tokens ───────── */
+  --shadow-1: 0 1px 1px rgba(0,0,0,.34), 0 2px 6px rgba(0,0,0,.26);
+  --shadow-2: 0 12px 34px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  --shadow-window: 0 24px 70px rgba(0,0,0,.6);
+
+  /* ── LEGACY ALIAS LAYER ─────────────────────────────────────────────
+     Ledger's names, so every rule below inherits Jackdaw untouched.
+     NEVER give one of these a literal colour. */
+  --bg-rail:              var(--bg-app);
+  --bg-raised:            var(--bg-panel);
+  --bg-sunken:            var(--bg-inset);
+  --bg-row-selected:      var(--bg-row-sel);
+  --bg-row-prod-hover:    var(--bg-prod-hi);
+  --bg-row-prod-selected: var(--bg-prod-sel);
+  --hairline:             var(--line);
+  --hairline-strong:      var(--line-mid);
+  --border-control:       var(--line-strong);
+  --text-primary:         var(--t1);
+  --text-secondary:       var(--t2);
+  --text-tertiary:        var(--t3);
+  --text-disabled:        var(--t-off);
+  --text-placeholder:     var(--t3);
+  --text-absent:          var(--t3);
+  --text-mono:            var(--t-mono);
+  --text-inverse:         var(--t-inv);
+  --accent:               var(--brass);
+  --accent-quiet:         var(--brass-quiet);
+  --accent-tint:          var(--brass-tint);
+  --fill-primary-hover:   var(--brass-hover);
+  --danger-fill:          var(--danger-solid);
+  --danger-fill-hover:    var(--danger-solid-hover);
+  --danger-border:        var(--danger-edge);
+  --on-danger-fill:       var(--on-danger);
+  --series-1: var(--ser0); --series-2: var(--ser3); --series-3: var(--ser4);
+  --series-4: var(--warn); --series-5: var(--ser2); --series-6: var(--ser1);
+  --grid-line: var(--grid);
+  --shadow-popover: var(--shadow-1), 0 0 0 1px var(--line);
+  --shadow-overlay: var(--shadow-2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT — warm paper, not clinical white. A REAL theme: it ships, it is
+   swept, and every guardrail below survives it.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-desk:      #DCD3C4;
+  --bg-app:       #EAE3D8;
+  --bg-canvas:    #F6F1E8;
+  --bg-panel:     #FFFDF8;
+  --bg-panel-hi:  #F0E9DC;
+  --bg-inset:     #F1EBE0;
+  --bg-row-hover: #F0E9DC;
+  --bg-row-sel:   #FBEFD6;
+  --bg-prod-row:  #FAE7E3;
+  --bg-prod-hi:   #F5DCD6;
+  --bg-prod-sel:  #FADFD6;
+  --bg-scrim:     rgba(60, 50, 38, 0.42);
+
+  --line:         #DED5C6;
+  --line-mid:     #CDC3B2;
+  --line-strong:  #82786A;   /* 3.40:1 worst (sidebar) · 4.42 panel       */
+  --focus:        #7A4B00;   /* 5.81:1 worst · 7.29 panel                 */
+
+  --t1:      #23201B;   /* 12.73:1 worst (sidebar) · 15.97 panel          */
+  --t2:      #564F45;   /*  6.34:1 worst ·  7.95 panel                    */
+  --t3:      #6A6155;   /*  4.77:1 worst ·  5.98 panel                    */
+  --t-mono:  #2E2A24;   /* 12.02:1 on inset                               */
+  --t-inv:   #FFFDF8;
+  --t-off:   #867C6F;   /*  3.21:1 worst — :disabled only                 */
+
+  --brass:        #82540C;   /* 5.11:1 worst · 6.39 panel                 */
+  --brass-tint:   #FBEFD6;   /* brass on it 5.72:1                        */
+  --brass-fill:   #8A5A0E;   /* white on it 5.92:1                        */
+  --brass-hover:  #6E4508;
+  --brass-quiet:  #96691B;   /* 3.80:1 worst                              */
+  --on-brass:     #FFFFFF;
+
+  --ok:     #186639;   /* 5.50:1 worst */
+  --warn:   #7E5209;   /* 5.32:1 worst */
+  --danger: #A8351F;   /* 5.16:1 worst */
+  --info:   #1A5F87;   /* 5.44:1 worst */
+  --ok-tint:     #E4F3E7;   /* ok on it     6.09:1 */
+  --warn-tint:   #FAEDD2;   /* warn on it   5.85:1 */
+  --danger-tint: #FBE6E1;   /* danger on it 5.48:1 */
+  --info-tint:   #E2EEF8;   /* info on it   5.88:1 */
+  --danger-solid:       #A93223;   /* white on it 6.63:1 */
+  --danger-solid-hover: #8E2A1D;   /* white on it 8.40:1 */
+  --danger-edge:        #A9584A;   /* 3.94:1 worst */
+  --on-danger:   #FFFFFF;
+
+  --track-empty: #E6DCCB;   /* ok 5.16 · warn 4.99 · danger 4.84 vs fills */
+  --skeleton:    #E7DECE;   /* 1.19:1 on canvas */
+  --selection:   #F3E1B8;   /* --t1 on it 12.58:1 */
+
+  --perch-bg:    #FCF2DC;
+  --perch-line:  #C9A961;   /* decorative — see the dark note */
+  --perch-ink:   #5E4712;   /*  7.91:1 on the perch ground */
+  --perch-title: #3F3009;   /* 11.52:1 on the perch ground */
+
+  --syn-key:    #1F5F86;   /* 5.47:1 worst */
+  --syn-string: #1C6B3F;   /* 5.16:1 worst */
+  --syn-number: #8A5510;   /* 4.91:1 worst */
+  --syn-atom:   #5B3FA8;   /* 6.11:1 worst */
+  --syn-punct:  #655C50;   /* 5.20:1 worst */
+  --syn-match:  #F7E3B8;
+
+  --ser0:#8A5A0E; --ser1:#1A6039; --ser2:#A93223;
+  --ser3:#1B5F94; --ser4:#5B3FA8; --ser5:#655C50;
+  --grid: #E4DACA;
+
+  --shadow-1: 0 1px 1px rgba(90,74,52,.10), 0 2px 6px rgba(90,74,52,.10);
+  --shadow-2: 0 14px 36px rgba(70,56,36,.20), 0 2px 8px rgba(70,56,36,.14);
+  --shadow-window: 0 24px 60px rgba(70,56,36,.28);
+}
+
+/* ══ ACCENT — four choices, each redeclaring the SAME token set in each
+   theme, so the picker cannot leave a half-themed control behind.
+
+   Brass is the base and is declared in the theme blocks above; the three
+   below override it. There is deliberately no coral/clay accent: an accent
+   the eye reads as the danger colour would put a decorative hue and a
+   guardrail hue in the same family, which is the one composition §6 forbids.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+[data-theme="dark"][data-accent="moss"] {
+  --brass:#7FCB9B; --brass-tint:#132419; --brass-fill:#7FCB9B;
+  --brass-hover:#95DBAD; --brass-quiet:#4F9A6E; --on-brass:#0A1710;
+  --bg-row-sel:#1D3226; --focus:#A9EDC6; --selection:#223A2B;
+}
+[data-theme="light"][data-accent="moss"] {
+  --brass:#1A6039; --brass-tint:#E3F2E8; --brass-fill:#1A6039;
+  --brass-hover:#124A2B; --brass-quiet:#2F7A4B; --on-brass:#FFFFFF;
+  --bg-row-sel:#E1F1E6; --focus:#124A2B; --selection:#D3EADB;
+}
+[data-theme="dark"][data-accent="sky"] {
+  --brass:#8FBFEA; --brass-tint:#122029; --brass-fill:#8FBFEA;
+  --brass-hover:#A8D0F4; --brass-quiet:#5C90BE; --on-brass:#08131C;
+  --bg-row-sel:#1C2E3B; --focus:#B6DBFF; --selection:#20364A;
+}
+[data-theme="light"][data-accent="sky"] {
+  --brass:#155C8C; --brass-tint:#E2EEF8; --brass-fill:#155C8C;
+  --brass-hover:#0F4770; --brass-quiet:#22608C; --on-brass:#FFFFFF;
+  --bg-row-sel:#E3EFF9; --focus:#0F4770; --selection:#D2E5F4;
+}
+[data-theme="dark"][data-accent="plum"] {
+  --brass:#C7A2EF; --brass-tint:#1E1729; --brass-fill:#C7A2EF;
+  --brass-hover:#D6B8F7; --brass-quiet:#8D71BA; --on-brass:#150C21;
+  --bg-row-sel:#2C2140; --focus:#DDC0FF; --selection:#33264A;
+}
+[data-theme="light"][data-accent="plum"] {
+  --brass:#59389F; --brass-tint:#EDE6FA; --brass-fill:#59389F;
+  --brass-hover:#452A7D; --brass-quiet:#5D449F; --on-brass:#FFFFFF;
+  --bg-row-sel:#EDE6FA; --focus:#452A7D; --selection:#E1D6F5;
+}
+
+/* ══ ENVIRONMENT IDENTITY — seven colours, one shape ══════════════════════
+   Environments are USER-DEFINED. Two attributes carry them into CSS and they
+   mean different things — this is unchanged from Ledger and must stay:
+
+     [data-env-color]      IDENTITY. Seven closed tokens. Colours the ledger
+                           rule, the chip and the picker segment.
+     [data-env-protected]  THE GUARDRAIL. Present or absent, never "false".
+                           Swaps the warm substrate, lights the top wire,
+                           fills the chip, and dampens the rule behind a
+                           danger banner.
+
+   Both attributes sit on `.app`, not on <html>, so the light overrides are
+   DESCENDANT selectors — `[data-theme="light"] [data-env-color=…]`.
+
+   Each block declares exactly five tokens, because identity must not move
+   the ground: the tag pair (--env-ink on --env-tint), the badge pair
+   (--env-badge-ink on --env-badge-fill), and the rule.
+
+   Ratios are measured against every surface the token can land on, dark and
+   light, protected and not. Both members of every pair are OPAQUE, which is
+   what makes one number honest. The chip FILLS are containers, not
+   indicators — the chip contains the environment's NAME (Law 2) — so they
+   carry no floor.                                                        */
 
 [data-env-color="green"] {
-  --env-ink:   #79C98F;    /*  8.46:1 on --env-tint                      */
-  --env-tint:  #0F2116;
-  --env-badge-ink:  #E7F7EC;   /*  5.71:1 on the fill below              */
-  --env-badge-fill: #2F6B45;   /*  2.57–3.11 vs surfaces (container)     */
-  --rule:      #4E8560;    /* 3.76 worst (selected neutral row) · 4.31
-                              canvas · 3.86 selected protected row       */
+  --env-ink:  #79C98F;   /* 7.16:1 worst surface · 8.17 on its own tint  */
+  --env-tint: #12241A;
+  --env-badge-ink:  #E7F7EC;   /* 5.71:1 on the fill below */
+  --env-badge-fill: #2F6B45;
+  --rule:     #5D9971;   /* 4.25:1 worst (graphic, floor 3) */
 }
-
 [data-env-color="amber"] {
-  --env-ink:   #D9A441;    /*  7.42:1 — the same amber --warn carries    */
-  --env-tint:  #241D0F;
-  --env-badge-ink:  #FFF0D6;   /*  5.90:1                                */
-  --env-badge-fill: #7A5613;   /*  2.46–2.98 vs surfaces (container)     */
-  --rule:      #8C7036;    /* 3.48 worst · 3.98 canvas — unchanged from
-                              the value staging shipped with             */
+  --env-ink:  #E4B85E;   /* 7.67:1 worst · 8.87 on its tint */
+  --env-tint: #261E10;
+  --env-badge-ink:  #FFF0D6;   /* 5.90:1 */
+  --env-badge-fill: #7A5613;
+  --rule:     #9A7C3E;   /* 3.61:1 worst */
 }
-
 [data-env-color="red"] {
-  --env-ink:   #E5786B;    /*  6.28:1 — the same coral --danger carries  */
-  --env-tint:  #1B1315;
-  --env-badge-ink:  #FFE4DF;   /*  6.22:1 — the badge prod shipped with  */
-  --env-badge-fill: #8E3A31;   /*  2.17–2.63 vs surfaces (container)     */
-  --rule:      #A65246;    /* 3.04 worst (selected neutral row) · 3.48
-                              canvas · 3.09 on a selected PROTECTED
-                              sidebar row, which is the binding figure of
-                              the whole sweep: there is no darker coral
-                              that still clears 3:1, which is why the
-                              danger damper below moves chroma, not
-                              lightness.                                 */
+  --env-ink:  #F49182;   /* 6.25:1 worst · 7.49 on its tint */
+  --env-tint: #2A1714;
+  --env-badge-ink:  #FFE4DF;   /* 6.22:1 */
+  --env-badge-fill: #8E3A31;
+  --rule:     #B76052;   /* 3.26:1 worst — the binding figure of the dark
+                            sweep, which is why the danger damper below
+                            moves chroma rather than lightness             */
 }
-
 [data-env-color="blue"] {
-  --env-ink:   #7FB4E6;    /*  8.03:1                                    */
-  --env-tint:  #0E1A24;
-  --env-badge-ink:  #E3EFFA;   /*  6.54:1                                */
-  --env-badge-fill: #2C5680;   /*  2.13–2.59 vs surfaces (container)     */
-  --rule:      #4B7CA8;    /* 3.68 worst · 4.22 canvas                   */
+  --env-ink:  #8CBEE4;   /* 7.19:1 worst · 8.60 on its tint */
+  --env-tint: #121D28;
+  --env-badge-ink:  #E3EFFA;   /* 6.54:1 */
+  --env-badge-fill: #2C5680;
+  --rule:     #5688B5;   /* 3.79:1 worst */
 }
-
 [data-env-color="violet"] {
-  --env-ink:   #B99BD4;    /*  7.44:1                                    */
-  --env-tint:  #191426;
-  --env-badge-ink:  #F0E8F8;   /*  7.07:1                                */
-  --env-badge-fill: #5A3F86;   /*  1.93–2.34 vs surfaces (container)     */
-  --rule:      #7A5FA6;    /* 3.11 worst · 3.57 canvas                   */
+  --env-ink:  #BBA0F0;   /* 6.37:1 worst · 7.77 on its tint */
+  --env-tint: #1E1729;
+  --env-badge-ink:  #F0E8F8;   /* 7.07:1 */
+  --env-badge-fill: #5A3F86;
+  --rule:     #8D71BA;   /* 3.53:1 worst */
 }
-
 [data-env-color="cyan"] {
-  --env-ink:   #6FC4D6;    /*  8.52:1 — bluer than --accent on purpose:
-                              teal means LIVE and only live (§2)         */
-  --env-tint:  #0C1F24;
-  --env-badge-ink:  #DFF4F9;   /*  6.39:1                                */
-  --env-badge-fill: #1F5E6E;   /*  2.24–2.71 vs surfaces (container)     */
-  --rule:      #3E8FA1;    /* 4.38 worst · 5.02 canvas                   */
+  --env-ink:  #6FC4D6;   /* 7.15:1 worst · 8.34 on its tint. Bluer than the
+                            brass accent on purpose.                       */
+  --env-tint: #0E2126;
+  --env-badge-ink:  #DFF4F9;   /* 6.39:1 */
+  --env-badge-fill: #1F5E6E;
+  --rule:     #469BAE;   /* 4.45:1 worst */
 }
-
 [data-env-color="slate"] {
-  --env-ink:   #A2AEBB;    /*  7.27:1                                    */
-  --env-tint:  #1A2027;
-  --env-badge-ink:  #E9EDF1;   /*  6.48:1                                */
-  --env-badge-fill: #4A555F;   /*  2.14–2.59 vs surfaces (container)     */
-  --rule:      #242B33;    /* 1.14–1.38 — DECORATIVE BY DESIGN. Slate is
-                              what an unknown environment resolves to,
-                              and "no coloured rule" is the signal that
-                              Kavka has nothing to say about this one.   */
+  --env-ink:  #C6BCAF;   /* 7.60:1 worst · 8.80 on its tint */
+  --env-tint: #241E19;
+  --env-badge-ink:  #F2ECE3;   /* 6.94:1 */
+  --env-badge-fill: #574E44;
+  --rule:     #342D26;   /* DECORATIVE BY DESIGN. Slate is what an unknown
+                            environment resolves to, and "no coloured rule"
+                            is itself the signal: Kavka has nothing to say
+                            about this one.                                */
 }
 
-/* ══ PROTECTED — warm substrate, top wire ═════════════════════════════
-   THE ONE WARM-DANGER TREATMENT, whatever colour the chip is. Identity is
-   the chip; protection is the ground. Keyed on the flag, not on a name,
-   so an org whose production environment is called `PRD` gets the same
-   nine layers `prod` used to get.
+[data-theme="light"] [data-env-color="green"] {
+  --env-ink:  #166A3C;   /* 5.21:1 worst · 5.73 on its tint */
+  --env-tint: #E3F2E7;
+  --env-badge-ink:  #FFFFFF;   /* 6.13:1 */
+  --env-badge-fill: #17703F;
+  --rule:     #2F7A4B;   /* 4.11:1 worst */
+}
+[data-theme="light"] [data-env-color="amber"] {
+  --env-ink:  #7E5209;   /* 5.32:1 worst · 5.85 on its tint */
+  --env-tint: #FAEDD2;
+  --env-badge-ink:  #FFFFFF;   /* 6.06:1 */
+  --env-badge-fill: #87590A;
+  --rule:     #8A5D14;   /* 4.51:1 worst */
+}
+[data-theme="light"] [data-env-color="red"] {
+  --env-ink:  #A02F20;   /* 5.64:1 worst · 5.95 on its tint */
+  --env-tint: #FBE5E1;
+  --env-badge-ink:  #FFFFFF;   /* 6.63:1 */
+  --env-badge-fill: #A93223;
+  --rule:     #A83E2E;   /* 4.86:1 worst */
+}
+[data-theme="light"] [data-env-color="blue"] {
+  --env-ink:  #1A5B8E;   /* 5.62:1 worst · 6.08 on its tint */
+  --env-tint: #E2EEF8;
+  --env-badge-ink:  #FFFFFF;   /* 6.75:1 */
+  --env-badge-fill: #1B5F94;
+  --rule:     #22608C;   /* 5.28:1 worst */
+}
+[data-theme="light"] [data-env-color="violet"] {
+  --env-ink:  #57389F;   /* 6.67:1 worst · 7.04 on its tint */
+  --env-tint: #EDE7FA;
+  --env-badge-ink:  #FFFFFF;   /* 7.72:1 */
+  --env-badge-fill: #5B3FA8;
+  --rule:     #5D449F;   /* 5.90:1 worst */
+}
+[data-theme="light"] [data-env-color="cyan"] {
+  --env-ink:  #14606F;   /* 5.62:1 worst · 6.15 on its tint */
+  --env-tint: #DFF1F5;
+  --env-badge-ink:  #FFFFFF;   /* 7.15:1 */
+  --env-badge-fill: #146070;
+  --rule:     #1E6376;   /* 5.31:1 worst */
+}
+[data-theme="light"] [data-env-color="slate"] {
+  --env-ink:  #554D41;   /* 6.53:1 worst · 6.76 on its tint */
+  --env-tint: #EDE7DC;
+  --env-badge-ink:  #FFFFFF;   /* 7.70:1 */
+  --env-badge-fill: #5A5245;
+  --rule:     #DED5C6;   /* decorative — see the dark slate note */
+}
 
-   Verified on the warm canvas: primary 15.82 · secondary 8.41 ·
-   tertiary 5.60 · mono 12.62 · danger 6.53 · accent 8.82 · ok 8.41 ·
-   warn 8.44 · border-control 3.70. Across all six protected surfaces the
-   syntax tokens span 4.64 (punct on a selected row) to 11.81. Unchanged
-   from the values prod shipped with — this block moved, it did not
-   change.
+/* ══ PROTECTED — warm substrate, top wire ════════════════════════════════
+   THE ONE WARM-DANGER TREATMENT, whatever colour the chip is. Identity is
+   the chip; protection is the ground. Keyed on the FLAG, not on a name, so
+   an org whose production environment is called `PRD` gets the same nine
+   layers `prod` used to get — in both themes.
 
    It declares NO identity token, so a protected environment keeps its own
-   colour: the block above and this one never fight.                      */
+   colour: this block and the one above never fight.
+
+   Dark, swept across all six protected surfaces: t1 ≥ 12.45 · t2 ≥ 7.60 ·
+   t3 ≥ 4.86 · line-strong ≥ 3.55 · ok ≥ 7.21 · warn ≥ 7.67 · danger ≥ 6.25
+   · brass ≥ 6.95 · syntax ≥ 5.48. Light: t1 ≥ 12.73 · t2 ≥ 6.34 · t3 ≥ 4.77
+   · line-strong ≥ 3.40 · semantic ≥ 5.16 · syntax ≥ 4.91.               */
+
 [data-env-protected="true"] {
-  --bg-rail:          #0D0B0A;
-  --bg-canvas:        #12100F;
-  --bg-raised:        #1B1715;
-  --bg-sunken:        #0C0A09;
-  --bg-row-hover:     #1E1815;
-  --bg-row-selected:  #241C18;
-  --hairline:         #241B19;
-  --hairline-strong:  #332724;
-  --skeleton:         #332924;   /* 1.34:1 on the warm canvas            */
-  --env-wire:  #B8453A;    /* 3.57:1 — the bar is a MEANINGFUL indicator,
-                              so it must clear 3:1. (--danger-fill would
-                              have been 2.99 here.)                      */
+  --bg-app:       #150E0C;
+  --bg-canvas:    #1E1412;
+  --bg-panel:     #291B18;
+  --bg-panel-hi:  #33221E;
+  --bg-inset:     #180F0E;
+  --bg-row-hover: #33221E;
+  --bg-row-sel:   #3A241F;
+  --line:         #3A2622;
+  --line-mid:     #4C332E;
+  --skeleton:     #3A2822;
+  --env-wire:     #C4564A;   /* 4.10:1 on the protected canvas — the bar is
+                                a MEANINGFUL indicator, so it clears 3:1  */
 }
 
-/* Escape hatch for anyone who finds the warm substrate fatiguing:
-   Settings → Environment colour → "Rule only". The rule, chip, wire and
-   window title all remain, so SC 1.4.1 is still satisfied. */
-[data-env-intensity="rule-only"] {
-  --bg-rail: #090B0D; --bg-canvas: #0F1317; --bg-raised: #161B20;
-  --bg-sunken: #0A0D10; --bg-row-hover: #161C22; --bg-row-selected: #152227;
-  --hairline: #1B2127; --hairline-strong: #262E36; --skeleton: #28313A;
+[data-theme="light"] [data-env-protected="true"] {
+  --bg-app:       #F2E4DF;
+  --bg-canvas:    #FDF1EE;
+  --bg-panel:     #FFFAF8;
+  --bg-panel-hi:  #F6E4DF;
+  --bg-inset:     #F8EAE6;
+  --bg-row-hover: #F6E4DF;
+  --bg-row-sel:   #FADFD6;
+  --line:         #EDD8D2;
+  --line-mid:     #DCC2BB;
+  --skeleton:     #F0DDD7;
+  --env-wire:     #A93223;   /* 6.00:1 on the protected canvas */
 }
+
+/* The wire is transparent outside a protected environment. Declared here
+   rather than in the theme blocks so there is exactly one place that says
+   what "not protected" looks like. */
+:root { --env-wire: transparent; }
+
+/* STAGED, AND NOTHING SETS IT. `data-env-intensity` has no writer anywhere
+   in the app: this is the substrate a "rule only" environment tint would
+   use, kept tokened and contrast-checked in both themes so the control can
+   be added without a colour pass. The rule, chip, wire and window title do
+   not live in this block, so SC 1.4.1 holds with or without it. Do not name
+   this as a setting in the UI or the docs until something writes it. */
+[data-env-intensity="rule-only"] {
+  --bg-app:       #100E0B;
+  --bg-canvas:    #191512;
+  --bg-panel:     #221D18;
+  --bg-panel-hi:  #2A241E;
+  --bg-inset:     #14110E;
+  --bg-row-hover: #2A241E;
+  --bg-row-sel:   #33291C;
+  --line:         #342D26;
+  --line-mid:     #463D34;
+  --skeleton:     #332B24;
+}
+[data-theme="light"] [data-env-intensity="rule-only"] {
+  --bg-app:       #EAE3D8;
+  --bg-canvas:    #F6F1E8;
+  --bg-panel:     #FFFDF8;
+  --bg-panel-hi:  #F0E9DC;
+  --bg-inset:     #F1EBE0;
+  --bg-row-hover: #F0E9DC;
+  --bg-row-sel:   #FBEFD6;
+  --line:         #DED5C6;
+  --line-mid:     #CDC3B2;
+  --skeleton:     #E7DECE;
+}
+
+/* ══ MOTION ══════════════════════════════════════════════════════════════
+   Two sources, one behaviour. `data-motion="reduce"` is the app preference;
+   the media query is the OS, and it wins on its own whatever the preference
+   says — a user who told the OS they get motion sick should not have to
+   find a second switch. `data-motion="system"` is simply the absence of the
+   override.                                                             */
+
+[data-motion="reduce"] {
+  --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --ease-settle: linear;
+}
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+}
+[data-motion="reduce"] .spinner { animation: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --ease-settle: linear; }
@@ -364,10 +688,19 @@ html,
 body,
 #root { height: 100%; margin: 0; }
 
+/* The inline pre-paint script writes an inline background on <html>; once
+   the stylesheet exists the token is the authority, so clear it here rather
+   than leaving two sources for the same colour. */
+html { background: var(--bg-canvas) !important; }
+
+/* 15px, not Ledger's 13px. This is the single largest legibility change in
+   the direction: prose, labels and every control that does not opt into a
+   smaller step now read at --f15. Data tables still opt into --t-base
+   (13px) — a table is scanned, not read. */
 body {
   background: var(--bg-canvas);
   color: var(--text-primary);
-  font: var(--w-normal) var(--t-base) / var(--lh-base) var(--font-ui);
+  font: var(--w-normal) var(--f15) / 1.5 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
@@ -516,30 +849,30 @@ code {
    1.43:1 on the rail, i.e. gone. 4.01:1 dark / 3.99:1 prod. */
 .statusbar-sep { color: var(--text-disabled); }
 
-/* Tab strip — multi-topic browsing from Phase 1. */
-.tabstrip {
-  display: flex;
-  align-items: stretch;
-  height: var(--tabstrip-h);
-  border-bottom: 1px solid var(--hairline);
-  background: var(--bg-canvas);
-}
-
+/* INLINE tabs — the export/import pair, the inspector's panes, the
+   producer's modes. The cluster's own ten-tab strip is gone: it is the
+   grouped rail at the foot of this file, and `.tabstrip` went with it.
+   These are genuine sibling panes inside one surface, which is the only
+   thing a tablist should ever have been. */
 .tab {
   display: inline-flex;
   align-items: center;
   gap: var(--s-3);
-  padding: 0 var(--s-5);
+  padding: 0 var(--s-4);
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
+  font-weight: var(--w-medium);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
 }
 
+.tab:hover { color: var(--text-primary); }
+
 .tab-active {
-  color: var(--text-primary);
+  color: var(--accent);
   border-bottom-color: var(--accent);
 }
 
@@ -1028,14 +1361,30 @@ code {
 .lag-danger .lag-fill { background: var(--danger); }
 
 /* ══════════════════════════════════════════════════════════════════════
-   PANELS + STATS — Kavka ships zero cards. Grouping is whitespace plus a
-   top hairline; emphasis is type weight plus one of five text lightnesses.
+   PANELS + STATS — Jackdaw's core bet, and the reversal of Ledger's
+   "zero cards" law.
+
+   A panel is now a SOFT RAISED SURFACE: its own ground, one hairline, a
+   radius and one shadow. Ledger asked the eye to find the boundary
+   between two things from whitespace alone, and on a screen with nine
+   sections that is the whole of the "hard to follow" complaint.
+
+   Restyled IN PLACE — 47 call sites across the app become Jackdaw
+   panels without a single markup change. `.panel-head` full-bleeds
+   itself back out to the panel's edges with a negative margin, so the
+   divider spans the surface rather than floating inside the padding.
    ══════════════════════════════════════════════════════════════════════ */
 
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--s-4);
+  gap: var(--s-5);
+  min-width: 0;
+  padding: var(--pad-panel);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
 }
 
 .panel-head {
@@ -1043,8 +1392,9 @@ code {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--s-5);
-  padding-top: var(--s-5);
-  border-top: 1px solid var(--hairline);
+  margin: calc(var(--pad-panel) * -1) calc(var(--pad-panel) * -1) 0;
+  padding: var(--pad-panel) var(--pad-panel) calc(var(--pad-panel) * 0.65);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .panel-title {
@@ -1055,6 +1405,7 @@ code {
   font-size: var(--t-md);
   line-height: var(--lh-md);
   font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
   color: var(--text-primary);
 }
 
@@ -1120,8 +1471,14 @@ code {
 
 /* ══════════════════════════════════════════════════════════════════════
    BUTTONS
-   All --control-h, --r-control, --t-sm, sentence case, no transform on
+   All --control-h, --r-control, --t-base, sentence case, no transform on
    press. Exactly one primary per surface.
+
+   Jackdaw moved the primary fill from near-white to the ACCENT. Ledger
+   reserved teal for "live" and could not spend it on a button; Jackdaw's
+   accent carries no meaning of its own — which is precisely what makes
+   it safe to put on the one thing per surface you are meant to click,
+   and what makes the accent picker in Settings harmless.
    ══════════════════════════════════════════════════════════════════════ */
 
 .btn {
@@ -1137,38 +1494,48 @@ code {
      (3.17:1 worst) and never --hairline-strong (1.18:1 worst). */
   border: 1px solid var(--border-control);
   border-radius: var(--r-control);
-  background: transparent;
+  background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
+  font-weight: var(--w-medium);
   white-space: nowrap;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
 }
 
-.btn:hover:not(:disabled) { background: var(--bg-row-hover); }
+.btn:hover:not(:disabled) { background: var(--bg-panel-hi); }
 
 /* Disabled controls always carry a title explaining why. Never a dead
    control with no reason. */
 .btn:disabled { opacity: 0.45; cursor: default; }
 
 .btn-primary {
-  background: var(--text-primary);
-  border-color: var(--text-primary);
-  color: var(--text-inverse);
-  font-weight: var(--w-medium);
+  background: var(--brass-fill);
+  border-color: var(--brass-fill);
+  color: var(--on-brass);
+  font-weight: var(--w-semi);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--fill-primary-hover);
-  border-color: var(--fill-primary-hover);
+  background: var(--brass-hover);
+  border-color: var(--brass-hover);
 }
 
+/* `background: transparent` is load-bearing now. `.btn` gained a --bg-panel
+   fill (Jackdaw buttons read as raised), and a ghost button that inherited
+   it would be a secondary button with no border — the one variant whose
+   whole job is to disappear until you look for it. */
 .btn-ghost {
   border-color: transparent;
+  background: transparent;
   color: var(--text-secondary);
 }
 
-.btn-ghost:hover:not(:disabled) { color: var(--text-primary); }
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-panel-hi);
+  color: var(--text-primary);
+}
 
 /* Danger OUTLINE only ever *opens* a confirmation. The border is the
    component boundary, so it is opaque and precomputed: the old
@@ -1182,11 +1549,14 @@ code {
 
 /* Danger FILL only ever exists one click away from the action happening,
    and only inside a modal or an inline confirmation. */
+/* The BORDER is --danger-border, not the fill: the fill measures 2.35:1
+   against a selected row in the warm dark ground, so the edge is what
+   satisfies SC 1.4.11 here. */
 .btn-danger-confirm {
   background: var(--danger-fill);
-  border-color: var(--danger-fill);
+  border-color: var(--danger-border);
   color: var(--on-danger-fill);
-  font-weight: var(--w-medium);
+  font-weight: var(--w-semi);
 }
 
 .btn-danger-confirm:hover:not(:disabled) {
@@ -1821,6 +2191,15 @@ select option:disabled { color: var(--text-disabled); }
 [data-env-protected="true"][data-alert="danger"],
 [data-alert="danger"] [data-env-protected="true"] { --rule: #9C8079; }
 
+/* Light needs its own damper or it inherits the dark one, which is a warm
+   grey built for a warm-dark ground and reads as a smudge on paper.
+   #8A6F6A: 3.64:1 worst (a selected protected row) across the light protected surfaces, past the 3:1
+   graphics floor with the same "muted, never gone" reading. */
+[data-theme="light"] [data-env-protected="true"][data-alert="danger"],
+[data-theme="light"] [data-alert="danger"] [data-env-protected="true"] {
+  --rule: #8A6F6A;
+}
+
 .banner-glyph {
   flex-shrink: 0;
   font-weight: var(--w-bold);
@@ -2258,11 +2637,15 @@ select option:disabled { color: var(--text-disabled); }
    CLUSTER VIEW
    ══════════════════════════════════════════════════════════════════════ */
 
+/* The cluster workspace is a two-column grid: the grouped rail, then the
+   stage. See the JACKDAW CLUSTER RAIL section at the foot of this file
+   for the rail itself and for why the ten screens are grouped. */
 .cluster-view {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
   gap: var(--s-8);
-  max-width: 1040px;
+  align-items: start;
+  max-width: 1320px;
 }
 
 /* Read-only mode: mutating controls are disabled, never hidden — hiding
@@ -2352,101 +2735,20 @@ select option:disabled { color: var(--text-disabled); }
   .env-swatch-active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   LIGHT — SPECCED AND AUDITED, NOT SHIPPED
-   Every text token clears AA on all six light surfaces; --border-control
-   clears 3:1 on all six. Do NOT expose a user toggle until every
-   component composition has been verified in it (Phase 6).
-   ══════════════════════════════════════════════════════════════════════ */
+/* LEDGER'S LIGHT THEME LIVED HERE AND HAS BEEN DELETED.
+   It declared the legacy alias names (--text-primary, --accent, …) as
+   LITERALS, and being later in the file at equal specificity it beat the
+   Jackdaw [data-theme="light"] block at the top. The symptom was a light
+   theme whose surfaces were Jackdaw's warm paper and whose text and accent
+   were Ledger's cool greys and teal — i.e. two half-themes composited.
 
-[data-theme="light"] {
-  color-scheme: light;
-  --bg-rail: #F2F4F6;  --bg-canvas: #FBFCFD;  --bg-raised: #FFFFFF;
-  --bg-sunken: #F5F7F9; --bg-row-hover: #F1F4F7; --bg-row-selected: #E8F4F1;
-  --bg-row-prod-hover: #F7E2DF;  --bg-row-prod-selected: #F2D8D4;
-  --bg-scrim: rgba(16, 21, 25, 0.30);
-  --selection: rgba(10, 117, 101, 0.20);
-  --skeleton: #DDE2E7;
-  --text-primary: #10151A;    /* 17.87:1 */
-  --text-secondary: #3E4A57;  /*  8.80:1 */
-  --text-tertiary: #5C6875;   /*  5.54:1 */
-  --text-disabled: #7D8794;   /* :disabled only                          */
-  --text-placeholder: #646E7B;/*  4.59:1 worst (selected row)             */
-  --text-absent: #646E7B;     /*  4.59:1 worst (selected row) — same
-                                 reasoning as dark: one floor, two roles  */
-  --text-mono: #1A222B;  --text-inverse: #FFFFFF;
-  --hairline: #E4E8EC;  --hairline-strong: #D3D9DF;
-  --border-control: #767F8C;  /* 3.94 canvas / 4.05 raised / 3.77 sunken */
-  --accent: #0A7565;  --accent-quiet: #0A7565;  --accent-tint: #E4F2EF;
-  --focus: #0A7565;
-  --fill-primary-hover: #000000;
-  --ok: #0B7A52;  --warn: #8A5A08;  --danger: #B3392A;  --danger-fill: #9E2E22;
-  --danger-fill-hover: #8A281D;  --on-danger-fill: #FFFFFF;
-  --danger-border: #B9564A;   /*  4.07:1 worst (danger tint)              */
-  --ok-tint: #E9F5EF;  --warn-tint: #FAF1DE;  --danger-tint: #FBECEA;
-  --track-empty: #C9D0D6;     /* fills clear 3.44–3.81:1 against it       */
-  --rule: #D3D9DF;
-  --env-ink: #4A555F;  --env-tint: #EDF0F3;   /* 6.66:1                   */
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  /* 7.62:1        */
-  --syn-key: #3F5266;  --syn-string: #136B45;  --syn-number: #7A4E06;
-  --syn-atom: #5B3FC4; --syn-punct: #5C6875;   --syn-match: #E3EEF6;
-  --shadow-popover: 0 6px 20px -6px rgba(16, 21, 25, 0.18),
-                    0 0 0 1px var(--hairline-strong);
-  --shadow-overlay: 0 20px 56px -16px rgba(16, 21, 25, 0.22),
-                    0 0 0 1px var(--hairline-strong);
-}
+   THE RULE THIS LEFT BEHIND: there is exactly ONE light block and it is at
+   the top of this file, beside the dark one. An alias is a var() reference
+   and never a literal (§3). If you find yourself adding a second
+   [data-theme="light"] block, you are re-creating this bug.
 
-/* The seven identity tokens in light. Each dark ink is far too light on a
-   white surface, so light inverts the pair: a dark hue on a pale wash for
-   the tag, white on the same dark hue for the badge. Two values per token
-   instead of four, which is also why they fit on one line each.
-
-   Ink-on-tint / white-on-dark, measured: green 5.82 / 6.67 · amber 5.27 /
-   5.92 · red 5.17 / 7.32 · blue 6.65 / 7.75 · violet 5.97 / 7.11 ·
-   cyan 6.25 / 7.24 · slate 6.66 / 7.62. Red is the tightest ink-on-tint of
-   the seven — #B3392A on #FBECEA, the --danger pair reused so the light
-   theme has one red — and still clears AA. The rule is the same dark hue and
-   clears ≥4.38:1 on all eight light surfaces, worst on a selected light
-   protected row — comfortably past the 3:1 graphics floor, because a light
-   theme has luminance to spare where the dark one does not. */
-[data-theme="light"] [data-env-color="green"] {
-  --env-ink: #0F6A3C;  --env-tint: #E4F3EA;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F6A3C;  --rule: #0F6A3C;
-}
-[data-theme="light"] [data-env-color="amber"] {
-  --env-ink: #8A5A08;  --env-tint: #FAF1DE;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #8A5A08;  --rule: #8A5A08;
-}
-[data-theme="light"] [data-env-color="red"] {
-  --env-ink: #B3392A;  --env-tint: #FBECEA;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #9E2E22;  --rule: #8E3A31;
-}
-[data-theme="light"] [data-env-color="blue"] {
-  --env-ink: #15558C;  --env-tint: #E5EFF8;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #15558C;  --rule: #15558C;
-}
-[data-theme="light"] [data-env-color="violet"] {
-  --env-ink: #5B3FC4;  --env-tint: #EDE9FA;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #5B3FC4;  --rule: #5B3FC4;
-}
-[data-theme="light"] [data-env-color="cyan"] {
-  --env-ink: #0F5F72;  --env-tint: #E2F1F5;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #0F5F72;  --rule: #0F5F72;
-}
-/* Slate keeps the light theme's own neutral rule: "no colour" is the
-   signal, exactly as in dark. */
-[data-theme="light"] [data-env-color="slate"] {
-  --env-ink: #4A555F;  --env-tint: #EDF0F3;
-  --env-badge-ink: #FFFFFF;  --env-badge-fill: #4A555F;  --rule: #D3D9DF;
-}
-
-[data-theme="light"] [data-env-protected="true"] { --env-wire: #9E2E22; }
-/* Light needs its own damper, or it inherits the dark one. Same rule:
-   chroma down, contrast kept (4.09:1 worst, on a selected row). */
-[data-theme="light"] [data-env-protected="true"][data-alert="danger"],
-[data-theme="light"] [data-alert="danger"] [data-env-protected="true"] {
-  --rule: #8A6F6A;
-}
+   The one thing worth keeping from it — the light damper — is now declared
+   with its dark twin above, where both are visible at once. */
 
 /* ══════════════════════════════════════════════════════════════════════
    COMMAND PALETTE — rows, and the two dialogs that hang off it
@@ -2794,24 +3096,33 @@ select.input-invalid { border-color: var(--danger); }
 
 /* ── The cluster workspace ────────────────────────────────────────── */
 
+/* The stage. Panels are spaced by this gap, which is why `.panel` carries
+   no margin of its own — density drives one number, in one place. */
 .tabpanel {
   display: flex;
   flex-direction: column;
-  gap: var(--s-8);
+  gap: var(--stack);
+  min-width: 0;
   min-height: 0;
 }
 
 /* The message browser owns the full height: its own scrollport, its own
    status line and a docked inspector cannot live inside a page that
    scrolls as a whole. */
+/* `align-items: stretch` and not the grid's `start`: the message browser
+   owns its own scrollport, so the stage column has to be given the whole
+   height rather than shrink-wrapping its content. The rail stretches with
+   it, which is what keeps the cluster's identity beside a full-height
+   table instead of scrolling away above it. */
 .cluster-view-full {
   height: 100%;
   max-width: none;
   gap: var(--s-5);
+  align-items: stretch;
 }
 
 .cluster-view-full .tabpanel {
-  flex: 1;
+  min-height: 0;
   gap: var(--s-5);
 }
 
@@ -2991,8 +3302,14 @@ select.input-invalid { border-color: var(--danger); }
   gap: var(--s-4);
 }
 
+/* The browser's head is the first thing in a full-height panel and the
+   toolbar sits directly under it, so it keeps the panel's own top padding
+   rather than the head's extra breathing room. `border-top: 0` is left
+   from Ledger, where a panel head was a rule rather than a surface — it is
+   a no-op now and stays only so a search for "panel-head" finds this
+   note. */
 .messages-panel-head {
-  padding-top: 0;
+  padding-top: var(--pad-panel);
   border-top: 0;
 }
 
@@ -3322,21 +3639,13 @@ select.input-invalid { border-color: var(--danger); }
    webview is zoomed. Nothing here changes a layout that already fits.
    ══════════════════════════════════════════════════════════════════════ */
 
-/* Ten tabs in a strip that could neither wrap nor scroll: `.workspace` is
-   `overflow: hidden`, so past about 900px of workspace the last tabs were
-   simply unreachable — by pointer AND by keyboard, because a roving
-   tabindex still cannot focus what the clip has removed. `min-height` so a
-   horizontal scrollbar cannot squeeze the tabs it appears for. */
-.tabstrip {
-  min-height: var(--tabstrip-h);
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* Scoped to the cluster strip: `.modal-tabs` reuses `.tab` and holds two of
-   them inside a dialog that is already width-capped, so it has nothing to
-   scroll and nothing to protect from shrinking. */
-.tabstrip > .tab { flex: 0 0 auto; }
+/* The rule that used to live here made a ten-tab strip scrollable, because
+   `.workspace` is `overflow: hidden` and past about 900px of workspace the
+   last tabs were unreachable by pointer AND by keyboard. Jackdaw solved the
+   same problem structurally: the cluster rail wraps into a band above the
+   stage under 900px (see the media query in THE CLUSTER RAIL), so there is
+   no strip left to scroll. The remaining `.tab` users are two-to-five item
+   groups inside width-capped surfaces. */
 
 /* A panel head carries up to seven controls (the topic detail's). They wrap
    under the title rather than running off the edge of the workspace. */
@@ -4787,23 +5096,10 @@ select.input-invalid { border-color: var(--danger); }
   justify-content: flex-end;
 }
 
-/* The alert counter §5.1 asks for, on the tab that owns it. The NUMBER is
-   the signal and the title carries the word, so it is never colour alone.
-   --danger on --danger-tint is 6.28:1. */
-.tab-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 var(--s-2);
-  border-radius: var(--r-pill);
-  background: var(--danger-tint);
-  color: var(--danger);
-  font-size: var(--t-micro);
-  font-weight: var(--w-semi);
-  font-variant-numeric: var(--nums-tabular);
-}
+/* The alert counter moved to the cluster rail with the screens it counts —
+   see `.crail-badge` in THE CLUSTER RAIL. Nothing renders `.tab-badge` any
+   more, so its base rule is gone; the forced-colors rule below follows the
+   class that replaced it. */
 
 /* ── Streams topology ─────────────────────────────────────────────────
    The honesty note is permanent, not a disclosure. The whole picture is a
@@ -4944,7 +5240,7 @@ select.input-invalid { border-color: var(--danger); }
 
   /* The alert counter is severity, so it takes the same system colour as
      the prod wire and every danger banner. */
-  .tab-badge {
+  .crail-badge {
     background: Canvas;
     color: Mark;
     border: 1px solid Mark;
@@ -5779,9 +6075,11 @@ select.input-invalid { border-color: var(--danger); }
 
 /* ══════════════════════════════════════════════════════════════════════
    THE PLAYGROUND — "try Kavka without a cluster"
-   A second block inside an empty state, separated by whitespace and one
-   top hairline. Zero cards: this is a section of the same page, not a
-   panel that arrived on top of it.
+   A second block inside an empty state. The base rule below is Ledger's:
+   whitespace and one top hairline, on the retired "zero cards" law.
+   styles/jackdaw-shell.css overrides it into a panel and says why — the
+   playground is an OFFER, and an offer that reads as a continuation of the
+   paragraph above it is an offer nobody takes.
    ══════════════════════════════════════════════════════════════════════ */
 
 .playground {
@@ -5852,4 +6150,553 @@ select.input-invalid { border-color: var(--danger); }
   background: transparent;
   font: inherit;
   cursor: pointer;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE PERCH — Jackdaw's signature element
+   One warm note at the top of every screen. It answers two questions in
+   the product's own voice: WHAT AM I LOOKING AT, and WHAT CAN KAFKA
+   ACTUALLY TELL ME HERE.
+
+   It is where the honesty culture lives, so it has no dismiss control: a
+   verdict a user can switch off is a verdict the app stops being
+   accountable for. The tone token on the left edge is decoration — the
+   verdict itself is a SENTENCE and the kicker names the state in words,
+   so nothing here is carried by colour alone (Law 2).
+   See src/Perch.tsx and docs/DESIGN.md §5.12; the honesty rules that
+   govern what a verdict may claim are §7.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.perch {
+  display: flex;
+  gap: var(--s-5);
+  align-items: flex-start;
+  padding: var(--s-5) var(--s-6);
+  background: var(--perch-bg);
+  border: 1px solid var(--perch-line);
+  border-left: 4px solid var(--perch-edge, var(--perch-line));
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* Tone is an EDGE plus a glyph plus a word — never the word's colour. */
+.perch-ok      { --perch-edge: var(--ok); }
+.perch-watch   { --perch-edge: var(--warn); }
+.perch-problem { --perch-edge: var(--danger); }
+.perch-unknown { --perch-edge: var(--line-strong); }
+
+.perch-bird {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-top: 1px;
+  color: var(--perch-title);
+}
+
+.perch-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.perch-kicker {
+  margin: 0;
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--perch-title);
+}
+
+.perch-verdict {
+  margin: 0;
+  font-size: var(--f15);
+  line-height: 1.5;
+  color: var(--perch-ink);
+  max-width: 96ch;
+}
+
+/* The caveat is the honesty layer's own honesty layer: it says out loud
+   that the sentence above rests on partial or stale numbers. Never behind
+   a disclosure — a verdict whose qualification is one click away is a
+   verdict that will be quoted without it. */
+.perch-caveat {
+  margin: 0;
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+  color: var(--perch-ink);
+  opacity: 0.86;
+  max-width: 92ch;
+}
+
+.perch-actions {
+  flex: none;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE CLUSTER RAIL — the screen switcher
+   Ten screens, four named groups. The single biggest wayfinding change
+   from the ten equal tabs Ledger shipped: a group is NAMED AFTER THE
+   THING ITS SCREENS ARE ABOUT, so a user who does not yet know what an
+   ACL is can still find it under "Safety".
+
+   FULL COVERAGE IS A CONTRACT. Every screen reachable before this
+   redesign is reachable here — the mockup's four-item rail left ACLs,
+   Connect, Masking and Streams homeless, and that was an execution gap
+   in a static drawing, not the bet.
+
+   NOT role="tablist": a tablist may not contain group headings, and the
+   headings are the entire point. <nav> plus aria-current="page" says the
+   same thing without inventing invalid ARIA.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.crail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+  min-width: 0;
+}
+
+/* Prod guardrail layer 3, moved into the rail: name, environment chip and
+   bootstrap address stay on screen whatever the stage is showing. */
+.crail-id {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-5);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+.crail-id-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.crail-name {
+  margin: 0;
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crail-address {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+.crail-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.crail-label {
+  margin: 0 0 var(--s-2) var(--s-4);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.crail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  width: 100%;
+  min-height: var(--hit-min);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--f15);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+
+.crail-item:hover { background: var(--bg-panel-hi); color: var(--text-primary); }
+
+/* Selection is a tint, a weight change AND an accent spine — three
+   channels, because "which screen am I on" is the one question the rail
+   exists to answer. */
+.crail-item[aria-current="page"] {
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  font-weight: var(--w-semi);
+}
+
+.crail-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: var(--s-2);
+  bottom: var(--s-2);
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.crail-icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.crail-item:hover .crail-icon { color: var(--text-secondary); }
+.crail-item[aria-current="page"] .crail-icon { color: var(--accent); }
+
+/* The firing counter. A number, plus the word in its title and in an
+   sr-only span — never a bare coloured dot. */
+.crail-badge {
+  margin-left: auto;
+  flex: none;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-pill);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: var(--t-xs);
+  line-height: calc(var(--lh-xs) + 2px);
+  font-weight: var(--w-bold);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+.crail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+}
+
+/* Below this the rail stops being a column beside the stage and becomes a
+   band above it: 224px of rail plus a usable stage needs roughly 900px,
+   and a squeezed rail is worse than a wrapped one. */
+@media (max-width: 900px) {
+  .cluster-view { grid-template-columns: minmax(0, 1fr); }
+  .crail { position: static; }
+  .crail-group { flex-direction: row; flex-wrap: wrap; }
+  .crail-label { width: 100%; margin-left: 0; }
+  .crail-item { width: auto; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SETTINGS — an app-level surface, reachable with no cluster connected
+   Two columns: a section list, and the sections. Every control applies
+   INSTANTLY and persists; there is no Save button, because a preference
+   you have to commit is a preference you cannot preview.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Settings borrows the workspace grid and drops the rail column: it is an
+   app-level surface and no cluster rail sits beside it. */
+.cluster-view-solo { grid-template-columns: minmax(0, 1fr); }
+
+.settings {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: var(--s-8);
+  align-items: start;
+  max-width: 1040px;
+}
+
+/* A control with something under it — the theme segments over their two
+   preview cards. The row itself is a horizontal flex, so the stacking is
+   the exception and says so with a class rather than a style attribute. */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+/* `select` is width:100% in a form column; in a settings row it sits beside
+   its sentence and takes only what it needs. */
+.settings-row-ctl select {
+  width: auto;
+  min-width: 200px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.settings-nav-item {
+  width: 100%;
+  min-height: var(--hit-min);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--f15);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+
+.settings-nav-item:hover { background: var(--bg-panel-hi); color: var(--text-primary); }
+
+.settings-nav-item[aria-current="true"] {
+  background: var(--accent-tint);
+  color: var(--text-primary);
+  font-weight: var(--w-semi);
+}
+
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  min-width: 0;
+}
+
+/* One preference per row: the sentence on the left, the control on the
+   right. The help line is not optional — a setting whose effect you have
+   to discover by flipping it is a setting nobody flips. */
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-7);
+  padding: var(--s-5) 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-row:first-of-type { padding-top: 0; }
+.settings-row:last-child { padding-bottom: 0; border-bottom: 0; }
+
+.settings-row-text { flex: 1; min-width: 0; }
+
+.settings-row-title {
+  font-size: var(--f15);
+  font-weight: var(--w-semi);
+  color: var(--text-primary);
+}
+
+.settings-row-help {
+  margin: var(--s-2) 0 0;
+  max-width: var(--measure);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+  color: var(--text-tertiary);
+}
+
+.settings-row-ctl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+/* A segmented control. Every segment carries its WORD — there is no
+   icon-only state anywhere in Settings. */
+.seg {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: var(--bg-inset);
+}
+
+.seg-btn {
+  min-height: var(--hit-min);
+  padding: var(--s-2) var(--s-5);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+
+.seg-btn:hover { background: var(--bg-panel-hi); color: var(--text-primary); }
+
+.seg-btn[aria-checked="true"] {
+  background: var(--brass-fill);
+  color: var(--on-brass);
+  font-weight: var(--w-semi);
+}
+
+/* The accent picker. Each swatch is a radio that also SPELLS its name in
+   its accessible name and its title — a colour picker whose options are
+   only colours is unusable to the people most likely to open it. */
+.swatches { display: flex; gap: var(--s-4); }
+
+.swatch {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.swatch-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border-control);
+  background: var(--swatch, var(--brass-fill));
+}
+
+.swatch:hover { border-color: var(--border-control); }
+.swatch[aria-checked="true"] { border-color: var(--text-primary); }
+
+.swatch[aria-checked="true"] .swatch-dot::after {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 6px auto;
+  border-radius: 50%;
+  background: var(--bg-panel);
+}
+
+/* Literal values, so a swatch shows what it would actually do. Both
+   themes, because the picker is visible in both and a swatch that lied in
+   one of them would be worse than no swatch at all. These are the ONLY
+   hard-coded colours outside the two theme blocks, and they are here for
+   the same reason the environment swatches are: they are showing a
+   palette, not wearing one. */
+.swatch-brass { --swatch: #E9A94E; }
+.swatch-moss  { --swatch: #7FCB9B; }
+.swatch-sky   { --swatch: #8FBFEA; }
+.swatch-plum  { --swatch: #C7A2EF; }
+[data-theme="light"] .swatch-brass { --swatch: #8A5A0E; }
+[data-theme="light"] .swatch-moss  { --swatch: #1A6039; }
+[data-theme="light"] .swatch-sky   { --swatch: #155C8C; }
+[data-theme="light"] .swatch-plum  { --swatch: #59389F; }
+
+/* A theme preview pair, so "System" is not an abstraction. Two miniature
+   windows, each painted in its own theme's literals. */
+.theme-preview { display: flex; gap: var(--s-4); }
+
+.tp-card {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+}
+
+.tp-bar { height: 20px; }
+.tp-body { display: flex; flex-direction: column; gap: 5px; padding: 8px; }
+.tp-line { height: 6px; border-radius: 3px; }
+
+.tp-dark  .tp-bar  { background: #100E0B; }
+.tp-dark  .tp-body { background: #191512; }
+.tp-dark  .tp-line { background: #C6BCAF; }
+.tp-dark  .tp-line-accent { background: #E9A94E; }
+.tp-light .tp-bar  { background: #EAE3D8; }
+.tp-light .tp-body { background: #F6F1E8; }
+.tp-light .tp-line { background: #564F45; }
+.tp-light .tp-line-accent { background: #8A5A0E; }
+
+@media (max-width: 820px) {
+  .settings { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .settings-nav-item { width: auto; }
+  .settings-row { flex-direction: column; gap: var(--s-4); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the Jackdaw surfaces
+   Windows high-contrast throws away every fill, border colour, shadow and
+   ::before background this file paints. Anything whose meaning was carried
+   by one of those has to re-declare it in a system colour here, or say it
+   in words instead. Both strategies appear below.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* The Perch's tone was an edge colour, and the edge is gone. Nothing is
+     lost: the kicker spells the state in words on every screen, which is
+     Law 2 doing the job it exists for. The border is kept as structure so
+     the banner is still a distinct block. */
+  .perch { border: 1px solid CanvasText; }
+
+  /* Which screen you are on was a tint plus a spine, and forced-colors
+     takes both. Highlight is the system's own "this is the one", and
+     forced-color-adjust is what lets the spine keep a fill at all. */
+  .crail-item[aria-current="page"] {
+    border-color: Highlight;
+    color: Highlight;
+  }
+
+  .crail-item[aria-current="page"]::before {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  .crail-item[aria-current="page"] .crail-icon { color: Highlight; }
+
+  /* A raised panel is a fill and a shadow, both of which vanish. The
+     hairline becomes the whole of the grouping, so it has to be a real
+     system colour rather than an inherited one. */
+  .panel,
+  .crail-id { border-color: CanvasText; }
+
+  /* Segmented controls and the accent picker: the checked arm was a fill.
+     Same treatment, same reason — and the swatch's accessible name already
+     carries the accent's name, so nothing here depends on the colour. */
+  .seg-btn[aria-checked="true"] {
+    border: 1px solid Highlight;
+    color: Highlight;
+    forced-color-adjust: none;
+    background: Canvas;
+  }
+
+  .swatch[aria-checked="true"] { border-color: Highlight; }
+  .swatch-dot { border-color: CanvasText; }
+
+  .settings-nav-item[aria-current="true"] {
+    border-color: Highlight;
+    color: Highlight;
+  }
+
+  /* The two theme previews are literal swatches of a palette, not chrome.
+     In forced colors they would collapse to three identical rectangles and
+     say nothing, so they go — the segmented control above them already
+     names all three choices in words. */
+  .theme-preview { display: none; }
 }

@@ -1,35 +1,58 @@
-# Kavka Design System — "Ledger"
+# Kavka Design System — "Jackdaw"
 
 The rules every Kavka screen follows. Read this before changing anything under
 `apps/desktop/src/`. It is written to be usable by a human contributor or an AI
 agent with no other context.
 
-**Status:** dark theme ships. Light is specced, audited and **not exposed** —
-see §10. Implemented in `apps/desktop/src/styles.css`.
+**Status:** both themes ship. Dark is the default ground; **warm-paper light is
+a real, fully-tokened theme**, not a stub — see §10 for the runtime that
+resolves them. Implemented in `apps/desktop/src/styles.css`.
+
+**Jackdaw replaces Ledger.** Ledger was correct and unreadable: every number was
+honest, every ratio was measured, and every screen arrived as one unbroken field
+of 13px text with no landmarks, so there was nothing for the eye to grab and
+nothing telling you what you were looking at. Jackdaw keeps every number and
+every caveat and adds the three things that were missing — **landmarks** (soft
+raised panels, 15px body type, a grouped rail instead of ten equal tabs), **a
+spoken answer before the data** (§5.12, the Perch), and **a floor under the
+jargon** (glossary terms, expert tables folded behind disclosure).
+
+Section numbers are unchanged from the Ledger revision. Source files across the
+repo cite them.
 
 ---
 
-## 1. The three laws
+## 1. The four laws
 
 Everything else in this document follows from these. If a proposal violates one,
 the proposal is wrong, not the law.
 
-### Law 1 — Elevation is colour and one hairline
+### Law 1 — A panel is a surface; an overlay is a surface with a shadow
 
-Shadows exist **only on true overlays**: modal, command palette, popover, toast.
-Never on a card, a row, a chip, a button, a banner or a table. There are exactly
-two shadow tokens, `--shadow-popover` and `--shadow-overlay`, and if you are
-reaching for a third you are building a card.
+**This law reverses Ledger's.** Ledger said "Kavka ships zero cards" and grouped
+by whitespace plus a top hairline. On a screen with nine sections that asked the
+eye to infer every boundary from spacing alone, and it is most of why the app
+read as hard to follow.
 
-**Kavka ships zero cards.** Grouping is whitespace plus a top hairline.
-Emphasis is type weight plus one of five text lightness values. The loudest
-pixels on screen are always topic names, offsets and payloads — never chrome.
+A `.panel` is now a real surface: `--bg-panel`, one `--line` hairline, `--r-md`
+and `--shadow-1`. Overlays — modal, command palette, popover, toast — take
+`--shadow-2`, and nothing else may. There are exactly three shadow tokens, and
+if you are reaching for a fourth you are inventing an elevation the app does not
+have.
+
+The loudest pixels on screen are still always topic names, offsets and payloads —
+never chrome. A panel is a container; it is not decoration.
 
 ### Law 2 — No state is ever encoded by colour alone
 
+Unchanged, and the most important thing in this document.
+
 Every dot has a word. Every severity has a glyph. Every lag figure has a bar
-length **and** a number **and** a trend arrow. The protected-environment
-signal has four independent channels. If you can only tell the difference by hue, it is broken.
+length **and** a number **and** a trend arrow. The protected-environment signal
+has four independent channels. The Perch's tone is an edge colour **and** a
+state spelled out in its kicker. The rail's current screen is a tint **and** a
+weight change **and** a spine **and** `aria-current`. If you can only tell the
+difference by hue, it is broken.
 
 **"Every dot has a word" includes the quiet states.** A status map with
 `disconnected: ""` is the bug this law is written to prevent: the one state
@@ -43,22 +66,41 @@ with deuteranopia has to be able to tell production from dev at a glance.
 
 ### Law 3 — Nothing inside a scrolling table gets a `transition`, `filter`, `backdrop-filter`, `border-radius` or `box-shadow`
 
-`--row-h` is a fixed token the virtualizer reads at runtime. This is a
-performance contract with the Phase 1 message browser, written into the token
-names so it survives six phases. At 10,000 rows, a 120ms hover transition is
-visible jank.
+Unchanged. `--row-h` is a fixed token the virtualizer reads at runtime
+(`src/virtual.ts`). At 10,000 rows, a 120ms hover transition is visible jank.
+
+Law 1 gave panels a radius and a shadow. **Neither reaches inside a scroll
+well.** A panel wrapping a virtualized table carries the radius on the panel;
+the rows stay flat.
+
+### Law 4 — Every screen answers before it reports
+
+Every screen opens with a Perch (§5.12): one line of plain English, derived from
+live state, that says what you are looking at and what Kafka can actually tell
+you here. A screen that opens with a stat dump is asking the reader to do the
+interpretation the product exists to do.
+
+The honesty rules that govern what a Perch may claim are in §7, with the rest of
+the voice.
 
 ---
 
-## 2. The signature: the ledger rule
+## 2. The signature: the ledger rule, and the Perch
+
+Jackdaw has two signature elements. One is inherited and one is new, and they do
+different jobs: the rule is how you know **where** you are, the Perch is how you
+know **how it is going**.
+
+### The ledger rule — kept in full
 
 A fixed left gutter carries the row's address **in Kafka's own vocabulary** —
 offset, broker id, partition index, line number — then a 1px vertical rule runs
 the full height of the data, then the payload.
 
 The rule is coloured by environment. **A production cluster is therefore
-visible in every data view in the app without a single banner.** It is the
-brand, the information architecture and the guardrail, in six lines of CSS.
+visible in every data view in the app without a single banner.** Raised panels
+did not replace this and could not: a panel says "these things belong together",
+the rule says "this row is at offset 8 412 on a production cluster".
 
 ```css
 .ledger-gutter {
@@ -96,291 +138,312 @@ that breaks the layout at 1280px.
 > no container queries, so a `@supports not (container-type: inline-size)`
 > block keeps the old viewport rule as a fallback there.
 
-### Teal means live. Only live.
+### The Perch — the new one
 
-`--accent` is connected status, live tail, and selection. **Never** a button
-fill, never a heading, never a border for its own sake. The primary button is
-near-white, which is what frees the accent to keep this meaning.
+Specified in full at §5.12, with its honesty rules at §7. In one line: a warm
+banner at the top of every screen, with the bird sitting on it, answering *what
+am I looking at* and *what can Kafka actually tell me here*.
 
-**The status-adjacency law:** in any table with a health or lag column,
-`--accent` may not appear in an adjacent column, and lag fills use
+### The accent means clickable or selected. Nothing else.
+
+**This replaces Ledger's "teal means live".** Ledger spent its one accent on a
+meaning — connected, live-tailing, selected — and paid for it by making the
+primary button near-white.
+
+Jackdaw's accent (`--brass`, and its three alternatives) carries **no meaning of
+its own**. It appears on exactly two kinds of thing: something you can click,
+and something that is currently selected. That is precisely what makes the
+accent picker in Settings safe to ship — a user who prefers plum cannot thereby
+hide a warning, because no warning was ever spelled in the accent.
+
+**What took over "live":** `--ok` with its word, exactly as Law 2 requires. A
+connected cluster reads *"Connected"* beside a green dot; a live tail says
+*"Tailing"* beside a pulse. The colour was never the signal.
+
+**The status-adjacency law survives, re-pointed:** in any table with a health or
+lag column, the accent may not appear in an adjacent column, and lag fills use
 `--ok`/`--warn`/`--danger` only.
 
 ---
 
 ## 3. Token reference
 
-Full source of truth: the `:root` block in `apps/desktop/src/styles.css`. Ratios
-below are measured, not estimated, and there are **zero contrast failures**
-across 12 dark/protected surfaces and 6 light surfaces.
+Full source of truth: the theme blocks at the top of
+`apps/desktop/src/styles.css`.
+
+**Ratios below are measured, not estimated** — WCAG 2.1 relative luminance,
+computed against **every surface the token can land on**, in both themes,
+including the six protected surfaces. Every figure quoted is a **worst case**.
+
+- Body text and any text carrying meaning: **≥ 4.5:1**.
+- Operable boundaries, meaningful graphics, large text: **≥ 3:1**.
+- Purely decorative hairlines: **no floor** (SC 1.4.11 exempts them), and they
+  are labelled as such below so nobody re-derives a gate that does not exist.
+- `:disabled` controls: **no floor** (SC 1.4.3 exempts inactive components).
+  Quoted anyway, because "exempt" is not the same as "invisible".
+
+### The two-block rule
+
+**Every colour token is declared exactly twice: once in the dark block, once in
+the light block.** That is what makes flipping `data-theme` safe — a token
+declared in only one of them is a half-themed control waiting to happen.
+
+Everything that is *not* colour — type, space, metrics, shape, motion — is
+declared once on `:root`, because it does not vary with theme.
+
+### The legacy alias layer
+
+Ledger's token names (`--text-primary`, `--bg-canvas`, `--accent`,
+`--border-control`, …) are still declared, as `var()` references to their
+Jackdaw equivalents. **This is why ~5,000 lines of component CSS re-themed
+without being edited.** An alias resolves against whichever theme block won,
+because both land on the same element.
+
+> **Never give an alias a literal colour.** That is exactly how a token escapes
+> the theme system, and it will be wrong in light.
+
+### Naming traps
+
+Two pairs are one character apart and mean unrelated things. Both have already
+caused a bug in a design system this one is descended from.
+
+| Looks like | Actually is |
+|---|---|
+| `--ser0`…`--ser5` | chart series. **Not** `--s0`…`--s5`, because `--s-1`…`--s-12` is the spacing scale, and at equal specificity `4px` would have silently erased a chart's lines. |
+| `--t1` / `--t2` / `--t3` | the **text ramp** (primary/secondary/tertiary ink). `--t-xs` / `--t-sm` / `--t-base` / `--t-md` are the **type scale** (font sizes). |
 
 ### Surfaces
 
-| Token | Value | Use |
-|---|---|---|
-| `--bg-rail` | `#090B0D` | Sidebar — recedes behind the stage |
-| `--bg-canvas` | `#0F1317` | The stage; all data lives here |
-| `--bg-raised` | `#161B20` | Palette, modals, toasts, popovers **only** |
-| `--bg-sunken` | `#0A0D10` | Inputs, payload inspector, code |
-| `--bg-row-hover` | `#161C22` | |
-| `--bg-row-selected` | `#152227` | Teal-tinted; primary text 13.57:1 |
-| `--bg-row-prod-hover` | `#241816` | Protected sidebar rows (guardrail layer 6). The token name still says `prod`; see §11 |
-| `--bg-row-prod-selected` | `#2A1B18` | Primary text 13.80:1 |
-| `--skeleton` | `#28313A` | Skeleton bars, 1.41:1 — a placeholder, never content |
-| `--bg-scrim` | `rgba(5,7,9,.55)` | No blur — perf, and blur is the tell of a templated design |
-| `--selection` | `rgba(79,195,176,.28)` | Precomputed, **not** `color-mix()` |
+A warm brown-grey ladder in dark; warm paper in light. Each step is a real
+elevation, not a shade.
 
-> **Why no `color-mix()`:** macOS 12 ships WKWebView/Safari 15.6. Every alpha
-> value in this system is precomputed.
-
-### Text — six values. Hierarchy lives here, not in boxes.
-
-| Token | Value | Ratio on canvas | Use |
+| Token | Dark | Light | Use |
 |---|---|---|---|
-| `--text-primary` | `#E6EBF0` | 15.55:1 | Values, headings, topic names |
-| `--text-secondary` | `#A2AEBB` | 8.27:1 | Prose, help text |
-| `--text-tertiary` | `#808D9A` | 5.50:1 | Labels, column heads, metadata |
-| `--text-disabled` | `#657280` | 3.79:1 | **`:disabled` controls only.** Never a placeholder |
-| `--text-placeholder` | `#7E8A97` | 5.30:1 | `::placeholder` — 4.63:1 worst case |
-| `--text-absent` | `#7E8A97` | 5.30:1 | The `∅` glyph — 4.63:1 worst case |
-| `--text-mono` | `#C9D4DF` | 12.41:1 | Literals copied out of Kafka |
-| `--text-inverse` | `#0B0E11` | 16.13:1 | On the near-white primary fill |
+| `--bg-desk` | `#0A0908` | `#DCD3C4` | behind the app window |
+| `--bg-app` | `#100E0B` | `#EAE3D8` | sidebar, rail, status bar — recedes |
+| `--bg-canvas` | `#191512` | `#F6F1E8` | the working ground |
+| `--bg-panel` | `#221D18` | `#FFFDF8` | **every raised panel** |
+| `--bg-panel-hi` | `#2A241E` | `#F0E9DC` | hover on a raised surface |
+| `--bg-inset` | `#14110E` | `#F1EBE0` | inputs, payloads, code — pressed in |
+| `--bg-row-hover` | `#2A241E` | `#F0E9DC` | table row hover |
+| `--bg-row-sel` | `#33291C` | `#FBEFD6` | selected row (accent-tinted; moves with the accent) |
+| `--bg-prod-row` / `-hi` / `-sel` | `#2A1815` / `#33201C` / `#3A241F` | `#FAE7E3` / `#F5DCD6` / `#FADFD6` | protected-environment rows |
+| `--bg-scrim` | `rgba(8,6,5,.62)` | `rgba(60,50,38,.42)` | modal scrim — no blur, for perf |
+| `--skeleton` | `#332B24` (1.31:1) | `#E7DECE` (1.19:1) | a placeholder, **never** content |
+| `--selection` | `#3E3320` (`--t1` 10.80:1) | `#F3E1B8` (`--t1` 12.58:1) | `::selection` |
 
-> **`--text-absent` is TEXT, not a graphic.** It was `#6E7A86` and rated
-> against the 3:1 graphics floor, which is the wrong floor: `∅` is a
-> character a sighted user reads to learn the value is absent, so SC 1.4.3
-> applies and it needs 4.5:1. On a selected row it measured **3.71:1** — the
-> one place a user is most likely to be looking. Now 4.63:1 worst case
-> across all twelve dark + protected surfaces.
->
-> **`--text-placeholder` exists so `--text-disabled` can mean one thing.**
-> A placeholder carries the example format (`broker-1:9092`) and is meant to
-> be read; `--text-disabled` measured **3.53:1** on a raised surface. The two
-> tokens currently hold the *same value*, because §9's twelve-surface sweep
-> at 4.5:1 binds them both to the same floor. They stay separate tokens
-> because they are separate decisions — a future theme may split them, and a
-> shared literal must not let one drift by accident.
+The two `--bg-canvas` literals are duplicated in **one** other place: the inline
+pre-paint script in `index.html`. See §10.
+
+### Text — three inks plus two specialists
+
+Hierarchy lives in weight and these values, not in boxes.
+
+| Token | Dark | worst | Light | worst | Use |
+|---|---|---|---|---|---|
+| `--t1` | `#F4EFE8` | 12.45:1 | `#23201B` | 12.73:1 | values, headings, topic names |
+| `--t2` | `#C6BCAF` | 7.60:1 | `#564F45` | 6.34:1 | prose, help text |
+| `--t3` | `#A0958A` | 4.86:1 | `#6A6155` | 4.77:1 | labels, column heads, metadata, placeholders, `∅` |
+| `--t-mono` | `#E6DED3` | 14.11:1 | `#2E2A24` | 12.02:1 | literals from Kafka (on `--bg-inset`) |
+| `--t-off` | `#8A7E70` | 3.59:1 | `#867C6F` | 3.21:1 | `:disabled` controls **only** |
+| `--t-inv` | `#1A1206` | — | `#FFFDF8` | — | ink on a near-solid fill |
+
+Dark's worst case is a selected row; light's is the sidebar. `--t3` carries the
+placeholder and `∅` roles as well: both are text a sighted user is expected to
+read, so both clear 4.5:1 rather than 3:1.
 
 ### Lines
 
-| Token | Value | Use |
-|---|---|---|
-| `--hairline` | `#1B2127` | Decorative separation — SC 1.4.11 exempt |
-| `--hairline-strong` | `#262E36` | Header underline, dock edges. **Decorative only** |
-| `--border-control` | `#636F7C` | **Required on every operable boundary** |
+| Token | Dark | Light | Floor | Use |
+|---|---|---|---|---|
+| `--line` | `#342D26` | `#DED5C6` | **none** | decorative separation — 1.4.11 exempt |
+| `--line-mid` | `#463D34` | `#CDC3B2` | **none** | heavier decoration: dock edges, wells |
+| `--line-strong` | `#8A7D6E` (3.55:1) | `#82786A` (3.40:1) | 3:1 | **required on every operable boundary** |
+| `--focus` | `#FFD489` (10.19:1) | `#7A4B00` (5.81:1) | 3:1 | always with `outline-offset` |
 
-> `--bg-sunken` is only 1.13:1 against the canvas, so `--border-control` is the
-> **only** thing satisfying SC 1.4.11 on an input. It clears 3:1 on all twelve
-> dark + protected surfaces, worst case 3.17 on a selected row. Do not remove it to
-> make inputs "cleaner".
->
-> **`--hairline-strong` is never a control boundary.** It is 1.18:1 on a
-> selected row. `.btn` and `.new-connection-btn` used it and were therefore
-> operable elements with no perceivable edge; both now take
-> `--border-control`. The rule to apply when in doubt: *if the element
-> responds to a click, its border is `--border-control` or
-> `--danger-border` — never a hairline.*
+`--line-strong` is the only thing satisfying SC 1.4.11 on a transparent-filled
+control, and the figures above are on a selected row (dark) and the sidebar
+(light) — the two surfaces that bind.
 
-### Accent, semantic, environment
+### Accent — four choices, both themes
 
-| Token | Value | Notes |
-|---|---|---|
-| `--accent` | `#4FC3B0` | 8.67:1 — connected · live tail · selected |
-| `--accent-quiet` | `#3C9788` | 5.31:1 — hairline-weight accent |
-| `--accent-tint` | `#12241F` | Chip background; accent on it 7.52:1 |
-| `--focus` | `#6FE3CD` | 12.03:1 — **always** with `outline-offset` |
-| `--fill-primary-hover` | `#FFFFFF` | The primary button's hover fill |
-| `--ok` / `--warn` / `--danger` | `#56C08A` / `#D9A441` / `#E5786B` | 8.26 / 8.29 / 6.42 |
-| `--danger-fill` / `--danger-fill-hover` | `#A63C31` / `#B84439` | 6.34 / 5.35 with `--on-danger-fill` |
-| `--on-danger-fill` | `#FFFFFF` | The only ink that goes on a danger fill |
-| `--danger-border` | `#A85C50` | 3.34:1 worst (selected dark row); 3.56 raised — the outlined danger button's boundary |
-| `--track-empty` | `#333C46` | The unfilled half of a lag meter |
-| `--ok-tint` / `--warn-tint` / `--danger-tint` | `#101E18` / `#241D0F` / `#1B1315` | |
-| `--rule` | per environment colour — see §3.1 | Slate `#242B33` is 1.30:1 on the canvas and decorative *by design*; every other colour clears 3:1 on all fifteen surfaces |
-| `--env-ink` / `--env-tint` | the chip's **tag** pair — see §3.1 | 6.28–8.52:1 |
-| `--env-badge-ink` / `--env-badge-fill` | the chip's **badge** pair — see §3.1 | 5.71–7.07:1 — a *protected* environment is the only *filled* chip |
-| `--env-wire` | transparent · `#B8453A` when protected | 3.57:1 — the bar is a meaningful indicator |
+The accent carries no meaning (§2), which is what makes it user-selectable.
+Every accent redeclares the **same** token set in **both** themes, so the picker
+cannot leave a half-themed control behind.
 
-> **Every operable boundary is opaque and precomputed.** `--danger-border`
-> replaced `rgba(229,120,107,.45)`, which composited to **2.20:1** on the
-> canvas: an alpha border does not have a contrast ratio until you know what
-> is behind it, so it cannot be audited and it silently fails SC 1.4.11 the
-> moment the surface underneath changes. Same reason as `--selection`: no
-> alpha anywhere a ratio has to be provable.
->
-> **`--track-empty` is the adjacent colour inside a lag meter, and every lag
-> fill clears 3:1 against it** (ok 4.96, warn 4.98, danger 3.86). It was
-> `--hairline-strong` at 1.36:1 on the canvas, which made the meter's *extent*
-> invisible — and a bar whose total you cannot see is not a proportional
-> indicator, it is a coloured smear. `.lag-fill` also carries `min-width: 2px`
-> so a small non-zero lag never rounds down to "caught up".
+| Accent | Dark ink | worst | Light ink | worst | On-fill pair |
+|---|---|---|---|---|---|
+| **brass** (default) | `#E9A94E` | 6.95:1 | `#82540C` | 5.11:1 | dark 9.05:1 · light 5.92:1 |
+| moss | `#7FCB9B` | 7.40:1 | `#1A6039` | 5.94:1 | dark 9.55:1 · light 7.56:1 |
+| sky | `#8FBFEA` | 7.33:1 | `#155C8C` | 5.60:1 | dark 9.65:1 · light 7.14:1 |
+| plum | `#C7A2EF` | 6.67:1 | `#59389F` | 6.61:1 | dark 8.90:1 · light 8.43:1 |
 
-> **Slate's rule is decorative (1.30:1) by design.** Slate is what an
-> environment Kavka has never heard of resolves to, and the absence of a
-> coloured rule is itself the signal: *this machine has nothing to say about
-> this environment.*
+**There is deliberately no coral/clay accent**, though the mockup drew one. An
+accent the eye reads as the danger colour puts a decorative hue and a guardrail
+hue in the same family, which is the one composition §6 forbids.
 
-### 3.1 Environments are user-defined. The seven colour tokens.
+Supporting tokens per accent: `--brass-tint` (ink on it ≥ 5.72:1),
+`--brass-fill`, `--brass-hover`, `--brass-quiet` (hairline-weight, ≥ 3.80:1),
+`--on-brass`, plus `--bg-row-sel`, `--focus` and `--selection`, which move with
+the accent because selection *is* the accent's second meaning.
 
-**Environments are not a fixed triple.** An enterprise runs dev, QA, UAT and
-production, and a design that hard-codes three names is a design about somebody
-else's org chart. The user defines them: a **name**, a **colour**, and a
-**protected** flag, stored in `environments.json` beside `profiles.json`.
+### Semantic
 
-**The semantics split is the design law here.**
+| Token | Dark | worst | Light | worst | On its tint |
+|---|---|---|---|---|---|
+| `--ok` | `#6FCB92` | 7.21:1 | `#186639` | 5.50:1 | 8.22 / 6.09 |
+| `--warn` | `#E4B85E` | 7.67:1 | `#7E5209` | 5.32:1 | 8.87 / 5.85 |
+| `--danger` | `#F49182` | 6.25:1 | `#A8351F` | 5.16:1 | 7.49 / 5.48 |
+| `--info` | `#8CBEE4` | 7.19:1 | `#1A5F87` | 5.44:1 | 8.60 / 5.88 |
 
-| | carries | reaches |
-|---|---|---|
-| **name + colour** | IDENTITY — *which* cluster this is | the chip, the ledger rule, the picker segment, the sidebar |
-| **protected** | THE GUARDRAIL — *how careful you must be* | the warm substrate, the top wire, type-to-confirm, the window title, `--yes-prod`, `KAVKA_MCP_ALLOW_PROD` |
+Danger fills: `--danger-solid` (`#A8412F` / `#A93223`, white on it 6.07:1 /
+6.63:1) and `--danger-solid-hover` (4.97:1 / 8.40:1).
 
-They are independent. A violet environment can be protected and a red one need
-not be. **The protected treatment is the one warm-danger substrate whatever
-colour the chip is** — identity is the chip, protection is the ground. Two
-grounds would mean two guardrails, and there is exactly one.
+> **`--danger-edge` is not optional.** The solid danger fill measures **2.35:1**
+> against a selected row in the warm dark ground, so a filled danger button's
+> **border** — `--danger-edge`, `#B0685A` / `#A9584A`, 3.37:1 / 3.94:1 — is what
+> satisfies SC 1.4.11, not the fill. `.btn-danger-confirm` is written this way.
 
-In CSS they are two attributes, `data-env-color` and `data-env-protected`,
-because `[data-env="prod"]` is a *name check* and a name is now user data.
+`--track-empty` (`#4E463C` / `#E6DCCB`) is the empty half of a lag meter. It is
+**not** the indicator — the fill is — so the gate is *fill against track*: ok
+4.69 / 5.16, warn 5.00 / 4.99, danger 4.07 / 4.84, accent 4.52 / 4.80. The
+track's own extent is carried by a `--line-strong` border, which is why it does
+not need to clear 3:1 against the panel behind it.
 
-#### The tokens, measured
+### The Perch tokens
 
-Every ink and every fill is **opaque**, which is what makes one number honest:
-an opaque ink on an opaque fill has the same ratio on every surface underneath,
-so a single figure clears SC 1.4.3 on all fifteen dark, protected and
-protected-row surfaces at once. That is the same reason `--selection` and
-`--danger-border` are precomputed.
+| Token | Dark | Light | Note |
+|---|---|---|---|
+| `--perch-bg` | `#2A2214` | `#FCF2DC` | the ground |
+| `--perch-line` | `#6A5227` | `#C9A961` | **decorative** — the Perch is identified by its ground, its bird and its kicker, never by this line |
+| `--perch-ink` | `#EBD5A6` (10.92:1) | `#5E4712` (7.91:1) | the verdict |
+| `--perch-title` | `#F7E7C4` (12.85:1) | `#3F3009` (11.52:1) | the kicker and the bird |
 
-| Token | tag ink / tint | AA | badge ink / fill | AA | `--rule` | rule worst of 15 |
-|---|---|---|---|---|---|---|
-| `green` | `#79C98F` / `#0F2116` | 8.46 | `#E7F7EC` / `#2F6B45` | 5.71 | `#4E8560` | **3.76** |
-| `amber` | `#D9A441` / `#241D0F` | 7.42 | `#FFF0D6` / `#7A5613` | 5.90 | `#8C7036` | **3.48** |
-| `red` | `#E5786B` / `#1B1315` | 6.28 | `#FFE4DF` / `#8E3A31` | 6.22 | `#A65246` | **3.04** |
-| `blue` | `#7FB4E6` / `#0E1A24` | 8.03 | `#E3EFFA` / `#2C5680` | 6.54 | `#4B7CA8` | **3.68** |
-| `violet` | `#B99BD4` / `#191426` | 7.44 | `#F0E8F8` / `#5A3F86` | 7.07 | `#7A5FA6` | **3.11** |
-| `cyan` | `#6FC4D6` / `#0C1F24` | 8.52 | `#DFF4F9` / `#1F5E6E` | 6.39 | `#3E8FA1` | **4.38** |
-| `slate` | `#A2AEBB` / `#1A2027` | 7.27 | `#E9EDF1` / `#4A555F` | 6.48 | `#242B33` | 1.14 *(decorative)* |
-
-**The fifteen surfaces** are §9 gate 1's twelve — six neutral (`--bg-rail`,
-`--bg-canvas`, `--bg-raised`, `--bg-sunken`, `--bg-row-hover`,
-`--bg-row-selected`) and six protected (the warm swaps of the same six) — plus
-the three protected sidebar rows (`--danger-tint` idle, `--bg-row-prod-hover`,
-`--bg-row-prod-selected`). Every rule's worst case is on a **selected neutral
-row**, `#152227`, which is the lightest surface a rule ever crosses.
-
-Per-surface sweep for the two tightest rules, since they are the ones a future
-change will break first:
-
-- **red** — rail 3.68 · canvas 3.48 · raised 3.23 · sunken 3.63 · row-hover
-  3.20 · row-selected **3.04** · protected rail 3.66 · protected canvas 3.54 ·
-  protected raised 3.32 · protected sunken 3.68 · protected row-hover 3.27 ·
-  protected row-selected 3.12 · protected sidebar idle 3.40 / hover 3.22 /
-  **selected 3.09**.
-- **violet** — rail 3.77 · canvas 3.57 · raised 3.31 · sunken 3.72 · row-hover
-  3.28 · row-selected **3.11** · protected rail 3.75 · protected canvas 3.63 ·
-  protected raised 3.40 · protected sunken 3.78 · protected row-hover 3.36 ·
-  protected row-selected 3.20 · protected sidebar idle 3.49 / hover 3.30 /
-  selected 3.17.
-
-> **The chip FILLS are held to no floor, and that is deliberate.** They measure
-> 1.93–3.11:1 against the fifteen surfaces. A chip contains the environment's
-> **name** — Law 2 — so the fill is a container, not a signal, and rating it
-> against SC 1.4.11 would be rating the wrong thing. The numbers are recorded
-> so nobody re-derives them believing they are a gate. What *is* a gate is the
-> ink on the fill, and that is the AA column above.
->
-> **Cyan is bluer than `--accent` on purpose.** Teal means live and only live
-> (§2). The old dev chip was `--accent` on `--accent-tint`, which spent the
-> one colour the app reserves for connection state on an environment tag;
-> `cyan` at `#6FC4D6` is the token to reach for when somebody wants a teal-ish
-> environment, and `--accent` stays what it was.
-
-**Light theme** inverts each pair — a dark hue on a pale wash for the tag,
-white on the same dark hue for the badge. Ink-on-tint / white-on-dark: green
-5.82 / 6.67 · amber 5.27 / 5.92 · red **5.17** / 7.32 · blue 6.65 / 7.75 ·
-violet 5.97 / 7.11 · cyan 6.25 / 7.24 · slate 6.66 / 7.62. Each light rule is
-the same dark hue and clears ≥4.38:1 across all eight light surfaces, worst on
-a selected light protected row. Light still does not ship (§10).
-
-> **Light red's ink-on-tint is 5.17, not the 6.38 this table used to claim.**
-> The shipped pair is `--env-ink: #B3392A` on `--env-tint: #FBECEA` — the
-> `--danger` / `--danger-tint` pair reused, deliberately, so the one red in the
-> light theme is one colour — and 6.38 was the figure for a darker ink that
-> never shipped. Recomputed against the tokens actually in `styles.css`: 5.17.
-> **The colour is not changed, because 5.17 clears the 4.5:1 AA floor by a
-> comfortable margin** and it is the tightest of the seven only because red is
-> the token whose tint is palest. The wrong number was the defect; changing a
-> passing colour to make an old number true would have been the second one.
-
-**An unknown environment is not an error.** A profile naming something the
-registry does not hold — deleted in another window, or imported from a
-colleague's export — renders **slate, unprotected**, with a hint in the
-connection form pointing at the manager. The alternative, "unknown means
-protected", sounds safer and is worse: it would arm type-to-confirm on every
-connection the moment the registry failed to load, which teaches people to type
-past the friction.
+Semantic inks stay legible on the perch ground in both themes: ok 7.95 / 6.29,
+warn 8.46 / 6.09, danger 6.89 / 5.91.
 
 ### Payload syntax
 
-All AA on `--bg-sunken` **and** on `--syn-match`.
+Held to 4.5:1 on `--bg-inset` **and** on `--syn-match`, in both themes.
 
-`--syn-key` `#8FA6BC` 7.74 · `--syn-string` `#9FD5A8` 11.65 ·
-`--syn-number` `#E0B36A` 10.04 · `--syn-atom` `#B99BD4` 8.07 ·
-`--syn-punct` `#7B8899` 5.40 (braces carry structure, so they are AA, not
-decorative) · `--syn-match` `#132028`.
+| Token | Dark | worst | Light | worst |
+|---|---|---|---|---|
+| `--syn-key` | `#8CBEE4` | 7.70:1 | `#1F5F86` | 5.47:1 |
+| `--syn-string` | `#9FD5A8` | 9.12:1 | `#1C6B3F` | 5.16:1 |
+| `--syn-number` | `#E0B36A` | 7.86:1 | `#8A5510` | 4.91:1 |
+| `--syn-atom` | `#BBA0F0` | 6.82:1 | `#5B3FA8` | 6.11:1 |
+| `--syn-punct` | `#A6998B` | 5.48:1 | `#655C50` | 5.20:1 |
+| `--syn-match` | `#2E2412` | — | `#F7E3B8` | — |
 
-The search-hit background is neutral-cool so the worst syntax token still clears
-4.60:1, and it is **always paired with a 2px `--accent` underline** — the hit
-must not be colour-only.
+> **Syntax colours are fixed and are NOT derived from the accent.** A plum
+> accent must not recolour every JSON number in the app. `--syn-number` is a
+> warm amber in dark and stays one under every accent.
+
+A search hit is `--syn-match` **plus a 2px accent underline**: the hit is never
+colour-only.
 
 ### Data series
 
-`--series-1…6`: `#4FC3B0` `#6FA8DC` `#B99BD4` `#D9A441` `#E5786B` `#86C98A` —
-one lightness band, so no series shouts.
+`--ser0`…`--ser5` — one lightness band in each theme, so no series shouts.
+Dark: `#E9A94E` `#7FC8A9` `#F4897A` `#84B9EA` `#BBA0F0` `#CBBFAF`.
+Light: `#8A5A0E` `#1A6039` `#A93223` `#1B5F94` `#5B3FA8` `#655C50`.
+`--grid` is `#2E2822` / `#E4DACA`.
+
+Series must be direct-labelled or dash-patterned regardless — see §5.11.
 
 ### Type
 
-- `--font-ui`: `system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", …`
-- `--font-mono`: `ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", …`
+Two families, one scale, one multiplier.
 
-| Step | Size / line-height | Use |
+```
+--font-ui    Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, …
+--font-mono  Cascadia Mono, ui-monospace, SF Mono, Segoe UI Mono, …
+```
+
+**`--fs` is the font-size preference and it multiplies one number.** Every step
+is `calc(Npx * var(--fs))`, so nothing in the app hard-codes a pixel font size
+and the whole interface scales together.
+
+| Step | px at `--fs: 1` | Use |
 |---|---|---|
-| `--t-micro` | 10.5 / 14 | Uppercase eyebrow, tracked |
-| `--t-xs` | 11 / 15 | kbd, footnotes, status bar |
-| `--t-sm` | 12 / 17 | Secondary UI, chips |
-| `--t-base` | 13 / 19 | **Default — all data** |
-| `--t-md` | 15 / 21 | Panel + modal titles |
-| `--t-lg` | 19 / 25 | Page title |
-| `--t-xl` | 24 / 30 | Empty-state headline |
-| `--t-display` | 30 / 36 | Hero stat numerals |
+| `--f11` | 11 | `kbd`, footnotes, status bar |
+| `--f12` | 12 | secondary UI, chips |
+| `--f13` | 13 | **data** — table cells, mono literals |
+| `--f15` | 15 | **body** — prose, labels, controls, rail items |
+| `--f17` | 17 | panel titles |
+| `--f20` | 20 | page titles |
+| `--f26` | 26 | screen headings |
+| `--f34` | 34 | hero stat numerals |
 
-Weights `400 / 500 / 600 / 700`. `--track-eyebrow: .08em` on uppercase micro
-labels only. `--track-tight: -.011em` at ≥19px only. `--nums-tabular` on every
-computed quantity.
+**15px body is the single largest legibility change in the direction.** Ledger
+set `body` to 13px and everything inherited it. Jackdaw sets `body` to `--f15`;
+tables opt back down to `--t-base` (13px) because a table is scanned, not read.
+
+Ledger's scale (`--t-micro` … `--t-display`) is re-expressed on these steps, so
+every existing rule answers the font-size preference without being edited.
 
 ### Space, metrics, shape, motion
 
-4px base: `--s-1` 2 → `--s-12` 72.
+4px base. Two ladders exist: `--s1`…`--s9` (the Jackdaw mockup's) and
+`--s-1`…`--s-12` (Ledger's, which every existing rule uses). Both are kept;
+prefer the hyphenated one in existing files.
 
-`--rail-w` 240 · `--topbar-h` 44 · `--tabstrip-h` 30 · `--statusbar-h` 24 ·
-**`--row-h` 30** · `--row-h-head` 28 · `--control-h` 28 · `--control-h-lg` 32 ·
-`--gutter-w` 72 · `--gutter-w-code` 40 · `--inspector-w` 480 · `--palette-w` 580
-· `--measure` 62ch · **`--hit-min` 24px** (SC 2.5.8 — nothing operable may be
-smaller).
+`--rail-w` 248 (connections sidebar) · `--nav-w` 224 (cluster rail) ·
+`--topbar-h` 44 · `--statusbar-h` 26 · `--tabstrip-h` = `--control-h-lg`
+(inline tabs only) · `--gutter-w` 72 · `--gutter-w-code` 40 · `--inspector-w`
+480 · `--palette-w` 580 · `--measure` 74ch · **`--hit-min` 24px** (SC 2.5.8 —
+nothing operable may be smaller).
 
-Radius: `--r-control` 4 · `--r-popover` 6 · `--r-overlay` 10 · `--r-pill` 999.
-**Tables, panels, page sections, stat blocks and banners have no radius and no
-border by design.** If you are reaching for a card, use space.
+Radius: `--r-sm` 7 · `--r-md` 11 · `--r-lg` 15, aliased as `--r-control`,
+`--r-popover`, `--r-overlay`; `--r-pill` 999. **Panels have a radius now**
+(Law 1). Rows inside a scroll well still do not (Law 3).
 
 Motion: `--dur-instant` 0 (row hover, cell select — data answers *now*) ·
 `--dur-fast` 120 · `--dur-base` 180 · `--dur-slow` 260. `--ease-settle` is for
 the **palette and toasts only**.
 
-### Density
+### Density — and the mechanism virtualized rows use
 
-Three steps, persisted: `[data-density="compact"|"relaxed"]` on the app root.
-The message browser defaults **one step denser** than the app. The app-level
-toggle sets the preference; the browser's default is only its initial value,
-never a lock.
+**Two steps, persisted, on `<html>`: `data-density="comfortable"` (default) and
+`"compact"`.** Ledger's third step (`relaxed`) is gone; comfortable is what it
+was reaching for.
+
+| Token | comfortable | compact |
+|---|---|---|
+| `--row-h` | **44px** | **30px** |
+| `--row-h-head` | 34px | 28px |
+| `--control-h` | 32px | 28px |
+| `--control-h-lg` | 36px | 32px |
+| `--pad-panel` | 20px | 13px |
+| `--stack` | 18px | 12px |
+
+**Compact is exactly the 30px row Ledger shipped.** That is the point of it: the
+one fair criticism of the Jackdaw mockup was that comfortable rows cost a reader
+of 10,000-row tables real screen, and the answer is a preference, not a
+compromise on the default.
+
+Density changes **rhythm only**. No colour, no type weight, no affordance and no
+information moves with it.
+
+#### The mechanism, pinned
+
+> `MessageGrid` and any other virtualized surface must get its row height from
+> `--row-h` and from nothing else. `src/virtual.ts` already implements the read:
+> `useRowMetrics` calls `getComputedStyle(el).getPropertyValue("--row-h")`, and a
+> `MutationObserver` on `document.documentElement` and `document.body` watching
+> `data-density` and `data-theme` re-measures whenever either changes. **The
+> shell writes those attributes on `<html>`, which is inside the observer's
+> scope, so a density change re-measures with no further wiring.**
+>
+> **`--row-h` is fixed px and is NOT multiplied by `--fs`.** The virtualizer
+> places every windowed row by arithmetic on this token, and its dev-mode
+> assertion (§9 gate 2) compares the token against a laid-out row. A row height
+> that moved with the font preference would need the observer to watch
+> `data-fontsize` too — a third coupling for no benefit, because the largest
+> font step (13px → 14.95px, line box ~22px) still fits a 30px compact row.
+>
+> A row that needs more height at a larger font size is a row with padding it
+> should not have.
 
 ---
 
@@ -412,37 +475,116 @@ colour decision.
 
 ### 5.1 Shell
 
-Four regions plus a wire:
+Two shells, nested. The **app shell** is the connections sidebar plus the
+workspace; the **cluster workspace** inside it is the grouped rail plus the
+stage.
 
 ```
-┌──────────────┬───────────────────────────────────────────┬─────────────┐
-│ CLUSTERS     │ orders.v2 ×   checkout-svc ×           +  │             │  30px tabs
-│ ● orders-prd │───────────────────────────────────────────│  INSPECTOR  │
-│ 10.0.4.19:…  │ ⌕ Find in key, value or headers  [chips]  │  Value      │  44px topbar
-│              │───────────────────────────────────────────│  ─────────  │
-│ BROWSE       │ OFFSET │ TIMESTAMP  │ KEY   │ VALUE        │  {          │
-│  Topics  128 │ 1204882│ 12:04:19.2 │ A-102 │ {"ord"…      │   "id": …   │
-│              │ …virtualized…                              │  }          │
-│ ──────────── │───────────────────────────────────────────│─────────────│
-│ Kavka        │ Connected · orders · localhost:9092 · 12ms│  core v0.1.0 │  24px status
-└──────────────┴───────────────────────────────────────────┴─────────────┘
-                ↑ 1px --rule, full height of tbody, coloured by environment
+┌──────────────┬──────────────┬────────────────────────────┬─────────────┐
+│ CLUSTERS     │ orders-prd   │  ┌──────────────────────┐  │             │
+│ ● orders-prd │ ▮ PROD       │  │ 🐦 HOME · LOOKS FINE │  │  INSPECTOR  │
+│   local      │ 10.0.4.19:…  │  │ Connected to 3 brok… │  │  Value      │
+│              │              │  └──────────────────────┘  │  ─────────  │
+│              │ CLUSTER      │  ┌──────────────────────┐  │  {          │
+│              │  ▸ Home      │  │ OFFSET│ TIME │ KEY   │  │   "id": …   │
+│              │    Topics    │  │1204882│12:04 │ A-102 │  │  }          │
+│              │    Consumer… │  │ …virtualized…        │  │             │
+│              │    Brokers   │  └──────────────────────┘  │             │
+│              │ OBSERVE      │                            │             │
+│ ──────────── │  Monitoring  │                            │             │
+│ Settings·… │    Alerts  ⑴ │                            │             │
+└──────────────┴──────────────┴────────────────────────────┴─────────────┘
+                 ↑ the rail     ↑ 1px --rule, coloured by environment
 ```
 
-- **Rail** — 240px, resizable 200–360, `Ctrl/Cmd+B`. Sections are collapsible
-  with persisted state **from the start**: the sidebar outgrows the viewport by
-  Phase 3. **If the sidebar becomes primary navigation, the design has failed** —
-  `⌘K` is the real navigation.
-- **Workspace** — tab strip → top bar → content → status bar.
+- **Sidebar** (`--rail-w` 248) — saved connections. **If the sidebar becomes
+  primary navigation, the design has failed** — `⌘K` is the real navigation.
+  Its footer carries **Settings · About · Support**; Settings is app-level and
+  works with nothing connected (§10).
+- **The cluster rail** (`--nav-w` 224) — the ten cluster screens, in four named
+  groups. Detailed below.
+- **Stage** — the current screen: a Perch, then panels, spaced by `--stack`.
 - **Inspector dock** — 480px, resizable 320–60%, `Ctrl/Cmd+I`.
 - **`.app-wire`** — 2px, painted across the very top of the window, inside the
   webview and below the native title bar. Native window chrome is untouched.
-- **Status bar** (24px) — the permanent home for progressive search progress,
-  tail rate, connection latency, the read-only chip, the alert counter, and the
-  two most relevant shortcuts for the current view. Phase 2's "search never
-  silently truncates" acceptance gate depends on this existing.
-- **Tab strip** (30px) — active tab is `--text-primary` + 2px `--accent` bottom
-  rule; inactive is `--text-tertiary`.
+- **Status bar** (`--statusbar-h` 26) — progressive search progress, tail rate,
+  connection latency, the read-only chip and the two most relevant shortcuts.
+  Phase 2's "search never silently truncates" acceptance gate depends on it.
+
+#### The cluster rail — grouping, and why it covers more than the mockup drew
+
+Ledger showed the ten cluster screens as a strip of ten equal tabs. Ten peers in
+a row tell you nothing about which one answers the question you arrived with,
+and past ~900px of workspace the last tabs were unreachable by pointer *and* by
+keyboard.
+
+Jackdaw groups them, and **names each group after what its screens are about
+rather than after Kafka's own nouns**:
+
+| Group | Screens | `TabKey` |
+|---|---|---|
+| **Cluster** | Home · Topics · Consumer groups · Brokers | `overview` `topics` `groups` `brokers` |
+| **Observe** | Monitoring · Alerts · Streams | `monitoring` `alerts` `streams` |
+| **Safety** | ACLs · Masking | `acls` `masking` |
+| **Integrations** | Connect | `connect` |
+
+Someone who does not yet know what an ACL is can still guess that it lives under
+*Safety*. That is the whole of the change.
+
+> **FULL COVERAGE IS A CONTRACT.** Every screen reachable before this redesign is
+> reachable here. **The Jackdaw mockup drew a four-item rail and left ACLs,
+> Connect, Masking and Streams with no home at all.** That was an execution gap
+> in a static drawing — a mockup only has to look right — and not the bet the
+> direction is making. Reproducing it would have deleted four working surfaces
+> from the product in the name of fidelity.
+>
+> `ClusterView.tsx` builds `TABS` by flattening `RAIL`, so a screen that is not
+> in a group is not in the app, and the omission is a compile-visible fact
+> rather than a UI someone has to notice is missing.
+
+> **`TabKey` values are PERSISTED and must not change.** They are written into
+> every user's `kavka.cluster.<id>.view` record. Renaming one silently moves
+> people off the screen they were last on. Only the presentation moved.
+
+**It is not a `role="tablist"`.** A tablist may not contain group headings, and
+the headings are the entire point. The rail is a `<nav>` whose current item
+carries `aria-current="page"`; Tab walks it, as it does in every other sidebar.
+Arrow-key roving is a tablist affordance and went with the tablist.
+
+The current screen is marked in **four** channels (Law 2): an `--accent-tint`
+ground, a weight change, a 3px accent spine, and `aria-current`. In forced
+colors the tint and the spine collapse, so the spine re-declares `Highlight`
+with `forced-color-adjust: none`.
+
+**Prod guardrail layer 3 moved into the rail.** The cluster's name, its
+environment chip and its bootstrap address sit in `.crail-id` above the groups,
+pinned beside every screen rather than above one of them. Most production
+accidents are right-action-wrong-cluster.
+
+Below 900px the rail stops being a column and wraps into a band above the stage.
+That is why the old "make the tab strip scrollable" reflow rule is gone: there
+is no strip left to scroll.
+
+#### Markup the sweep agents should reuse
+
+```jsx
+<nav className="crail" aria-label={t("rail.label")}>
+  <div className="crail-id">…name · EnvChip · address…</div>
+  <div className="crail-group">
+    <h2 className="crail-label">{t("rail.group.observe")}</h2>
+    <button className="crail-item" aria-current="page">
+      <svg className="crail-icon" />
+      {t("rail.item.alerts")}
+      <span className="crail-badge" title={…}>3<span className="sr-only"> firing</span></span>
+    </button>
+  </div>
+  <div className="crail-foot">…</div>
+</nav>
+```
+
+Inline tabs (`.tab` / `.tab-active`) survive for genuine sibling panes inside one
+surface — the export/import pair, the inspector's panes, the producer's modes.
+`.tabstrip` and `.tab-badge` are gone.
 
 ### 5.2 Tables — the load-bearing component
 
@@ -554,9 +696,19 @@ Four regions plus a wire:
   row 2 / column 2 (`.check-field`). 14px fails SC 2.5.8. The hint is a
   **sibling** of the label, wired with `aria-describedby`, so it describes the
   control instead of renaming it.
-- **Fieldsets lose their borders entirely** — a fieldset is a `--t-micro`
-  uppercase eyebrow plus 12px of space. Keep `<fieldset>`/`<legend>` semantics
-  with `border: 0`.
+- **A bare fieldset has no border** — it is a `--t-micro` uppercase eyebrow plus
+  12px of space, with `<fieldset>`/`<legend>` semantics kept via `border: 0`.
+  Jackdaw promotes the *connection form's* fieldsets to panels
+  (`.editor > .fieldset`), and nothing else. **If a border is ever put back on
+  `.fieldset` globally, the legend must be fixed in the same commit.** A
+  `<legend>` whose computed `float` is `none` and whose computed `position` is
+  `static` is the fieldset's *rendered legend*: the browser cuts a notch out of
+  the top border for it and lays it out against the border box, not the padding
+  box — so a bordered fieldset gets a gap punched through its top edge and a
+  heading sitting outside its own padding. `float: left` fails the rendered-legend
+  test and takes the notch away; inside a `display: flex` fieldset nothing
+  actually floats, so it costs nothing. The scoped fix in
+  `styles/jackdaw-shell.css` covers the editor only, by design.
 - **Environment picker** — a **wrapping row of chips**, one per defined
   environment, `role="radiogroup"` with a roving `tabIndex`, followed by a
   `Manage environments…` ghost button *outside* the group (a radiogroup with a
@@ -611,16 +763,26 @@ it turns the error library in §7 from reactive into diagnostic.
 
 ### 5.5 Buttons
 
-All `--control-h`, `--r-control`, `--t-sm`, sentence case, no transform on press.
+All `--control-h`, `--r-control`, `--t-base`, sentence case, no transform on
+press.
 
 | Variant | Fill | Border | Text | Use |
 |---|---|---|---|---|
-| Primary | `--text-primary` | none | `--text-inverse` (16.13:1) | **Exactly one per surface** |
-| Secondary (`.btn`) | transparent | `--border-control` (3.17:1) | `--text-primary` | Everything else |
+| Primary | `--brass-fill` | same | `--on-brass` (dark 9.05:1 · light 5.92:1) | **Exactly one per surface** |
+| Secondary (`.btn`) | `--bg-panel` | `--border-control` (3.55 / 3.40:1) | `--text-primary` | Everything else |
 | Ghost | transparent | none | `--text-secondary` | Toolbars, dismissals |
-| Danger | transparent | `--danger-border` (3.34:1 worst) | `--danger` | *Opens* a confirmation |
-| Danger-confirm | `--danger-fill` | none | `--on-danger-fill` (6.34:1) | **Only one click from the action** |
-| Latched toggle | `--accent-tint` | `--accent` | `--accent` (7.52:1) | Live tail ON, saved filter active |
+| Danger | transparent | `--danger-border` (3.37 / 3.94:1) | `--danger` | *Opens* a confirmation |
+| Danger-confirm | `--danger-fill` | **`--danger-border`** | `--on-danger-fill` (6.07 / 6.63:1) | **Only one click from the action** |
+| Latched toggle | `--accent-tint` | `--accent` | `--accent` (≥ 5.72:1) | Live tail ON, saved filter active |
+
+**The primary button is the accent now, not near-white.** Ledger could not spend
+its accent on a button because teal meant *live*; Jackdaw's accent means
+"clickable or selected" and nothing else (§2), so the one thing per surface you
+are meant to click is exactly what it is for.
+
+**Danger-confirm's border is `--danger-border`, not its own fill.** The solid
+fill measures 2.35:1 against a selected row in the warm dark ground, so the edge
+is what satisfies SC 1.4.11 (§3).
 
 **The guardrail rule: a filled red button only ever exists one click away from
 the destructive action happening.** Everywhere else destructive controls are
@@ -832,6 +994,83 @@ chart identified by hue alone fails SC 1.4.1 for deuteranopes.
 
 ---
 
+### 5.12 The Perch — the answer-first banner
+
+Jackdaw's signature element and Law 4's implementation.
+`apps/desktop/src/Perch.tsx`, styled at `.perch` in `styles.css`.
+
+One warm note at the top of **every** screen, with the bird sitting on it,
+answering two questions in the product's own voice: *what am I looking at*, and
+*what can Kafka actually tell me here*. It is where the honesty culture lives.
+The rules that govern what it may claim are in §7 — they are voice rules, not
+component rules, and they are non-negotiable.
+
+#### Props
+
+```ts
+interface PerchProps {
+  screen: string;              // "Cluster home", "Topics" — translated by the caller
+  tone: "ok" | "watch" | "problem" | "unknown";
+  children: ReactNode;         // THE VERDICT. One line, from live state.
+  loading?: boolean;           // outranks everything — see §7
+  error?: string | null;       // RAW; classified inside, never by the caller
+  caveat?: ReactNode;          // what the verdict does not cover
+  errorContext?: ErrorContext; // passed through to classifyError
+  actions?: ReactNode;         // at most one or two
+}
+```
+
+**Precedence is resolved inside the component, in one place:** `loading`
+outranks `error` outranks the caller's `tone`. Every screen would otherwise get
+it subtly wrong in a different way.
+
+**`error` takes the RAW string.** The classification happens inside `Perch`, so
+one screen cannot accidentally put a librdkafka sentence in the banner the whole
+app is judged by. See §7's error library.
+
+#### Anatomy
+
+| Part | Class | Rule |
+|---|---|---|
+| bird | `.perch-bird` | decorative, `aria-hidden` |
+| kicker | `.perch-kicker` | `{screen} · {state}` — **the word for the tone edge** (Law 2) |
+| verdict | `.perch-verdict` | one line, `--f15`, from live state |
+| caveat | `.perch-caveat` | what the verdict does not cover — **never behind a disclosure** |
+| actions | `.perch-actions` | optional, at most two |
+
+Tone paints a 4px left edge (`--perch-edge`) in `--ok` / `--warn` / `--danger` /
+`--line-strong`. **The edge is decoration.** The kicker spells the same state in
+words on every screen, which is why forced-colors mode can drop the edge
+entirely and lose nothing.
+
+#### Two things it deliberately does not have
+
+- **No dismiss control**, though the mockup drew a "Hide" button. A verdict the
+  user can switch off is a verdict the app stops being accountable for. If a
+  Perch is noise on some screen, that screen's verdict is wrong — fix the
+  sentence, not the visibility.
+- **No `role="status"`.** This is standing content that happens to change, not
+  an announcement. `role="status"` would make a screen reader read every
+  screen's verdict on arrival, over the heading the user came for. It is a
+  `<section>` with an `aria-label`.
+
+#### The reference implementation
+
+`OverviewPerch` in `ClusterView.tsx`. Every other screen's verdict is written
+against it. Three things make it honest and all three are worth copying:
+
+1. It is derived from **live** state — the broker list the cluster actually
+   answered with, and the set of alert rules firing right now. No constant, no
+   "looks good" that is true by construction.
+2. **Its worst case is a real case.** A cluster that connects and reports zero
+   brokers is a real failure mode of a load balancer in front of Kafka, and the
+   verdict says so instead of rendering a cheerful "0 brokers".
+3. It carries a caveat it would have been easy to omit: those counts came back
+   at the moment of connection and do **not** track the cluster. A banner that
+   let a user believe otherwise is precisely the failure §7 forbids.
+
+---
+
 ## 6. Protected-environment guardrails — nine layers, ordered by survivability
 
 **Every layer below is gated on the connection's environment being marked
@@ -934,6 +1173,33 @@ palette greys the same commands with the same sentence.
 8. **Destructive copy states the blast radius before the button.** *"every
    message in it — about 4.2M records"* is the difference between an informed
    click and an incident.
+
+### The Perch's four honesty rules
+
+The eight rules above govern every sentence in Kavka. These four govern the one
+sentence per screen that claims to summarise a cluster, and they are stricter
+because a verdict is quoted. `Perch.tsx` enforces the precedence; a reviewer has
+to enforce the wording.
+
+1. **While loading, say so.** `loading` outranks tone, verdict and caveat: the
+   Perch renders *"Still checking — Kavka will say what it finds as soon as the
+   cluster answers."* A banner that renders "Everything looks healthy" from an
+   empty response is worse than one that renders nothing at all.
+2. **On error, speak through the library.** A raw string is never the verdict.
+   `Perch` calls `classifyError` itself, so *"what happened"* becomes the
+   verdict and *"the next click"* becomes the caveat, in the vocabulary the rest
+   of the app already uses.
+3. **Never invent certainty.** `tone="unknown"` exists precisely so a screen
+   that cannot answer has somewhere to sit. Reach for it. "Not sure yet" is a
+   complete and respectable verdict.
+4. **Never be cheerful about data you don't have.** If the verdict rests on a
+   partial page, a sampled window, or numbers fetched a while ago, pass
+   `caveat`. It renders beside the verdict, never behind a disclosure, because a
+   qualification one click away is a qualification that gets quoted without it.
+
+The failure this set exists to prevent has a shape: a green banner reading
+*"All 12 brokers healthy"* above a table that only loaded 12 of 40 brokers
+before the request timed out.
 
 ### DO / DON'T
 
@@ -1205,9 +1471,19 @@ Anything not on that list — charts, config diff, topology, reassignment —
    records their 1.93–3.11:1 range so nobody mistakes them for a gate.
    **No alpha may appear in any of these tokens**: an `rgba()` border has no
    ratio until you know what is behind it, so it cannot be asserted at all.
-   **Current state: zero failures.** Wire it into CI — this is the token set's
-   only real defence.
-2. **`--row-h` assertion** — dev-mode check that the token equals the first row's
+   **Both themes are in scope, not just dark.** Light ships (§10.2), so
+   every assertion above runs twice: six dark surfaces, six dark protected
+   surfaces, six light surfaces, six light protected surfaces. The binding
+   figures are usually a selected row in dark and the sidebar in light.
+   **Also asserted, new in Jackdaw:** all four accents' ink against every
+   surface and their `--on-brass` against their own fill; `--perch-ink` and
+   `--perch-title` on `--perch-bg`; and every semantic ink on `--perch-bg`,
+   because the Perch is a surface that carries verdicts.
+   `--perch-line` and `--line`/`--line-mid` are the **documented exemptions**
+   alongside slate's rule: decorative, 1.4.11-exempt, and the Perch is
+   identified by its ground, its bird and its kicker rather than by its border.
+   **Current state: zero failures**, computed with the WCAG 2.1 relative
+   luminance formula over the token literals in `styles.css`. Wire it into CI2. **`--row-h` assertion** — dev-mode check that the token equals the first row's
    measured `offsetHeight`; fail loudly. Wire it before the message browser
    lands.
 3. **Platform screenshots** — macOS and Windows, 100% and 125% DPI. SF Pro at 600
@@ -1264,6 +1540,100 @@ Anything not on that list — charts, config diff, topology, reassignment —
 
 ## 10. Themes and environments
 
+### 10.1 The theme runtime
+
+`<html>` carries five attributes. All five are **resolved values** — none of
+them is ever the string `"system"`:
+
+| Attribute | Values |
+|---|---|
+| `data-theme` | `dark` · `light` |
+| `data-density` | `comfortable` · `compact` |
+| `data-accent` | `brass` · `moss` · `sky` · `plum` |
+| `data-fontsize` | `s` · `m` · `l` |
+| `data-motion` | `system` · `reduce` |
+
+> **"System" is a preference, not a value.** `theme: "system"` is resolved
+> through `matchMedia("(prefers-color-scheme: dark)")` and **re-resolved
+> whenever the OS flips**, live, while the app is open. A stylesheet that had to
+> handle a third `data-theme` value would need a `:root:not([data-theme])`
+> fallback on every token block, and the one that got missed would be a
+> half-themed control. `data-motion` keeps its `system` value because it is
+> the *absence* of an override rather than a third behaviour: the OS media
+> query wins on its own regardless, so a user who told the OS they get motion
+> sick never has to find a second switch.
+
+**Persistence:** one JSON record under `localStorage["kavka.appearance"]`,
+through the safe helpers in `src/storage.ts`. Storage can throw — disabled,
+full — and an appearance preference is never worth an exception in a render
+path. `readAppearance()` degrades **field by field**, so one bad value cannot
+cost the user the other four.
+
+**The store** (`src/appearance.ts`) is a module-level value plus a listener set
+with a `useSyncExternalStore` snapshot — the same shape `i18n/index.ts` uses,
+for the same reason: appearance is one global fact and every subscriber must see
+the same one.
+
+#### Pre-paint
+
+`index.html` carries an **inline script** that reads the same key, validates
+against the same allow-lists, resolves `system` the same way, stamps the same
+five attributes, and sets an inline `background` on `<html>` before the
+stylesheet exists.
+
+> **It is a deliberate duplicate.** A module import cannot run before first
+> paint. Four things are shared and the two files must be changed together: the
+> storage key, the five attribute names, the defaults, and the two
+> `--bg-canvas` literals. Nothing else in either file needs to agree.
+
+The stylesheet then takes `html { background: var(--bg-canvas) !important }`, so
+there is one authority for the colour the moment there can be one.
+
+`<meta name="color-scheme">` tracks the **resolved** theme, set by both the
+inline script and `applyAppearance`. Form controls, scrollbars and the webview's
+own chrome do not read our custom properties; that tag is the only thing that
+makes them follow the app instead of the OS.
+
+### 10.2 Both themes ship
+
+Ledger specced light and did not expose it. Jackdaw ships it.
+
+Every colour token is declared in both blocks (§3), every ratio in §3 is
+measured in both, and **the nine production guardrail layers survive both**
+(§6): the environment chip, the protected substrate, the top wire, the typed
+confirmations and the danger banners all have measured light values. Identity is
+never carried by colour alone in either theme, so a screenshot of light
+production is as unmistakable as a screenshot of dark production.
+
+### 10.3 Settings
+
+`SettingsView.tsx`, reachable from the sidebar footer **with no cluster
+connected**. That is the reason it is a view and not a dialog: the two
+preferences people want on first launch are the theme and the font size, and on
+first launch there is nothing to connect to. It is also the first branch in
+`App.tsx`'s view selection, so it works even in the state where reading the
+connection file failed.
+
+**There is no Save button.** Every control applies on change and persists on
+change — a preference you have to commit is a preference you cannot preview,
+and appearance is the one category where previewing *is* the decision.
+
+Sections: **Appearance** (theme, accent, density, text size, motion),
+**Language** (the same picker the About dialog has, reading the same store —
+two copies of one control, never two settings), and **About**, which *links* to
+the About dialog.
+
+> **Diagnostics and MCP did not move.** They live in the About dialog, every
+> existing link and screenshot points there, and Settings gains a door rather
+> than a landlord.
+
+Every control carries its word: the segmented controls are `role="radiogroup"`
+with text in each arm, and each accent swatch carries the accent's **name** in
+its accessible name and its `title` — a colour picker whose options are only
+colours is unusable to the people most likely to open it.
+
+### 10.4 Environments
+
 The environment reaches CSS through **two** attributes, not one — see §3.1 for
 why. They are set on the app root (`apps/desktop/src/App.tsx`), on the
 connection `<form>` while editing, and on the copy wizard's and offset-migrate
@@ -1282,55 +1652,51 @@ form's substrate live**.
 flag is set — **never `"false"`** — so the CSS keys on the attribute's presence
 and a DOM screenshot says what it means.
 
+> **Those attributes sit on `.app`, not on `<html>`.** The theme sits on
+> `<html>`. So every light-theme environment override is a **descendant**
+> selector — `[data-theme="light"] [data-env-color="red"]` — and not a compound
+> one. Writing `[data-theme="light"][data-env-color="red"]` matches nothing, and
+> it is the single easiest mistake to make in this file.
+
 The registry itself is a module-level store with a `useSyncExternalStore`
 snapshot, the same shape `i18n/index.ts` uses and for the same reason: about
 twenty components ask *is this connection's environment protected?*, most of
 them deep views that receive nothing but a `ConnectionProfile`, and there is one
 registry per machine rather than one per subtree. **It starts full, not empty** —
 the initial snapshot is the three defaults, so the first paint has correct
-guardrails even before (or without) the IPC answering. A registry that started
-empty would render prod unprotected for one frame, and the guardrail must never
-be the thing that is late.
-
-`data-alert="danger"` on the app root dampens the env rule while a danger banner
-is up (§5.8, protected de-collision).
-
-**Light theme is specced and audited but not shipped.** Every text token clears
-AA on all six light surfaces and `--border-control` clears 3:1 on all six. Do
-**not** expose a user toggle until every component composition has been verified
-in it (Phase 6).
-
-**Forced colors:** Windows high-contrast drops our tints, so the guardrail must
-not depend on hue. The wire thickens and gains the environment's own name,
-uppercased, via `content: attr(data-env-label)`. The selector is
-`.app-wire[data-env-label]` — the attribute's *presence*, not its value, because
-it is only ever set on a protected environment and matching `"PROD"` would have
-left a name check in the stylesheet.
-
-> **Never write `* { border-color: CanvasText }` in a forced-colors block.**
-> Forced-colors mode already preserves `transparent` and repaints every other
-> border with a system colour, so the blanket rule does nothing for real
-> borders and **destroys every indicator built on a transparent one**. Kavka's
-> selection, protected row, active tab and banner shell are all "transparent border
-> → coloured border" — the rule painted their *idle* state in the same colour
-> as their *active* state, so in high contrast every row read as selected and
-> every tab as current.
->
-> **Restate indicators positively instead**, one system colour per meaning:
-> `Highlight` for selection (row, gutter, active palette row, active tab, and
-> the manager's chosen swatch), `Mark` for a protected environment and for
-> danger severity — matching the wire, so the guardrail reads as one signal —
-> and `CanvasText` for the neutral banner shell and for the protected chip's
-> border, which is what keeps a badge tellable from a tag once the fills are
-> gone. This is also the only way two indicators stacked on one element stay
-> tellable apart: a selected protected row is `Mark`, because the environment
-> matters more than the selection.
-
----
-
 ## 11. Deviations from the brief, and why
 
 These are deliberate. Do not "fix" them without reading the reason.
+
+### From the Jackdaw mockup
+
+- **The rail carries ten screens, not four.** The mockup drew Cluster home,
+  Messages, Monitoring and Alerts, and left ACLs, Connect, Masking and Streams
+  with no home at all. Reproducing that would have deleted four working
+  surfaces from the product in the name of fidelity to a drawing that only had
+  to look right. The four groups in §5.1 cover everything that was reachable
+  before. `TABS` is derived from `RAIL` by flattening, so a screen with no group
+  is a screen with no app.
+- **There is no `clay` accent.** The mockup offered five; Jackdaw ships four.
+  Clay is close enough to `--danger` that a user could pick an accent the eye
+  reads as the warning colour, and a decorative hue and a guardrail hue in the
+  same family is the one composition §6 forbids.
+- **The Perch has no Hide button.** See §5.12: a verdict the user can switch off
+  is a verdict the app stops being accountable for.
+- **`data-motion` is `system | reduce`, not `full | reduced`.** The app-level
+  preference is an *override*, and the OS media query wins on its own whatever
+  it says — so the third state the mockup implied ("motion on, ignore the OS")
+  is one this app deliberately cannot express.
+- **A compact density ships.** The mockup's comfortable rows cost a reader of
+  10,000-row tables real screen, which was the one fair criticism of it. The
+  answer is a preference (§3), not a compromise on the default — and compact is
+  *exactly* the 30px row Ledger shipped, so nobody loses what they had.
+- **The mockup's `--f15` body type and `--row-h: 46px` became 15px and 44px.**
+  15px is kept verbatim because it is the direction's central legibility bet.
+  44px is a round number in the 4px space ladder; 46 was not.
+
+### Carried over from Ledger
+
 
 - **The global `:focus-visible` rule does not set `border-radius`.** As specced
   it would round table rows and panels the moment they take focus. Controls carry

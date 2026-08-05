@@ -12,8 +12,10 @@ import {
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
+import { useI18n } from "./i18n";
 import { noteMaskRules, useMasking } from "./masking";
 import Overlay from "./Overlay";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -77,6 +79,7 @@ export default function MaskingTab({ profile, onDanger }: MaskingTabProps) {
   const push = toaster.push;
   const session = useMasking(profile.id);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   useEffect(() => {
@@ -165,6 +168,33 @@ export default function MaskingTab({ profile, onDanger }: MaskingTabProps) {
       {error !== null && (
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
+
+      {/* Masking's verdict is the only one in Kavka that is about KAVKA rather
+          than about the cluster: it answers "is what I am looking at what the
+          producer sent?". `ok` is the unmasked case on purpose — a rule in
+          force is a caveat on every other screen, so it reads as "watch". */}
+      <Perch
+        screen={t("rail.item.masking")}
+        loading={rules === null}
+        tone={rules === null ? "unknown" : enabled > 0 ? "watch" : "ok"}
+        caveat={
+          rules === null
+            ? undefined
+            : enabled > 0
+              ? t("perch.masking.caveat")
+              : session.sawMasked
+                ? t("perch.masking.caveat.sawMasked")
+                : undefined
+        }
+      >
+        {rules === null
+          ? t("perch.masking.unread")
+          : rules.length === 0
+            ? t("perch.masking.none")
+            : enabled > 0
+              ? t("perch.masking.inForce", { count: enabled })
+              : t("perch.masking.off", { count: rules.length })}
+      </Perch>
 
       <section className="panel">
         <div className="panel-head">

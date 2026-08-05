@@ -1,0 +1,620 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   JACKDAW — OPERATIONS SURFACES.  OWNER: the ops sweep agent.
+   Nobody else appends to this file; that is what keeps four agents out of
+   one merge conflict.
+
+   SCOPE: monitoring, alerts, streams, ACLs, quotas, masking, Connect, and
+   every destructive flow's confirmation — the surfaces that change a cluster
+   or watch one for trouble.
+
+   RULES THIS FILE INHERITS AND MAY NOT BREAK
+   · Loaded AFTER styles.css, so at equal specificity these rules win. Use
+     that to restyle an existing class in place rather than renaming it.
+   · The nine production guardrail layers survive in BOTH themes. Identity is
+     never carried by colour alone: an environment chip spells its name, a
+     protected surface carries the word "Protected", a firing rule carries a
+     count and a sentence.
+   · Danger fills use --danger-fill with a --danger-border edge. The fill on
+     its own drops below 3:1 on a selected row in the warm dark ground.
+   · Colour comes from tokens only. A literal hex here is a token that escaped
+     the theme system and will be wrong in light.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ══ PANEL FURNITURE ══════════════════════════════════════════════════════
+   `.panel` is a flex column with `--pad-panel` all round, and `.panel-head`
+   full-bleeds itself back out with a negative margin so its divider spans the
+   surface. A foot and a disclosure have to do the same or their rules float
+   inside the padding and read as a box in a box.                          */
+
+/* The sentence a panel ends on: what the rows above it do NOT cover. It is
+   the shape an honesty caveat takes when it belongs to a whole table. */
+.panel-foot {
+  margin:
+    0 calc(var(--pad-panel) * -1)
+    calc(var(--pad-panel) * -1);
+  padding: var(--s-4) var(--pad-panel);
+  border-top: 1px solid var(--hairline);
+  max-width: none;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ══ PROGRESSIVE DISCLOSURE ═══════════════════════════════════════════════
+   The fold holds MECHANICS: what a rule compares, which fields a filter
+   narrows on. It never holds a caveat, a guardrail or a reason a list looks
+   short — those stay in the summary or outside the fold entirely, because a
+   qualification one click away is a qualification that gets quoted without
+   it. Every summary here carries a `.sum-note` saying what is inside, so
+   opening it is a decision rather than a guess.                           */
+
+/* Full-bleed, but the bottom bleed only when this really is the panel's last
+   element. Two stacked full-bleeders would each pull the next up over the
+   panel's own edge — the bug you get for free the first time a `.panel-foot`
+   lands under a `.history`. */
+.disclose {
+  margin: 0 calc(var(--pad-panel) * -1);
+  border-top: 1px solid var(--hairline);
+}
+
+.disclose:last-child {
+  margin-bottom: calc(var(--pad-panel) * -1);
+}
+
+.disclose > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--pad-panel);
+  min-height: var(--hit-min);
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  font-weight: var(--w-semi);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.disclose > summary::-webkit-details-marker { display: none; }
+
+.disclose > summary:hover {
+  background: var(--bg-panel-hi);
+  color: var(--text-primary);
+}
+
+.disclose > summary .caret {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.disclose[open] > summary .caret { transform: rotate(90deg); }
+
+/* What is behind the fold, always. Whatever is NOT behind it is what the
+   reader is being told they can skip — so this sentence is load-bearing. */
+.disclose > summary .sum-note {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  font-weight: var(--w-normal);
+  text-align: right;
+}
+
+.disclose > :not(summary) {
+  padding: 0 var(--pad-panel) var(--pad-panel);
+}
+
+/* The inline variant sits INSIDE a panel's flow rather than spanning it —
+   for a control the panel owns, like the ACL filter, where full-bleed would
+   claim the fold is about the whole table. */
+.disclose-inline,
+.disclose-inline:last-child {
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+}
+
+.disclose-inline > summary {
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-md);
+}
+
+.disclose-inline[open] > summary {
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+.disclose-inline > :not(summary) {
+  padding: 0 var(--s-5) var(--s-5);
+}
+
+/* Key/value facts. `max-content` on the terms keeps every value on one left
+   edge, which is what makes a stack of them scannable rather than read. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s-4) var(--s-7);
+  align-items: baseline;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-base);
+}
+
+/* A literal that came out of Kafka, never a number Kavka computed. */
+.facts-mono {
+  font-family: var(--font-mono);
+  color: var(--text-mono);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ══ ALERTS ═══════════════════════════════════════════════════════════════ */
+
+/* A RULE THAT IS FIRING GETS ITS OWN SURFACE.
+   Three channels, because this is the one banner in the app whose whole job
+   is to be noticed: the danger edge, the tinted head, and the word "Firing"
+   inside the pill. Lose the colour and the word is still there; lose the
+   word and this rule would be a pink rectangle, which law 2 exists to stop.
+   The edge is --danger, not --danger-fill: a solid fill behind a panel head
+   drops below 3:1 against a selected row in the warm dark ground. */
+.panel-firing {
+  border-color: var(--danger);
+}
+
+/* `.panel-head` full-bleeds to the panel's edge and the panel has no
+   `overflow: hidden`, so a head that paints a ground has to round its own
+   top corners or the tint squares off inside the panel's radius. Minus the
+   1px border the panel already draws. */
+.panel-firing > .panel-head {
+  background: var(--danger-tint);
+  border-bottom-color: var(--danger);
+  border-radius: calc(var(--r-md) - 1px) calc(var(--r-md) - 1px) 0 0;
+}
+
+.rule-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 2px var(--s-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-pill);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: var(--t-xs);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.rule-since {
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The sentence is the feature, so on a firing rule it is read at body size
+   rather than at table size. `.rule-sentence` keeps its table treatment. */
+.rule-sentence-lead {
+  color: var(--text-primary);
+  font-size: var(--t-md);
+  line-height: var(--lh-prose);
+}
+
+/* What actually tripped it, in the core's own words. Outside the fold on
+   purpose — it is the evidence for the verdict, not the mechanics. */
+.rule-tripped {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* ── The log ──────────────────────────────────────────────────────────
+   A list of moments, not a grid of cells. Full-bleeds so each entry's rule
+   spans the panel, the same way a table's rows do. */
+.history {
+  margin: 0 calc(var(--pad-panel) * -1);
+  padding: 0;
+  list-style: none;
+}
+
+.history:last-child {
+  margin-bottom: calc(var(--pad-panel) * -1);
+}
+
+.history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  padding: var(--s-5) var(--pad-panel);
+  border-top: 1px solid var(--hairline);
+}
+
+/* Decorative. "started" and "cleared" are in the title beside it, so this
+   dot may be lost entirely without losing the entry's meaning. */
+.history-mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: calc(var(--lh-md) / 2 - 4px);
+  border-radius: var(--r-pill);
+}
+
+.history-mark-open   { background: var(--danger); }
+.history-mark-closed { background: var(--ok); }
+
+.history-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+}
+
+.history-sub {
+  margin: var(--s-2) 0 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.history-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-variant-numeric: var(--nums-tabular);
+  white-space: nowrap;
+}
+
+/* ══ MONITORING ═══════════════════════════════════════════════════════════ */
+
+/* TILES. An opt-in modifier: the bare `.stat-grid` is a row of numbers
+   floating on the canvas everywhere else in Kavka, and it stays that way.
+   Here each reading is a card because each one answers a different question
+   and the four are read as a set. */
+.stat-grid-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s-5);
+}
+
+.stat-grid-tiles > .stat {
+  padding: var(--s-5) var(--s-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* The tile that is worth a second look repeats its own word as an edge.
+   The word is `.stat-value-word`; this spine is the repeat, never the
+   signal — a greyscale reader loses nothing by it. */
+.stat-grid-tiles > .stat-attn {
+  box-shadow: var(--shadow-1), inset 3px 0 0 var(--warn);
+}
+
+/* What the number counts, in words. A bare "82" is not a reading. */
+.stat-sub {
+  max-width: 34ch;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* THE SAMPLER'S HEARTBEAT. It pulses only when `sampler-line-live` is set,
+   which is only while readings are genuinely arriving — an animation on a
+   stopped sampler would be the app lying with motion. The global
+   [data-motion="reduce"] and prefers-reduced-motion rules already stop it. */
+.sampler-line-live .health .dot {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.sampler-detail {
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* Health readings become inset wells so two of them read as two answers
+   rather than as one paragraph that happens to wrap. */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s-5);
+}
+
+.health-reading {
+  max-width: none;
+  padding: var(--s-5) var(--s-6);
+  background: var(--bg-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+/* ── The teaching empty state ─────────────────────────────────────────
+   Not "no data": what you would get, how to switch it on, and what does
+   NOT depend on it. Kavka would rather show nothing than draw a line it
+   made up, and this is the shape that sentence takes on screen. */
+.teach {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-7);
+}
+
+.teach-art {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+}
+
+.teach-art svg { width: 26px; height: 26px; }
+
+.teach-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.teach-title {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-primary);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+}
+
+.teach-text {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.teach-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.teach-list li {
+  display: flex;
+  gap: var(--s-4);
+}
+
+/* An em dash, not a bullet glyph: the list is three sentences, not three
+   options. Decorative, so it is hidden from the accessibility tree. */
+.teach-list li::before {
+  content: "—";
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.teach-list code,
+.teach-text code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+/* ── Charts ───────────────────────────────────────────────────────────
+   Jackdaw's central bet is that this app was too small to read, and a
+   chart's heading is the label that tells you which of six pictures you
+   are looking at. It moves up to body size; the count beside it does not,
+   because it is a qualification rather than a name. */
+.chart-title {
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+}
+
+/* Legend entries are the chart's only keyboard path to a series, so they
+   take the pill shape every other operable chip in Jackdaw wears. The
+   --border-control edge is what SC 1.4.11 needs, and it is already there. */
+.chart-key {
+  border-radius: var(--r-pill);
+  padding: var(--s-2) var(--s-4);
+  min-height: var(--hit-min);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.chart-key:hover {
+  background: var(--bg-panel-hi);
+  color: var(--text-primary);
+}
+
+/* ── Masking ──────────────────────────────────────────────────────────
+   The word IS the state, so the state that hides things gets the weight.
+   Colour is not spent here: "Masking" and "Off" are different words, and
+   that is the whole channel. */
+.mask-switch-word {
+  font-size: var(--t-base);
+  line-height: var(--lh-base);
+}
+
+.mask-switch input:checked + .mask-switch-word {
+  color: var(--text-primary);
+  font-weight: var(--w-semi);
+}
+
+/* ══ LAG METERS ═══════════════════════════════════════════════════════════
+   Number, then track, then WORD — three channels, and the word survives
+   greyscale. The track's own edge is decorative; the fill is what carries
+   the proportion, and the number beside it carries the value. */
+.lag-track {
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+.lag-fill {
+  border-radius: var(--r-pill);
+}
+
+.lag-number {
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ══ STREAMS ══════════════════════════════════════════════════════════════
+   The inference note becomes a Jackdaw well: sunken ground, real radius,
+   panel padding. The spine stays NEUTRAL. A hue here would have to mean
+   something, and the one thing this block says — "worked out from names,
+   not read from the application" — is a sentence, not a state. */
+.inferred-note {
+  padding: var(--s-5) var(--s-6);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--border-control);
+  border-radius: var(--r-sm);
+  background: var(--bg-sunken);
+}
+
+/* ══ CONNECT ══════════════════════════════════════════════════════════════ */
+
+.task-count {
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ══ QUOTAS ═══════════════════════════════════════════════════════════════
+   One entity's limits, grouped. The card treatment is what stops six
+   principals' worth of numbers reading as one wall. */
+.quota-entity {
+  padding: var(--s-5) var(--s-6);
+  background: var(--bg-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+.quota-number {
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* ══ DESTRUCTIVE FLOWS ════════════════════════════════════════════════════
+   Every guardrail these modals carry survives untouched: the type-to-confirm
+   box, the --danger-border confirm button, the environment chip, the
+   blast-radius sentence, the deny-widens-access warning.
+
+   `.reset-preview` is the live sentence — "checkout-service will re-process
+   about 4.2M messages" — and it is the reason the modal exists. It moves up
+   to Jackdaw's body size so it is the loudest prose on the surface.
+
+   IT DOES NOT BECOME A CARD AND IT GETS NO ACCENT SPINE. The hairlines were
+   a deliberate choice (styles.css) and the accent means "clickable or
+   selected" and nothing else — an accent edge on a static sentence inside a
+   danger modal would spend the one hue the accent picker depends on staying
+   honest. Weight is the change; colour is not. */
+.reset-preview {
+  padding: var(--s-6) 0;
+  font-size: var(--t-md);
+  line-height: var(--lh-prose);
+}
+
+.reset-preview code {
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-base);
+}
+
+/* The wizard's step numerals. Bigger, on the accent when current, because
+   "which of five steps am I on" is the question a copy wizard is asked
+   most. The active step keeps its weight change too — the accent is the
+   repeat, not the signal. */
+.wizard-step-n {
+  width: 22px;
+  height: 22px;
+  font-size: var(--t-xs);
+  font-weight: var(--w-bold);
+  background: var(--bg-sunken);
+}
+
+.wizard-step-active .wizard-step-n {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ══ RESPONSIVE ═══════════════════════════════════════════════════════════
+   Under the rail's own wrap point the tiles and readings collapse to one
+   column rather than squeezing four numbers into 190px each. */
+@media (max-width: 900px) {
+  .stat-grid-tiles,
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .teach {
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+
+  .history-item {
+    flex-wrap: wrap;
+  }
+
+  .history-time {
+    width: 100%;
+    padding-left: calc(9px + var(--s-5));
+  }
+}
+
+/* ══ FORCED COLOURS ═══════════════════════════════════════════════════════
+   Same doctrine as styles.css: no blanket border rule, restate each
+   indicator POSITIVELY with one system colour per meaning. Forced colours
+   drops every tint and every shadow, so a surface that was telling itself
+   apart by ground alone has to say so with an edge instead. Nothing here
+   needs `forced-color-adjust: none` — every state on these surfaces is
+   already carried by a word. */
+@media (forced-colors: active) {
+  .stat-grid-tiles > .stat,
+  .health-reading,
+  .quota-entity,
+  .teach-art,
+  .disclose-inline,
+  .inferred-note {
+    border: 1px solid CanvasText;
+  }
+
+  /* Mark is what the wire and every other danger context uses, so a firing
+     rule reads as the same signal wherever it appears. The word "Firing" is
+     inside the pill either way. */
+  .panel-firing { border: 2px solid Mark; }
+  .panel-firing > .panel-head { border-bottom: 1px solid Mark; }
+  .rule-state { border-color: Mark; color: Mark; }
+  .history-mark-open { background: Mark; }
+  .history-mark-closed { background: Canvas; border: 1px solid CanvasText; }
+}

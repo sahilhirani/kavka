@@ -20,8 +20,10 @@ import { useDangerSignal, type DangerReport } from "./danger";
 import ExportButton from "./ExportButton";
 import { approxCount, groupDigits } from "./format";
 import HelpPopover from "./HelpPopover";
+import { useI18n } from "./i18n";
 import { useMasking } from "./masking";
 import NlQueryBar from "./NlQueryBar";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import ResultGrid, { type ResultGridHandle } from "./ResultGrid";
 import SeekBar, {
@@ -326,7 +328,27 @@ export default function SqlView({
       : undefined;
 
   return (
-    <section className="messages-view">
+    // The verdict is a sibling of the panel, not a row inside it — see the
+    // note in MessagesView.
+    <>
+      {/* Rule 1 of this file, said before the answer rather than under it: a
+          query over a capped scan is an answer about the scan. An aggregate is
+          the one number on this screen that looks authoritative and isn't, so
+          the scope caveat rides on every result set. */}
+      <SqlPerch
+        started={run !== null}
+        running={running}
+        stopped={stopped}
+        finished={finished}
+        error={error}
+        rows={rows.length}
+        scanned={scanned}
+        hitScanCap={hitScanCap}
+        scanCap={run?.spec.scan_cap ?? SQL_SCAN_CAP}
+        maskedRules={masking.enabled}
+      />
+
+      <section className="messages-view">
       <div className="messages-head">
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
@@ -745,7 +767,8 @@ export default function SqlView({
           </span>
         </span>
       </div>
-    </section>
+      </section>
+    </>
   );
 }
 
@@ -795,6 +818,96 @@ function SqlErrorBanner({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * THE QUERY'S VERDICT.
+ *
+ * `perch.sql.scope` is on every finished result set and is not negotiable: the
+ * whole hazard of this screen is that `SELECT count(*)` renders one confident
+ * number, and that number is a count over the records the scan happened to
+ * read. Saying so once, above the grid, is cheaper than the wrong decision it
+ * prevents.
+ */
+function SqlPerch({
+  started,
+  running,
+  stopped,
+  finished,
+  error,
+  rows,
+  scanned,
+  hitScanCap,
+  scanCap,
+  maskedRules,
+}: {
+  started: boolean;
+  running: boolean;
+  stopped: boolean;
+  finished: boolean;
+  error: string | null;
+  rows: number;
+  scanned: number;
+  hitScanCap: boolean;
+  scanCap: number;
+  maskedRules: number;
+}) {
+  const { t } = useI18n();
+  const shared = { screen: t("perch.screen.sql"), error };
+
+  const notes: string[] = [t("perch.sql.scope")];
+  if (hitScanCap) notes.push(t("perch.sql.capped", { cap: scanCap }));
+  if (maskedRules > 0) notes.push(t("perch.sql.masked"));
+  const caveat = notes.join(" ");
+
+  if (!started) {
+    return (
+      <Perch {...shared} tone="unknown">
+        {t("perch.sql.waiting")}
+      </Perch>
+    );
+  }
+
+  if (running) {
+    if (scanned === 0) {
+      return (
+        <Perch {...shared} tone="unknown" loading>
+          {t("perch.sql.waiting")}
+        </Perch>
+      );
+    }
+    return (
+      <Perch {...shared} tone="unknown" caveat={t("perch.sql.running.note")}>
+        {t("perch.sql.running", { scanned })}
+      </Perch>
+    );
+  }
+
+  if (stopped) {
+    return (
+      <Perch {...shared} tone="watch" caveat={caveat}>
+        {t("perch.sql.stopped", { scanned })}
+      </Perch>
+    );
+  }
+
+  // A scan that ran to its cap answered about a slice, and the tone says so
+  // even though nothing failed.
+  const tone = finished && !hitScanCap ? "ok" : "watch";
+
+  if (rows === 0) {
+    return (
+      <Perch {...shared} tone={tone} caveat={caveat}>
+        {t("perch.sql.none", { scanned })}
+      </Perch>
+    );
+  }
+
+  return (
+    <Perch {...shared} tone={tone} caveat={caveat}>
+      {t("perch.sql.rows", { count: rows, scanned })}
+    </Perch>
   );
 }
 

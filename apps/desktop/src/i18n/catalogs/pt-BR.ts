@@ -40,6 +40,11 @@ const ptBR: Catalog = {
   "common.linkFailed":
     "O Kavka não conseguiu entregar esse link ao seu navegador. O endereço é {url} — copie daqui.",
 
+  "confirm.kicker.destructive": "Destrutiva",
+  "confirm.busy": "O Kavka está trabalhando nisso",
+  "confirm.type.label": "Digite {name} para confirmar",
+  "confirm.type.reason": "Digite exatamente {name} para confirmar isto",
+
   "sidebar.navLabel": "Conexões salvas",
   "sidebar.title": "Clusters",
   "sidebar.loading": "Lendo suas conexões…",
@@ -51,6 +56,7 @@ const ptBR: Catalog = {
   "sidebar.draftName": "Nova conexão",
   "sidebar.draftMeta": "ainda não salva",
   "sidebar.about": "Sobre",
+  "sidebar.settings": "Configurações",
 
   "app.status.disconnected": "Não conectado",
   "app.status.connecting": "Conectando…",
@@ -140,7 +146,7 @@ const ptBR: Catalog = {
   "about.licenceValue": "Livre e de código aberto sob a AGPL-3.0",
   "about.language": "Idioma",
   "about.language.hint":
-    "A moldura do Kavka — a barra lateral, a paleta de comandos, estas caixas de diálogo e o formulário de conexão. As telas de cluster ainda estão em inglês; elas são a próxima coisa a ser traduzida.",
+    "A moldura do Kavka e o veredito com que cada tela do cluster começa — a barra lateral, a paleta de comandos, estas caixas de diálogo, o formulário de conexão e a frase de abertura de cada tela. As tabelas e formulários abaixo delas ainda estão em inglês.",
   "about.language.machine":
     "{language} foi traduzido por máquina e não passou por revisão de um falante nativo. Correções são bem-vindas — docs/I18N.md explica como.",
 
@@ -392,6 +398,26 @@ const ptBR: Catalog = {
   "editor.err.clientSecret":
     "Este método de autenticação precisa do segredo que acompanha esse id de cliente.",
 
+  "editor.perch.screen": "Conexão",
+  "editor.perch.new":
+    "Nada foi salvo ainda — o Kavka não contatou nenhum broker, então nada nesta tela foi verificado.",
+  "editor.perch.saved":
+    "Salva, mas não conectada. O Kavka ainda não falou com {name}, então nenhum destes detalhes foi verificado contra o cluster.",
+  "editor.perch.connected":
+    "Conectada a {name}. O Kavka ainda está lendo o panorama do cluster.",
+  "editor.perch.caveat.protected":
+    "{name} está marcado como protegido: toda ação destrutiva neste cluster pede que você digite o nome antes.",
+  "editor.perch.caveat.unknown":
+    "Nada nesta máquina define {name}, então nenhuma proteção se aplica a esta conexão.",
+  "editor.perch.caveat.readonly":
+    "Somente leitura está ativado — o Kavka navegará neste cluster, mas nunca escreverá nele.",
+  "editor.cluster.legend": "O cluster",
+  "editor.guardrails.legend": "Proteções",
+  "editor.fold.set": "Configurado",
+  "editor.fold.notSet": "Não configurado",
+  "editor.fold.connectCount":
+    "{count, plural, one {# cluster} other {# clusters}}",
+
 
   // ── Ambientes ───────────────────────────────────────────────────────────
   "env.color.green": "verde",
@@ -443,6 +469,381 @@ const ptBR: Catalog = {
     "Escolha um ambiente para onde mover essas conexões.",
   "env.mgr.delete.last":
     "É o único ambiente restante — adicione outro primeiro",
+
+  // ── Navegação do cluster (Jackdaw) ──────────────────────────────────────
+  "rail.label": "Telas do cluster",
+  "rail.group.cluster": "Cluster",
+  "rail.group.observe": "Observar",
+  "rail.group.safety": "Segurança",
+  "rail.group.integrations": "Integrações",
+  "rail.item.overview": "Início",
+  "rail.item.topics": "Tópicos",
+  "rail.item.groups": "Grupos de consumo",
+  "rail.item.brokers": "Brokers",
+  "rail.item.monitoring": "Monitoramento",
+  "rail.item.alerts": "Alertas",
+  "rail.item.streams": "Streams",
+  "rail.item.acls": "ACLs",
+  "rail.item.masking": "Mascaramento",
+  "rail.item.connect": "Connect",
+  "rail.firing": "disparada",
+  "rail.firingTitle":
+    "{count, plural, one {# regra de alerta está disparada agora} other {# regras de alerta estão disparadas agora}}",
+  "rail.disconnect": "Desconectar",
+
+  // ── O poleiro (Jackdaw) ─────────────────────────────────────────────────
+  "perch.label": "{screen} — o que o Kavka consegue dizer",
+  "perch.kicker": "{screen} · {state}",
+  "perch.state.ok": "Parece saudável",
+  "perch.state.watch": "Vale uma olhada",
+  "perch.state.problem": "Algo está errado",
+  "perch.state.unknown": "Ainda não dá para dizer",
+  "perch.state.checking": "Ainda verificando",
+  "perch.checking":
+    "Ainda verificando — o Kavka avisa o que encontrar assim que o cluster responder.",
+  "perch.overview.counts":
+    "Conectado a {brokers, plural, one {# broker} other {# brokers}}, com {topics, plural, one {# tópico} other {# tópicos}} em {partitions, plural, one {# partição} other {# partições}}.",
+  "perch.overview.firing":
+    "{count, plural, one {# regra de alerta está disparada} other {# regras de alerta estão disparadas}} neste cluster agora. {counts}",
+  "perch.overview.snapshot":
+    "Estes números vieram no momento da conexão e não acompanham o cluster — reconecte para pegá-los de novo.",
+  "perch.overview.noBrokers":
+    "O cluster respondeu, mas não citou nenhum broker.",
+  "perch.overview.noBrokers.next":
+    "Isso normalmente quer dizer que você chegou a um balanceador de carga em vez do Kafka, ou que os metadados voltaram vazios. Desconecte, conecte de novo e confira o endereço de bootstrap.",
+  "perch.screen.messages": "Mensagens",
+  "perch.screen.search": "Busca",
+  "perch.screen.sql": "SQL",
+  "perch.screen.schemas": "Esquemas",
+  "perch.topics.unreadable":
+    "O Kavka não tem nenhuma lista dos topics deste cluster.",
+  "perch.topics.unreadable.next":
+    "A conexão pode estar ativa mesmo que a conta não tenha Describe no cluster. Atualizar pergunta de novo.",
+  "perch.topics.empty":
+    "Este cluster não tem nenhum topic — ainda não foi criado nenhum nele.",
+  "perch.topics.internalOnly":
+    "Tudo neste cluster é um topic interno do próprio Kafka. Ative Mostrar internos para vê-los.",
+  "perch.topics.counts":
+    "{count, plural, one {# topic neste cluster} other {# topics neste cluster}}.",
+  "perch.topics.countsHidden":
+    "{count, plural, one {# topic exibido} other {# topics exibidos}}.",
+  "perch.topics.hiddenNote":
+    "{count, plural, one {mais # é um topic interno do próprio Kafka e está oculto} other {mais # são topics internos do próprio Kafka e estão ocultos}}.",
+  "perch.topics.snapshot":
+    "Esta lista foi lida quando você abriu a tela e não acompanha o cluster — Atualizar a lê de novo.",
+  "perch.topics.readOnly":
+    "Esta conexão é somente leitura, então nada aqui pode criar, alterar ou excluir um topic.",
+  "perch.topic.unreadable":
+    "O Kavka não tem a lista de partições de {topic}, então não pode dizer o que há nele.",
+  "perch.topic.unreadable.next":
+    "O topic pode ter sido excluído, ou a conta pode não ter Describe sobre ele.",
+  "perch.topic.underReplicated":
+    "{count, plural, one {# partição aqui está sem uma cópia} other {# partições aqui estão sem cópias}} — o Kafka mantém menos réplicas do que este topic pede.",
+  "perch.topic.unpreferred":
+    "{count, plural, one {# partição é liderada} other {# partições são lideradas}} por um broker que não é o primeiro da sua lista de réplicas. Isso é rotina depois de um reinício, e Eleger líderes preferidos as devolve ao lugar.",
+  "perch.topic.healthy":
+    "{count, plural, one {# partição} other {# partições}}, com todas as cópias em sincronia.",
+  "perch.topic.records": "Cerca de {records} mensagens pelos offsets.",
+  "perch.topic.approx":
+    "Essa contagem de mensagens é a diferença entre o offset mais antigo e o mais recente de cada partição, então ainda conta registros que a retenção ou a compactação já removeram.",
+  "perch.messages.waiting":
+    "Nada foi lido ainda. Escolha acima de onde ler e pressione Buscar.",
+  "perch.messages.range":
+    "{count, plural, one {# mensagem} other {# mensagens}} do intervalo que você pediu.",
+  "perch.messages.none": "Nada no intervalo que você pediu.",
+  "perch.messages.topicEmpty": "{topic} ainda não contém nenhuma mensagem.",
+  "perch.messages.live":
+    "Observando {topic} ao vivo — {count, plural, one {# mensagem chegou} other {# mensagens chegaram}} desde que o acompanhamento começou.",
+  "perch.messages.liveQuiet":
+    "Observando {topic} ao vivo. Nada foi produzido nele por pelo menos trinta segundos.",
+  "perch.messages.notWhole":
+    "Esta é a fatia que você pediu, não o topic inteiro — {topic} contém cerca de {total} mensagens.",
+  "perch.messages.dropped":
+    "{count, plural, one {# mensagem chegou} other {# mensagens chegaram}} mais rápido do que esta janela conseguia absorver, e a sessão a descartou em vez de ficar para trás — então as linhas na tela não são tudo o que o acompanhamento viu.",
+  "perch.messages.trimmed":
+    "O Kavka mantém as últimas {cap} linhas ao vivo; tudo mais antigo já saiu do buffer.",
+  "perch.messages.masked":
+    "Há regras de mascaramento ativas, então alguns valores na tela não são os valores do topic. Cópias e exportações levam as substituições.",
+  "perch.search.waiting":
+    "Nada foi varrido ainda. Defina o escopo, diga o que procura e pressione Buscar.",
+  "perch.search.running":
+    "Varrendo {topic} — {count, plural, one {# correspondência} other {# correspondências}} até agora.",
+  "perch.search.running.note":
+    "Parcial. Estes números continuam mudando até a varredura terminar.",
+  "perch.search.matches":
+    "{count, plural, one {# correspondência} other {# correspondências}} nos {scanned} registros que esta varredura leu.",
+  "perch.search.none":
+    "Nada correspondeu nos {scanned} registros que esta varredura leu.",
+  "perch.search.stopped":
+    "Você parou esta varredura após {scanned} registros, então ela responde sobre parte do intervalo e não sobre todo ele.",
+  "perch.search.capped":
+    "{matched} registros corresponderam, mas o Kavka guardou {kept}. Ordenar, exportar ou contar o que está na tela responde sobre esses, não sobre todas as correspondências.",
+  "perch.search.unevaluated":
+    "{count, plural, one {# registro não pôde ser lido} other {# registros não puderam ser lidos}} contra a sua expressão. Eles foram pulados, não julgados como não correspondentes.",
+  "perch.search.masked":
+    "Há regras de mascaramento ativas, então alguns valores na tela — e em tudo o que você exportar — não são os valores do topic.",
+  "perch.sql.waiting":
+    "Nenhuma consulta foi executada ainda. O escopo acima decide quais registros a consulta pode ver.",
+  "perch.sql.running": "Executando — {scanned} registros lidos até agora.",
+  "perch.sql.running.note":
+    "Parcial. Nada abaixo é a resposta final até a varredura terminar.",
+  "perch.sql.rows":
+    "{count, plural, one {# linha} other {# linhas}} dos {scanned} registros que esta varredura leu.",
+  "perch.sql.none":
+    "A consulta não retornou nenhuma linha dos {scanned} registros que esta varredura leu.",
+  "perch.sql.scope":
+    "Isto responde sobre os registros que a varredura leu, não sobre o topic inteiro — outro escopo é outra resposta.",
+  "perch.sql.capped":
+    "A varredura parou no seu limite de {cap} registros, então tudo o que a consulta contou ou somou é um cálculo sobre essa fatia.",
+  "perch.sql.stopped":
+    "Você parou esta varredura após {scanned} registros, então a resposta cobre parte do intervalo.",
+  "perch.sql.masked":
+    "Havia regras de mascaramento em vigor enquanto esta consulta rodava, então alguns valores aqui não são os valores do topic.",
+  "perch.schemas.noRegistry":
+    "Esta conexão não tem Schema Registry, então não há de onde ler esquemas aqui.",
+  "perch.schemas.noRegistry.next":
+    "Um registry é um serviço separado com endereço próprio. Adicione-o em Schema Registry, nas configurações desta conexão.",
+  "perch.schemas.missing":
+    "O registry não tem nenhum subject chamado {subject}.",
+  "perch.schemas.missing.next":
+    "O Kavka procurou pela estratégia de nome de topic, que é a que a maioria dos produtores usa. Um produtor com outra estratégia registra sob outro nome.",
+  "perch.schemas.versions":
+    "{count, plural, one {# versão deste subject está registrada} other {# versões deste subject estão registradas}}.",
+  "perch.schemas.level": "As novas versões são verificadas como {level}.",
+  "perch.schemas.levelUnknown":
+    "O Kavka não conseguiu ler a configuração de compatibilidade própria deste subject, então não pode dizer com certeza qual nível o registry vai aplicar.",
+  "perch.groups.none":
+    "Ainda não há grupos de consumidores neste cluster — nada leu dele.",
+  "perch.groups.counts":
+    "{count, plural, one {# grupo de consumidores está lendo} other {# grupos de consumidores estão lendo}} deste cluster.",
+  "perch.groups.rebalancing":
+    "{unstable, plural, one {# grupo está} other {# grupos estão}} rebalanceando agora, então suas partições estão sendo repassadas e o consumo fica pausado enquanto isso. {counts}",
+  "perch.groups.unread":
+    "O Kavka não conseguiu ler os grupos de consumidores deste cluster, então não pode dizer nada sobre eles. Até conseguir, nada nesta tela é uma afirmação sobre o cluster.",
+  "perch.groups.caveat":
+    "Esta é a lista como o Kavka a leu pela última vez. O estado de um grupo muda a cada rebalanceamento — pressione Atualizar para lê-la de novo.",
+  "perch.group.caughtUp":
+    "{group} está em dia em todas as partições que o Kavka consegue ver.",
+  "perch.group.behind":
+    "{group} está cerca de {lag} mensagens atrás em {partitions, plural, one {# partição} other {# partições}}. A pior é {topic} partição {partition}, com {worst}.",
+  "perch.group.noOffsets":
+    "{group} nunca confirmou um offset, então não há posição a relatar. Pode ser que só tenha produzido, ou que tenha sido criado e nunca tenha lido nada.",
+  "perch.group.noMembers":
+    "Nada está conectado a {group} no momento, então ele não está lendo nada. Seus offsets confirmados continuam aqui, e uma aplicação que iniciar seguirá a partir deles.",
+  "perch.group.caveat":
+    "O Kavka leu estes offsets uma vez, quando esta tela abriu. Eles não acompanham o grupo — reabra-a para uma leitura nova.",
+  "perch.brokers.counts":
+    "{count, plural, one {# broker neste cluster} other {# brokers neste cluster}}. Abra um para ver todas as configurações com que ele está rodando.",
+  "perch.brokers.none": "Este cluster respondeu, mas não nomeou nenhum broker.",
+  "perch.brokers.noneNext":
+    "Isso normalmente significa que os metadados voltaram vazios, ou que você chegou a um balanceador de carga em vez do próprio Kafka. Desconecte, conecte de novo e confira o endereço de bootstrap.",
+  "perch.brokers.caveat":
+    "A lista de brokers voltou quando você conectou e não acompanha o cluster — reconecte para obtê-la de novo.",
+  "perch.broker.noOverrides":
+    "O broker {broker} não muda nada dos padrões do Kafka — cada configuração que ele tem é calculada pelo Kafka.",
+  "perch.broker.overrides":
+    "O broker {broker} sobrescreve {count, plural, one {# configuração} other {# configurações}}; as outras {rest} são o que ele calcula neste momento.",
+  "perch.broker.unread":
+    "O Kavka não conseguiu ler as configurações deste broker, então não pode dizer com o que ele está rodando. A conta normalmente precisa de DescribeConfigs no cluster.",
+  "perch.broker.caveat":
+    "Apenas as linhas marcadas com um + estão definidas neste broker. Um padrão calculado pode mudar sob seus pés quando o cluster muda, e o Kafka informa algumas configurações como somente leitura para clientes — essas mantêm o botão Editar, desativado, com o motivo ao passar o mouse.",
+  "perch.connect.noClusters":
+    "Esta conexão não tem workers do Kafka Connect, então não há nada a comandar daqui.",
+  "perch.connect.noClustersNext":
+    "O Connect roda como seu próprio conjunto de workers com endereço REST próprio, normalmente na porta 8083. Adicione um em Clusters do Kafka Connect, nas configurações desta conexão.",
+  "perch.connect.empty":
+    "Ainda não há conectores em {cluster}, então nada está sendo movido para dentro ou para fora do Kafka daqui.",
+  "perch.connect.allRunning":
+    "{count, plural, one {# conector em {cluster}} other {# conectores em {cluster}}}, e todas as tarefas estão rodando.",
+  "perch.connect.failed":
+    "{failed, plural, one {# tarefa falhou} other {# tarefas falharam}} em {cluster}. Uma tarefa com falha não move nenhum registro até que algo a reinicie — abra o conector e leia primeiro o rastreamento do próprio worker.",
+  "perch.connect.paused":
+    "{paused, plural, one {# conector está pausado} other {# conectores estão pausados}} em {cluster}, então nada passa por {paused, plural, one {ele} other {eles}}. Suas configurações e seus offsets confirmados são mantidos.",
+  "perch.connect.unread":
+    "O Kavka não conseguiu alcançar os workers do Connect, então não pode dizer o que está rodando. Esse é um endereço diferente do dos brokers e pode ser a única coisa fora do ar.",
+  "perch.connect.caveat":
+    "Estes estados vieram dos workers na última vez que o Kavka perguntou. O Connect os muda por conta própria — pressione Atualizar para uma leitura nova.",
+  "perch.connector.running":
+    "{name} está rodando: {running} de {total} tarefas estão movendo registros.",
+  "perch.connector.failed":
+    "{name} tem {failed, plural, one {# tarefa com falha} other {# tarefas com falha}} e não move nada. Leia por que ela parou antes de reiniciá-la — um reinício com a causa ainda ali simplesmente falha de novo.",
+  "perch.connector.paused":
+    "{name} está pausado, então não move nenhum registro. Sua configuração e seus offsets confirmados são mantidos, e retomar continua a partir deles.",
+  "perch.connector.noTasks":
+    "{name} não tem nenhuma tarefa, então nada se move. Os workers criam tarefas a partir da configuração de um conector, e uma configuração que eles não conseguiram usar o deixa sem nenhuma.",
+  "perch.connector.caveat":
+    "Esta é uma leitura única, tomada na última vez que o Kavka perguntou aos workers. Os estados das tarefas mudam sozinhos.",
+  "perch.monitoring.origin":
+    "O Kafka não lembra o atraso — um broker só pode dizer onde um grupo está agora. Tudo nesta tela é a gravação do próprio Kavka, feita enquanto esta conexão estava ativa.",
+  "perch.monitoring.unread":
+    "O Kavka não conseguiu ler sua própria gravação de atraso para esta conexão, então não pode dizer o quanto algo está atrasado — nem se tem alguma leitura.",
+  "perch.monitoring.noHistory":
+    "O Kavka ainda não tem leituras de atraso para esta conexão. As primeiras aparecem dentro de {interval} após conectar, e um grupo só aparece aqui depois de confirmar um offset pelo menos uma vez.",
+  "perch.monitoring.noWindow":
+    "O Kavka não tem leituras de {group} nesta janela. Tente uma mais longa, ou confira o amostrador abaixo.",
+  "perch.monitoring.caughtUp":
+    "{group} estava em dia na última leitura — nada esperava para ser lido.",
+  "perch.monitoring.rising":
+    "{group} está cerca de {lag} mensagens atrás em {partitions, plural, one {# partição} other {# partições}}, e subindo. A pior é {topic} partição {partition}, que chegou a {peak}.",
+  "perch.monitoring.steady":
+    "{group} está cerca de {lag} mensagens atrás em {partitions, plural, one {# partição} other {# partições}}, e estável desde o início desta janela.",
+  "perch.monitoring.falling":
+    "{group} está cerca de {lag} mensagens atrás em {partitions, plural, one {# partição} other {# partições}}, e caindo.",
+  "perch.monitoring.caveat.sampled":
+    "Um ponto nestes gráficos é a pior leitura da sua fatia, nunca uma média, e uma quebra numa linha é um trecho em que o Kavka não estava rodando — não uma queda.",
+  "perch.monitoring.caveat.stale":
+    "O amostrador está atrasado: sua última leitura foi {ago}, há mais de três intervalos. Tudo abaixo é mais antigo do que parece.",
+  "perch.monitoring.caveat.stopped":
+    "Nada está sendo gravado para esta conexão no momento, então este veredito é apenas tão novo quanto a última leitura que o Kavka conseguiu fazer.",
+  "perch.monitoring.caveat.unknownSampler":
+    "O Kavka não consegue dizer o que seu amostrador está fazendo agora, então não pode prometer que estas leituras sejam atuais.",
+  "perch.alerts.none":
+    "Não há regras neste cluster, então o Kavka não está vigiando nada aqui.",
+  "perch.alerts.quiet":
+    "{count, plural, one {# regra está vigiando} other {# regras estão vigiando}} este cluster, e nenhuma delas está disparando.",
+  "perch.alerts.firingOne": "{rule} está disparando desde {time}. {detail}",
+  "perch.alerts.firingMany":
+    "{count, plural, one {# regra está disparando} other {# regras estão disparando}} neste cluster agora. A mais antiga é {rule}, desde {time}.",
+  "perch.alerts.unread":
+    "O Kavka não conseguiu ler as regras de alerta desta conexão, então não pode dizer o que está sendo vigiado — nem se algo está.",
+  "perch.alerts.unreadHistory":
+    "O Kavka não conseguiu ler o registro de alertas desta conexão, então não pode dizer se algo está disparando agora — nem se algo já disparou.",
+  "perch.alerts.caveat.desktop":
+    "O Kavka precisa estar rodando para perceber. Feche a janela e nada é vigiado — isto é um aplicativo de desktop, não um serviço.",
+  "perch.alerts.caveat.silent":
+    "Nenhum canal está ativado, então um disparo só chega a esta janela e ao registro abaixo. Nada chegará até você quando o Kavka não estiver à sua frente.",
+  "perch.masking.none":
+    "Não há regras de mascaramento nesta conexão, então tudo o que o Kavka mostra é exatamente o que o produtor enviou.",
+  "perch.masking.inForce":
+    "{count, plural, one {# regra de mascaramento está} other {# regras de mascaramento estão}} em vigor, então o texto correspondente é substituído antes de chegar a esta janela.",
+  "perch.masking.off":
+    "{count, plural, one {existe # regra de mascaramento} other {existem # regras de mascaramento}} e nenhuma está ativada, então nada na tela está sendo ocultado.",
+  "perch.masking.unread":
+    "O Kavka não conseguiu ler as regras de mascaramento desta conexão, então não pode prometer que o que você está vendo seja literal.",
+  "perch.masking.caveat":
+    "Uma regra que você ativa agora vale para a próxima busca, lote de acompanhamento, pesquisa ou consulta — nunca para linhas que já estão na tela.",
+  "perch.masking.caveat.sawMasked":
+    "Algo na tela nesta sessão já foi mascarado, então pelo menos um payload aqui não é o que o produtor enviou.",
+  "perch.streams.noGroups":
+    "Este cluster ainda não tem grupos de consumidores, então não há de onde deduzir uma topologia.",
+  "perch.streams.pick":
+    "Escolha uma aplicação acima e o Kavka vai deduzir o que ela lê, o que escreve e o que guarda no meio.",
+  "perch.streams.notStreams":
+    "{group} não parece uma aplicação Kafka Streams, então não há topologia a desenhar. Um grupo de consumidores comum não ter nenhuma não é uma falha.",
+  "perch.streams.inferred":
+    "Esta imagem de {app} é um palpite: {nodes, plural, one {# nó} other {# nós}} e {edges, plural, one {# ligação} other {# ligações}}, deduzidos dos nomes dos topics.",
+  "perch.streams.unread":
+    "O Kavka não conseguiu deduzir uma topologia para {group}, então não tem nada a mostrar. A mensagem abaixo é o que o cluster disse.",
+  "perch.streams.caveat":
+    "O Kafka não publica a topologia do Streams em nenhum lugar onde um cliente possa lê-la. Nada aqui foi lido da própria aplicação, então um processador que não deixa nenhum topic para trás simplesmente não aparece.",
+  "perch.acls.noAuthorizer":
+    "Este cluster não tem autorizador, então não há regras de acesso a listar e cada requisição é decidida pelo padrão dos próprios brokers.",
+  "perch.acls.noAuthorizerNext":
+    "Isso é uma configuração do broker (authorizer.class.name), não uma permissão que falta a você — o Kafka recusa a requisição de vez em vez de responder com uma lista vazia.",
+  "perch.acls.none":
+    "Este cluster tem autorizador, mas ainda não tem regras de acesso, então o que acontece com uma requisição depende inteiramente do padrão dos brokers.",
+  "perch.acls.allAllow":
+    "{count, plural, one {# regra de acesso} other {# regras de acesso}} neste cluster, e todas elas são permissões.",
+  "perch.acls.someDeny":
+    "{count, plural, one {# regra de acesso} other {# regras de acesso}} neste cluster. {denies, plural, one {# delas é uma negação} other {# delas são negações}}, e uma negação vence qualquer permissão que corresponda à mesma requisição.",
+  "perch.acls.filtered":
+    "Mostrando {count, plural, one {# regra} other {# regras}} que correspondem a este filtro.",
+  "perch.acls.unread":
+    "O Kavka não conseguiu ler as regras de acesso deste cluster, então não pode dizer quem tem permissão para quê. Para listá-las, a conta normalmente precisa de Describe no cluster.",
+  "perch.acls.caveat.filtered":
+    "Há um filtro em vigor, então isto conta as regras que correspondem a ele — não as regras do cluster.",
+  "perch.acls.caveat.removing":
+    "Remover uma negação amplia o acesso em vez de restringi-lo. O Kavka avisa de novo antes de remover uma.",
+
+  // ── Telas do cluster (Jackdaw) ──────────────────────────────────────────
+  "topics.partitions.detail": "Mostrar detalhe das réplicas",
+  "topics.partitions.detailTitle":
+    "Acrescenta a lista de réplicas, a lista de réplicas em sincronia e o offset mais antigo e mais recente de cada partição. O estado continua na tela de qualquer forma.",
+  "acls.filter.summary": "Filtrar estas regras",
+  "acls.filter.note": "por tipo de recurso, nome do recurso e principal",
+  "acls.filter.active": "há um filtro em vigor",
+  "alerts.state.firing": "Disparando",
+  "alerts.since": "desde {time}",
+  "alerts.details.summary": "Detalhes",
+  "alerts.details.note":
+    "o que exatamente o Kavka compara, e com que frequência",
+  "alerts.facts.kind": "Tipo",
+  "alerts.facts.waitsFor": "Espera",
+  "alerts.facts.noWait":
+    "nada — dispara no momento em que a condição é verdadeira",
+  "alerts.facts.checked": "Verificada",
+  "alerts.facts.checkedValue":
+    "a cada leitura que o Kavka faz, e só enquanto o Kavka está aberto",
+  "alerts.facts.since": "Disparando desde",
+  "alerts.history.started": "{rule} — começou",
+  "alerts.history.cleared": "{rule} — resolveu",
+  "alerts.history.lasted": "Resolvida às {time}, após {duration}.",
+  "alerts.history.stillFiring": "Ainda disparando, {duration} até agora.",
+  "alerts.history.gap":
+    "Este registro só cobre o tempo em que o Kavka esteve aberto. Uma lacuna nele é um trecho em que ninguém estava olhando, e o Kavka não vai adivinhar o que aconteceu ali.",
+  "monitoring.tile.lagNow": "Atraso na última leitura",
+  "monitoring.tile.lagNowSub":
+    "mensagens esperando para serem lidas quando o Kavka amostrou pela última vez",
+  "monitoring.tile.peak": "Pico nesta janela",
+  "monitoring.tile.peakSub":
+    "a pior leitura isolada que o Kavka fez, nunca uma média",
+  "monitoring.tile.trend": "Tendência",
+  "monitoring.tile.trendSub": "em relação ao início desta janela",
+  "monitoring.tile.partitionsSub": "com pelo menos uma leitura nesta janela",
+
+  // ── Configurações (Jackdaw) ─────────────────────────────────────────────
+  "settings.title": "Configurações",
+  "settings.navLabel": "Seções das configurações",
+  "settings.perch":
+    "Tudo aqui vale na hora e fica salvo nesta máquina. O Kavka está mostrando o tema {theme} agora.",
+  "settings.section.appearance": "Aparência",
+  "settings.section.language": "Idioma",
+  "settings.section.about": "Sobre",
+
+  "settings.theme.title": "Tema",
+  "settings.theme.help":
+    "Sistema segue o seu sistema operacional e muda junto enquanto o Kavka está aberto.",
+  "settings.theme.system": "Sistema",
+  "settings.theme.light": "Claro",
+  "settings.theme.dark": "Escuro",
+
+  "settings.accent.title": "Cor de destaque",
+  "settings.accent.help":
+    "A cor dos botões, dos links e da tela em que você está. Ela não carrega significado próprio, então mudá-la não esconde nenhum aviso.",
+  "settings.accent.brass": "Latão",
+  "settings.accent.moss": "Musgo",
+  "settings.accent.sky": "Céu",
+  "settings.accent.plum": "Ameixa",
+
+  "settings.density.title": "Densidade",
+  "settings.density.help":
+    "Confortável dá espaço a cada linha. Compacta mostra cerca de um terço a mais de linhas — a altura com que o Kavka saiu.",
+  "settings.density.comfortable": "Confortável",
+  "settings.density.compact": "Compacta",
+
+  "settings.font.title": "Tamanho do texto",
+  "settings.font.help":
+    "Escala todos os tamanhos juntos, para que nada se sobreponha no maior passo.",
+  "settings.font.s": "Pequeno",
+  "settings.font.m": "Médio",
+  "settings.font.l": "Grande",
+
+  "settings.motion.title": "Movimento",
+  "settings.motion.help":
+    "Sistema segue a preferência de movimento reduzido do seu sistema operacional. Reduzido também desliga todas as animações do Kavka.",
+  "settings.motion.system": "Sistema",
+  "settings.motion.reduce": "Reduzido",
+
+  "settings.language.title": "Idioma",
+  "settings.language.help":
+    "Cobre o invólucro do Kavka e o veredito com que cada tela do cluster começa — a barra lateral, a paleta, este painel, o formulário de conexão e a frase de abertura de cada tela. As tabelas e formulários abaixo delas ainda estão em inglês.",
+  "settings.language.machine":
+    "Este catálogo saiu de uma máquina e nenhum falante nativo o revisou. Correções são bem-vindas.",
+
+  "settings.about.title": "Versão, licença e diagnóstico",
+  "settings.about.help":
+    "O painel Sobre traz a versão e a licença do Kavka, as configurações do servidor MCP e a chave do diagnóstico de falhas.",
+  "settings.about.open": "Abrir Sobre",
 
   "unit.seconds": "{count, plural, one {# segundo} other {# segundos}}",
   "unit.minutes": "{count, plural, one {# minuto} other {# minutos}}",

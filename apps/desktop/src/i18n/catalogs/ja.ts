@@ -41,6 +41,11 @@ const ja: Catalog = {
   "common.linkFailed":
     "Kavka はそのリンクをブラウザーに渡せませんでした。アドレスは {url} です — ここからコピーしてください。",
 
+  "confirm.kicker.destructive": "破壊的な操作",
+  "confirm.busy": "Kavka が処理しています",
+  "confirm.type.label": "確認のため {name} と入力してください",
+  "confirm.type.reason": "確認するには {name} を正確に入力してください",
+
   "sidebar.navLabel": "保存された接続",
   "sidebar.title": "クラスター",
   "sidebar.loading": "接続を読み込んでいます…",
@@ -52,6 +57,7 @@ const ja: Catalog = {
   "sidebar.draftName": "新しい接続",
   "sidebar.draftMeta": "未保存",
   "sidebar.about": "情報",
+  "sidebar.settings": "設定",
 
   "app.status.disconnected": "未接続",
   "app.status.connecting": "接続中…",
@@ -139,7 +145,7 @@ const ja: Catalog = {
   "about.licenceValue": "AGPL-3.0 のもとで自由に使えるオープンソース",
   "about.language": "言語",
   "about.language.hint":
-    "Kavka の外枠 — サイドバー、コマンドパレット、これらのダイアログ、接続フォーム。クラスターの画面はまだ英語です。次に翻訳される予定です。",
+    "Kavka の外枠と、各クラスター画面が最初に示す判断 — サイドバー、コマンドパレット、これらのダイアログ、接続フォーム、そして各画面の冒頭の一文です。その下にある表やフォームはまだ英語です。",
   "about.language.machine":
     "{language} は機械翻訳であり、ネイティブスピーカーによる確認を受けていません。修正を歓迎します — 方法は docs/I18N.md にあります。",
 
@@ -387,6 +393,25 @@ const ja: Catalog = {
   "editor.err.clientSecret":
     "このサインイン方法には、そのクライアント ID に対応するシークレットが必要です。",
 
+  "editor.perch.screen": "接続",
+  "editor.perch.new":
+    "まだ何も保存されていません。Kavka はブローカーに接続していないため、この画面の内容は一切確認されていません。",
+  "editor.perch.saved":
+    "保存済みですが未接続です。Kavka はまだ {name} と通信していないため、ここの設定はクラスターで検証されていません。",
+  "editor.perch.connected":
+    "{name} に接続しました。Kavka はクラスターの概要をまだ読み込んでいます。",
+  "editor.perch.caveat.protected":
+    "{name} は保護対象です。このクラスターでの破壊的な操作は、まず名前の入力を求めます。",
+  "editor.perch.caveat.unknown":
+    "このマシンには {name} の定義がないため、この接続にはガードレールが適用されません。",
+  "editor.perch.caveat.readonly":
+    "読み取り専用が有効です。Kavka はこのクラスターを閲覧しますが、書き込みは行いません。",
+  "editor.cluster.legend": "クラスター",
+  "editor.guardrails.legend": "ガードレール",
+  "editor.fold.set": "設定済み",
+  "editor.fold.notSet": "未設定",
+  "editor.fold.connectCount": "{count, plural, other {#個のクラスター}}",
+
 
   // ── 環境 ────────────────────────────────────────────────────────────────
   "env.color.green": "グリーン",
@@ -434,6 +459,381 @@ const ja: Catalog = {
   "env.mgr.delete.confirm": "環境を削除",
   "env.mgr.delete.needTarget": "これらの接続の移動先となる環境を選んでください。",
   "env.mgr.delete.last": "残っている環境はこれだけです — 先に別の環境を追加してください",
+
+  // ── クラスターのナビゲーション (Jackdaw) ────────────────────────────────
+  "rail.label": "クラスターの画面",
+  "rail.group.cluster": "クラスター",
+  "rail.group.observe": "観測",
+  "rail.group.safety": "安全",
+  "rail.group.integrations": "連携",
+  "rail.item.overview": "ホーム",
+  "rail.item.topics": "トピック",
+  "rail.item.groups": "コンシューマーグループ",
+  "rail.item.brokers": "ブローカー",
+  "rail.item.monitoring": "モニタリング",
+  "rail.item.alerts": "アラート",
+  "rail.item.streams": "ストリーム",
+  "rail.item.acls": "ACL",
+  "rail.item.masking": "マスキング",
+  "rail.item.connect": "Connect",
+  "rail.firing": "発報中",
+  "rail.firingTitle": "{count, plural, other {アラートルール#件が現在発報中です}}",
+  "rail.disconnect": "切断",
+
+  // ── パーチ (Jackdaw) ────────────────────────────────────────────────────
+  "perch.label": "{screen} — Kavka が言えること",
+  "perch.kicker": "{screen} · {state}",
+  "perch.state.ok": "問題なさそうです",
+  "perch.state.watch": "確認をおすすめします",
+  "perch.state.problem": "異常があります",
+  "perch.state.unknown": "まだ判断できません",
+  "perch.state.checking": "確認中",
+  "perch.checking":
+    "まだ確認中です。クラスターから応答があり次第、分かったことをお伝えします。",
+  "perch.overview.counts":
+    "{brokers, plural, other {ブローカー#台}}に接続しています。{topics, plural, other {トピック#件}}、{partitions, plural, other {パーティション#個}}です。",
+  "perch.overview.firing":
+    "{count, plural, other {このクラスターでアラートルール#件が現在発報中です}}。{counts}",
+  "perch.overview.snapshot":
+    "これらの数値は接続した時点のもので、クラスターに追随しません。取り直すには接続し直してください。",
+  "perch.overview.noBrokers":
+    "クラスターは応答しましたが、ブローカーを一つも返しませんでした。",
+  "perch.overview.noBrokers.next":
+    "多くの場合、Kafka 本体ではなくロードバランサーに到達したか、メタデータが空で返っています。切断して接続し直し、ブートストラップアドレスを確認してください。",
+  "perch.screen.messages": "メッセージ",
+  "perch.screen.search": "検索",
+  "perch.screen.sql": "SQL",
+  "perch.screen.schemas": "スキーマ",
+  "perch.topics.unreadable":
+    "Kavka はこのクラスターの Topic 一覧を取得できていません。",
+  "perch.topics.unreadable.next":
+    "接続が成立していても、アカウントにクラスターの Describe 権限がないことがあります。更新すると再度問い合わせます。",
+  "perch.topics.empty":
+    "このクラスターには Topic が 1 つもありません。まだ作成されていません。",
+  "perch.topics.internalOnly":
+    "このクラスターにあるのは Kafka 自身の内部 Topic だけです。「内部を表示」を有効にすると表示されます。",
+  "perch.topics.counts":
+    "{count, plural, other {このクラスターに #個の Topic}}。",
+  "perch.topics.countsHidden":
+    "{count, plural, other {#個の Topic を表示中}}。",
+  "perch.topics.hiddenNote":
+    "{count, plural, other {ほかに #個は Kafka 自身の内部 Topic のため非表示です}}。",
+  "perch.topics.snapshot":
+    "この一覧は画面を開いた時点で読み取ったもので、クラスターの変化には追従しません。更新すると読み直します。",
+  "perch.topics.readOnly":
+    "この接続は読み取り専用のため、ここから Topic の作成・変更・削除はできません。",
+  "perch.topic.unreadable":
+    "Kavka は {topic} のパーティション一覧を取得できていないため、中身について何も言えません。",
+  "perch.topic.unreadable.next":
+    "Topic が削除されたか、アカウントにその Describe 権限がない可能性があります。",
+  "perch.topic.underReplicated":
+    "{count, plural, other {ここでは #個のパーティションでコピーが不足しています}} — Kafka はこの Topic が求める数より少ないレプリカしか保持していません。",
+  "perch.topic.unpreferred":
+    "{count, plural, other {#個のパーティション}}のリーダーが、レプリカ一覧の先頭以外のブローカーになっています。再起動後にはよくあることで、「優先リーダーを選出」で元に戻せます。",
+  "perch.topic.healthy":
+    "{count, plural, other {#個のパーティション}}、すべてのコピーが同期しています。",
+  "perch.topic.records":
+    "オフセットから見ておよそ {records} 件のメッセージです。",
+  "perch.topic.approx":
+    "このメッセージ数は各パーティションの最古と最新のオフセットの差なので、保持期間やコンパクションで既に削除されたレコードも含んでいます。",
+  "perch.messages.waiting":
+    "まだ何も読み取っていません。上でどこから読むかを選び、「取得」を押してください。",
+  "perch.messages.range":
+    "指定した範囲から{count, plural, other {#件のメッセージ}}です。",
+  "perch.messages.none": "指定した範囲には何もありません。",
+  "perch.messages.topicEmpty": "{topic} にはまだメッセージがありません。",
+  "perch.messages.live":
+    "{topic} をライブで監視中です。追従を開始してから{count, plural, other {#件のメッセージ}}が届きました。",
+  "perch.messages.liveQuiet":
+    "{topic} をライブで監視中です。少なくとも 30 秒間、何も書き込まれていません。",
+  "perch.messages.notWhole":
+    "これは指定した範囲であって Topic 全体ではありません。{topic} にはおよそ {total} 件のメッセージがあります。",
+  "perch.messages.dropped":
+    "{count, plural, other {#件のメッセージ}}がこのウィンドウの処理速度を超えて到着し、セッションは遅延するよりも破棄することを選びました。画面の行は追従が見たすべてではありません。",
+  "perch.messages.trimmed":
+    "Kavka はライブ行を直近 {cap} 件だけ保持します。それより古いものは既にバッファから出ています。",
+  "perch.messages.masked":
+    "マスキングルールが有効なため、画面上の一部の値は Topic 上の値ではありません。コピーやエクスポートには置換後の値が入ります。",
+  "perch.search.waiting":
+    "まだ何もスキャンしていません。範囲を決め、探すものを指定して「検索」を押してください。",
+  "perch.search.running":
+    "{topic} をスキャン中です。今のところ{count, plural, other {#件の一致}}です。",
+  "perch.search.running.note":
+    "途中経過です。スキャンが終わるまでこの数値は動き続けます。",
+  "perch.search.matches":
+    "このスキャンが読んだ {scanned} 件のレコードのうち{count, plural, other {#件が一致}}しました。",
+  "perch.search.none":
+    "このスキャンが読んだ {scanned} 件のレコードには一致がありませんでした。",
+  "perch.search.stopped":
+    "このスキャンは {scanned} 件で停止したため、範囲の一部についての答えであって全体についてではありません。",
+  "perch.search.capped":
+    "{matched} 件のレコードが一致しましたが、Kavka が保持したのは {kept} 件です。画面上のものを並べ替え・エクスポート・集計しても、答えはその範囲についてであり、すべての一致についてではありません。",
+  "perch.search.unevaluated":
+    "{count, plural, other {#件のレコード}}は式に対して読み取れませんでした。不一致と判定されたのではなく、スキップされています。",
+  "perch.search.masked":
+    "マスキングルールが有効なため、画面上の値やエクスポートした内容の一部は Topic 上の値ではありません。",
+  "perch.sql.waiting":
+    "まだクエリを実行していません。上の範囲設定が、クエリの見えるレコードを決めます。",
+  "perch.sql.running":
+    "実行中です。今のところ {scanned} 件のレコードを読みました。",
+  "perch.sql.running.note":
+    "途中経過です。スキャンが終わるまで、下にあるものは最終的な答えではありません。",
+  "perch.sql.rows":
+    "このスキャンが読んだ {scanned} 件のレコードから{count, plural, other {#行}}です。",
+  "perch.sql.none":
+    "このスキャンが読んだ {scanned} 件のレコードから、クエリは 1 行も返しませんでした。",
+  "perch.sql.scope":
+    "これはスキャンが読んだレコードについての答えであり、Topic 全体についてではありません。範囲が変われば答えも変わります。",
+  "perch.sql.capped":
+    "スキャンは上限の {cap} 件で停止したため、クエリが数えたり合計したりした値はその範囲についてのものです。",
+  "perch.sql.stopped":
+    "このスキャンは {scanned} 件で停止したため、答えは範囲の一部をカバーしています。",
+  "perch.sql.masked":
+    "このクエリの実行中はマスキングルールが有効だったため、ここにある一部の値は Topic 上の値ではありません。",
+  "perch.schemas.noRegistry":
+    "この接続には Schema Registry がないため、スキーマを読み取る先がありません。",
+  "perch.schemas.noRegistry.next":
+    "レジストリは独自のアドレスを持つ別のサービスです。この接続の設定の「Schema Registry」で追加してください。",
+  "perch.schemas.missing":
+    "レジストリに {subject} という Subject はありません。",
+  "perch.schemas.missing.next":
+    "Kavka は多くのプロデューサーが使う「Topic 名戦略」で探しました。別の戦略を使うプロデューサーは別の名前で登録します。",
+  "perch.schemas.versions":
+    "この Subject は{count, plural, other {#個のバージョン}}が登録されています。",
+  "perch.schemas.level": "新しいバージョンは {level} として検査されます。",
+  "perch.schemas.levelUnknown":
+    "Kavka はこの Subject 自身の互換性設定を読み取れなかったため、レジストリが適用するレベルを確実には言えません。",
+  "perch.groups.none":
+    "このクラスターにはまだコンシューマーグループがありません。まだ誰も読み取っていません。",
+  "perch.groups.counts":
+    "{count, plural, other {#個のコンシューマーグループ}}がこのクラスターから読み取っています。",
+  "perch.groups.rebalancing":
+    "現在{unstable, plural, other {#個のグループ}}がリバランス中です。パーティションが割り当て直され、その間は消費が止まります。{counts}",
+  "perch.groups.unread":
+    "Kavka はこのクラスターのコンシューマーグループを読み取れなかったため、何も言えません。読み取れるまで、この画面の内容はクラスターについての主張ではありません。",
+  "perch.groups.caveat":
+    "これは Kavka が最後に読み取った時点の一覧です。グループの状態はリバランスのたびに変わります。「更新」で読み直してください。",
+  "perch.group.caughtUp":
+    "{group} は Kavka が見えるすべてのパーティションで追いついています。",
+  "perch.group.behind":
+    "{group} は{partitions, plural, other {#個のパーティション}}で合計およそ {lag} 件遅れています。最も遅れているのは {topic} のパーティション {partition} で、{worst} 件です。",
+  "perch.group.noOffsets":
+    "{group} は一度もオフセットをコミットしていないため、報告できる位置がありません。書き込みしかしていないか、作成されたまま何も読んでいない可能性があります。",
+  "perch.group.noMembers":
+    "現在 {group} には何も接続していないため、何も読み取っていません。コミット済みオフセットは残っており、起動したアプリケーションはそこから続きます。",
+  "perch.group.caveat":
+    "Kavka はこの画面を開いた時に一度だけこれらのオフセットを読みました。グループの変化には追従しません。開き直すと新しく読み取ります。",
+  "perch.brokers.counts":
+    "このクラスターには{count, plural, other {#台のブローカー}}があります。1 台開くと、実行中のすべての設定を確認できます。",
+  "perch.brokers.none":
+    "クラスターは応答しましたが、ブローカーを 1 台も返しませんでした。",
+  "perch.brokers.noneNext":
+    "たいていはメタデータが空で返ったか、Kafka 本体ではなくロードバランサーに接続しています。切断して接続し直し、ブートストラップアドレスを確認してください。",
+  "perch.brokers.caveat":
+    "ブローカー一覧は接続時に返されたもので、クラスターの変化には追従しません。接続し直すと再取得します。",
+  "perch.broker.noOverrides":
+    "ブローカー {broker} は Kafka の既定値を何も変更していません。設定はすべて Kafka が算出したものです。",
+  "perch.broker.overrides":
+    "ブローカー {broker} は{count, plural, other {#件の設定}}を上書きしています。残りの {rest} 件は現時点で算出された値です。",
+  "perch.broker.unread":
+    "Kavka はこのブローカーの設定を読み取れなかったため、何を使って動いているか言えません。通常、アカウントにクラスターの DescribeConfigs 権限が必要です。",
+  "perch.broker.caveat":
+    "+ が付いた行だけがこのブローカーで設定されています。算出された既定値はクラスターの変化に伴って変わることがあり、Kafka はクライアントに対して一部の設定を読み取り専用として報告します。それらは無効化された「編集」ボタンを残し、理由をホバーで表示します。",
+  "perch.connect.noClusters":
+    "この接続には Kafka Connect のワーカーがないため、ここから操作できるものはありません。",
+  "perch.connect.noClustersNext":
+    "Connect は独自の REST アドレス（通常はポート 8083）を持つ、独立したワーカー群として動きます。この接続の設定の「Kafka Connect クラスター」で追加してください。",
+  "perch.connect.empty":
+    "{cluster} にはまだコネクターがないため、ここから Kafka への出入りは発生していません。",
+  "perch.connect.allRunning":
+    "{count, plural, other {{cluster} に #個のコネクター}}があり、すべてのタスクが動いています。",
+  "perch.connect.failed":
+    "{cluster} で{failed, plural, other {#個のタスク}}が失敗しました。失敗したタスクは再起動されるまでレコードを 1 件も動かしません。まずコネクターを開いてワーカー自身のトレースを読んでください。",
+  "perch.connect.paused":
+    "{cluster} で{paused, plural, other {#個のコネクター}}が一時停止しており、そこを通るものはありません。設定とコミット済みオフセットは保持されます。",
+  "perch.connect.unread":
+    "Kavka は Connect ワーカーに到達できなかったため、何が動いているか言えません。これはブローカーとは別のアドレスで、そこだけが停止している可能性があります。",
+  "perch.connect.caveat":
+    "これらの状態は Kavka が最後に問い合わせた時点でワーカーから返ったものです。Connect は独自に状態を変えます。「更新」で読み直してください。",
+  "perch.connector.running":
+    "{name} は稼働中です。{total} 個中 {running} 個のタスクがレコードを動かしています。",
+  "perch.connector.failed":
+    "{name} には{failed, plural, other {#個の失敗したタスク}}があり、何も動かしていません。再起動の前に停止した理由を読んでください。原因が残ったままの再起動は再び失敗するだけです。",
+  "perch.connector.paused":
+    "{name} は一時停止中のため、レコードを動かしていません。設定とコミット済みオフセットは保持され、再開するとそこから続きます。",
+  "perch.connector.noTasks":
+    "{name} にはタスクが 1 つもないため、何も動いていません。ワーカーはコネクターの設定からタスクを作るので、使えない設定だとタスクが 1 つも作られません。",
+  "perch.connector.caveat":
+    "これは Kavka が最後にワーカーへ問い合わせた時点の 1 回の読み取りです。タスクの状態はひとりでに変わります。",
+  "perch.monitoring.origin":
+    "Kafka はラグを記憶しません。ブローカーが言えるのは、グループの現在位置だけです。この画面のすべては、この接続が生きている間に Kavka 自身が記録したものです。",
+  "perch.monitoring.unread":
+    "Kavka はこの接続の自身のラグ記録を読み取れなかったため、どれだけ遅れているのか、そもそも計測があるのかを言えません。",
+  "perch.monitoring.noHistory":
+    "Kavka にはこの接続のラグ計測がまだありません。最初の計測は接続から {interval} 以内に現れ、グループは少なくとも一度オフセットをコミットして初めてここに現れます。",
+  "perch.monitoring.noWindow":
+    "この期間には {group} の計測がありません。もっと長い期間を選ぶか、下のサンプラーを確認してください。",
+  "perch.monitoring.caughtUp":
+    "最後の計測時点で {group} は追いついていました。読み取り待ちのものはありませんでした。",
+  "perch.monitoring.rising":
+    "{group} は{partitions, plural, other {#個のパーティション}}で合計およそ {lag} 件遅れており、増加傾向です。最も悪いのは {topic} のパーティション {partition} で、{peak} 件に達しました。",
+  "perch.monitoring.steady":
+    "{group} は{partitions, plural, other {#個のパーティション}}で合計およそ {lag} 件遅れており、この期間の初めから横ばいです。",
+  "perch.monitoring.falling":
+    "{group} は{partitions, plural, other {#個のパーティション}}で合計およそ {lag} 件遅れており、減少傾向です。",
+  "perch.monitoring.caveat.sampled":
+    "これらのグラフの点は、その区間で最も悪い計測値であって平均ではありません。線の途切れは Kavka が動いていなかった時間であり、障害ではありません。",
+  "perch.monitoring.caveat.stale":
+    "サンプラーが遅れています。最後の計測は {ago} 前で、3 間隔以上前です。以下の内容は見た目より古いものです。",
+  "perch.monitoring.caveat.stopped":
+    "現在この接続については何も記録されていないため、この判断は Kavka が最後に取得できた計測と同じ古さです。",
+  "perch.monitoring.caveat.unknownSampler":
+    "Kavka は現在サンプラーが何をしているか把握できないため、これらの計測が最新であるとは保証できません。",
+  "perch.alerts.none":
+    "このクラスターにはルールがないため、Kavka はここで何も監視していません。",
+  "perch.alerts.quiet":
+    "{count, plural, other {#件のルール}}がこのクラスターを監視しており、発報しているものはありません。",
+  "perch.alerts.firingOne": "{rule} は {time} から発報しています。{detail}",
+  "perch.alerts.firingMany":
+    "現在このクラスターで{count, plural, other {#件のルール}}が発報しています。最も古いのは {rule} で、{time} からです。",
+  "perch.alerts.unread":
+    "Kavka はこの接続のアラートルールを読み取れなかったため、何が監視されているか、そもそも監視されているかを言えません。",
+  "perch.alerts.unreadHistory":
+    "Kavka はこの接続のアラートログを読み取れなかったため、いま何かが発報しているのか、これまでに発報したことがあるのかを言えません。",
+  "perch.alerts.caveat.desktop":
+    "気づくためには Kavka が動いている必要があります。ウィンドウを閉じれば何も監視されません。これはデスクトップアプリであり、サービスではありません。",
+  "perch.alerts.caveat.silent":
+    "通知チャネルが 1 つも有効でないため、発報はこのウィンドウと下のログにしか届きません。Kavka が目の前にないときは、何も届きません。",
+  "perch.masking.none":
+    "この接続にはマスキングルールがないため、Kavka が表示するものはすべてプロデューサーが送ったそのものです。",
+  "perch.masking.inForce":
+    "{count, plural, other {#件のマスキングルール}}が有効なため、該当するテキストはこのウィンドウに届く前に置き換えられます。",
+  "perch.masking.off":
+    "{count, plural, other {#件のマスキングルール}}がありますが、どれも有効になっていないため、画面上で隠されているものはありません。",
+  "perch.masking.unread":
+    "Kavka はこの接続のマスキングルールを読み取れなかったため、表示内容がそのままの値だとは保証できません。",
+  "perch.masking.caveat":
+    "いま有効にしたルールは、次の取得・追従バッチ・検索・クエリに適用されます。すでに画面にある行には適用されません。",
+  "perch.masking.caveat.sawMasked":
+    "このセッションでは既に画面上の何かがマスクされています。ここにある少なくとも 1 件のペイロードは、プロデューサーが送ったものではありません。",
+  "perch.streams.noGroups":
+    "このクラスターにはまだコンシューマーグループがないため、トポロジーを推定する材料がありません。",
+  "perch.streams.pick":
+    "上でアプリケーションを選ぶと、Kavka がそれが読むもの・書くもの・その間に保持するものを推定します。",
+  "perch.streams.notStreams":
+    "{group} は Kafka Streams アプリケーションには見えないため、描けるトポロジーがありません。通常のコンシューマーグループにトポロジーがないのは異常ではありません。",
+  "perch.streams.inferred":
+    "この {app} の図は推測です。Topic 名から導き出した{nodes, plural, other {#個のノード}}と{edges, plural, other {#本のリンク}}です。",
+  "perch.streams.unread":
+    "Kavka は {group} のトポロジーを導き出せなかったため、表示できるものがありません。下のメッセージはクラスターが返した内容です。",
+  "perch.streams.caveat":
+    "Kafka は Streams のトポロジーをクライアントが読める場所に公開しません。ここにあるものはアプリケーション自身から読んだものではないため、Topic を残さないプロセッサーはまったく現れません。",
+  "perch.acls.noAuthorizer":
+    "このクラスターにはオーソライザーがないため、一覧にできるアクセスルールがなく、すべてのリクエストはブローカー自身の既定値で決まります。",
+  "perch.acls.noAuthorizerNext":
+    "これはブローカーの設定（authorizer.class.name）であって、権限不足ではありません。Kafka は空の一覧を返す代わりに、リクエスト自体を拒否します。",
+  "perch.acls.none":
+    "このクラスターにはオーソライザーがありますが、アクセスルールはまだありません。リクエストの扱いはすべてブローカーの既定値次第です。",
+  "perch.acls.allAllow":
+    "このクラスターには{count, plural, other {#件のアクセスルール}}があり、そのすべてが許可です。",
+  "perch.acls.someDeny":
+    "このクラスターには{count, plural, other {#件のアクセスルール}}があります。{denies, plural, other {うち #件が拒否}}で、拒否は同じリクエストに一致するすべての許可に優先します。",
+  "perch.acls.filtered":
+    "このフィルターに一致する{count, plural, other {#件のルール}}を表示しています。",
+  "perch.acls.unread":
+    "Kavka はこのクラスターのアクセスルールを読み取れなかったため、誰が何を許可されているか言えません。一覧するには通常、アカウントにクラスターの Describe 権限が必要です。",
+  "perch.acls.caveat.filtered":
+    "フィルターが有効なため、これはフィルターに一致するルールの数であり、クラスター上のルールの数ではありません。",
+  "perch.acls.caveat.removing":
+    "拒否を削除すると、アクセスは狭まるのではなく広がります。Kavka は削除の前にもう一度そう伝えます。",
+
+  // ── クラスター画面の周辺文言 (Jackdaw) ──────────────────────────────────
+  "topics.partitions.detail": "レプリカの詳細を表示",
+  "topics.partitions.detailTitle":
+    "レプリカ一覧、同期済みレプリカ一覧、各パーティションの最古と最新のオフセットを追加します。どちらの場合も健全性は画面に残ります。",
+  "acls.filter.summary": "これらのルールを絞り込む",
+  "acls.filter.note": "リソース種別・リソース名・プリンシパルで",
+  "acls.filter.active": "フィルターが有効です",
+  "alerts.state.firing": "発報中",
+  "alerts.since": "{time} から",
+  "alerts.details.summary": "詳細",
+  "alerts.details.note": "Kavka が何をどれくらいの頻度で比較しているか",
+  "alerts.facts.kind": "種類",
+  "alerts.facts.waitsFor": "待機時間",
+  "alerts.facts.noWait": "なし — 条件が成立した瞬間に発報します",
+  "alerts.facts.checked": "確認",
+  "alerts.facts.checkedValue":
+    "Kavka が計測を取るたび、そして Kavka が開いている間だけ",
+  "alerts.facts.since": "発報開始",
+  "alerts.history.started": "{rule} — 開始",
+  "alerts.history.cleared": "{rule} — 解消",
+  "alerts.history.lasted": "{time} に解消しました（{duration} 後）。",
+  "alerts.history.stillFiring": "まだ発報中です。これまで {duration}。",
+  "alerts.history.gap":
+    "この記録は Kavka が開いていた時間だけを扱います。記録の空白は誰も見ていなかった時間であり、Kavka はその間に何が起きたかを推測しません。",
+  "monitoring.tile.lagNow": "最後の計測時点のラグ",
+  "monitoring.tile.lagNowSub":
+    "Kavka が最後にサンプリングした時点で読み取り待ちだったメッセージ数",
+  "monitoring.tile.peak": "この期間のピーク",
+  "monitoring.tile.peakSub":
+    "Kavka が取った単一計測のうち最も悪い値であり、平均ではありません",
+  "monitoring.tile.trend": "傾向",
+  "monitoring.tile.trendSub": "この期間の開始時点との比較",
+  "monitoring.tile.partitionsSub": "この期間に少なくとも 1 回の計測があるもの",
+
+  // ── 設定 (Jackdaw) ──────────────────────────────────────────────────────
+  "settings.title": "設定",
+  "settings.navLabel": "設定のセクション",
+  "settings.perch":
+    "ここでの変更はすぐに反映され、このマシンに保存されます。現在は{theme}テーマを表示しています。",
+  "settings.section.appearance": "外観",
+  "settings.section.language": "言語",
+  "settings.section.about": "情報",
+
+  "settings.theme.title": "テーマ",
+  "settings.theme.help":
+    "「システム」は OS の設定に従い、Kavka を開いたままでも切り替わります。",
+  "settings.theme.system": "システム",
+  "settings.theme.light": "ライト",
+  "settings.theme.dark": "ダーク",
+
+  "settings.accent.title": "アクセント",
+  "settings.accent.help":
+    "ボタン・リンク・現在の画面に使う色です。それ自体は意味を持たないので、変更しても警告が隠れることはありません。",
+  "settings.accent.brass": "真鍮",
+  "settings.accent.moss": "苔",
+  "settings.accent.sky": "空",
+  "settings.accent.plum": "梅",
+
+  "settings.density.title": "密度",
+  "settings.density.help":
+    "「ゆったり」は各行に余白を取ります。「コンパクト」は約 3 分の 1 多く行を表示します（出荷時の行の高さです）。",
+  "settings.density.comfortable": "ゆったり",
+  "settings.density.compact": "コンパクト",
+
+  "settings.font.title": "文字サイズ",
+  "settings.font.help":
+    "アプリ内のすべてのサイズをまとめて拡大縮小するので、最大でも重なりません。",
+  "settings.font.s": "小",
+  "settings.font.m": "中",
+  "settings.font.l": "大",
+
+  "settings.motion.title": "動き",
+  "settings.motion.help":
+    "「システム」は OS の「視差効果を減らす」設定に従います。「減らす」は Kavka 側のアニメーションもすべて止めます。",
+  "settings.motion.system": "システム",
+  "settings.motion.reduce": "減らす",
+
+  "settings.language.title": "言語",
+  "settings.language.help":
+    "Kavka の外枠と、各クラスター画面が最初に示す判断を対象とします。サイドバー、コマンドパレット、このパネル、接続フォーム、そして各画面の冒頭の一文です。その下にある表やフォームはまだ英語です。",
+  "settings.language.machine":
+    "このカタログは機械翻訳で、ネイティブによる確認は済んでいません。修正を歓迎します。",
+
+  "settings.about.title": "バージョン・ライセンス・診断",
+  "settings.about.help":
+    "「情報」パネルに Kavka のバージョンとライセンス、MCP サーバー設定、クラッシュ診断のスイッチがあります。",
+  "settings.about.open": "情報を開く",
 
   "unit.seconds": "{count, plural, other {#秒}}",
   "unit.minutes": "{count, plural, other {#分}}",

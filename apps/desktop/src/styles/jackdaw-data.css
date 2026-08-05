@@ -1,0 +1,247 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   JACKDAW — DATA SURFACES.  OWNER: the data sweep agent.
+   Nobody else appends to this file; that is what keeps four agents out of
+   one merge conflict.
+
+   SCOPE: topics, consumer groups, brokers, the message browser and its
+   inspector, search, SQL, schemas — every surface whose job is to show rows
+   that came out of Kafka.
+
+   RULES THIS FILE INHERITS AND MAY NOT BREAK
+   · Loaded AFTER styles.css, so at equal specificity these rules win. Use
+     that to restyle an existing class in place rather than renaming it.
+   · Law 3: nothing inside a scrolling table gets a transition, filter,
+     backdrop-filter, border-radius or box-shadow. --row-h is a fixed token
+     src/virtual.ts reads at runtime and asserts against a laid-out row.
+   · Density: row heights come from --row-h / --row-h-head and NOTHING else.
+     Never a literal px height on a virtualized row.
+   · Colour comes from tokens only. A literal hex here is a token that escaped
+     the theme system and will be wrong in light.
+
+   WHAT THIS FILE IS ACTUALLY FOR — three problems, in order of how loudly a
+   user meets them:
+
+   1. A TABLE THAT DOES NOT SIT ON ITS PANEL. Ledger's tables floated on the
+      canvas; Jackdaw's live inside a raised surface. Two things did not move
+      with them: the sticky header still painted the CANVAS colour (a band of
+      the wrong ground, floating over rows), and a full-width table sat inset
+      by the panel's padding AND the cell's, which reads as an indent nobody
+      asked for. Both are fixed here, for every table in the app, because the
+      table idiom is one idiom.
+   2. A FULL-HEIGHT VIEW WITH A PANEL HEAD AND NO PANEL. `.messages-view` (the
+      browser, search and SQL) opens with `.panel-head`, and `.panel-head`
+      full-bleeds itself with a NEGATIVE MARGIN that assumes a panel's padding
+      around it. With no panel there, the head hung --pad-panel outside the
+      view on three screens. It is a panel now, which is what the mockup drew
+      and what the negative margin was always written against.
+   3. TABLES ARE SCANNED, NOT READ. Jackdaw's body is 15px; a data table opts
+      back down to --t-base and earns the difference back in row height. That
+      contrast is deliberate and is restated here so nobody "fixes" it.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ══ 1 · THE GROUND A STICKY HEADER FLOATS OVER ═══════════════════════════
+   A sticky <th> has to be OPAQUE, and it has to be opaque in the colour of
+   the surface underneath it — otherwise rows ghost through, or the header
+   paints a band of a different ground across the panel it is sitting in.
+   `--table-head-bg` is declared by whatever surface owns the table, so the
+   answer travels down by inheritance instead of by a selector per screen.
+   The fallback is Ledger's canvas, which is still right for a table that is
+   not inside anything. ═════════════════════════════════════════════════ */
+
+.panel,
+.messages-view {
+  --table-head-bg: var(--bg-panel);
+}
+
+/* The docked inspector keeps its own recessed ground, so its little tables
+   take that one and not the panel's. */
+.inspector {
+  --table-head-bg: var(--bg-canvas);
+}
+
+.data-table th {
+  background: var(--table-head-bg, var(--bg-canvas));
+}
+
+/* ══ 2 · A TABLE REACHES ITS PANEL'S EDGES ════════════════════════════════
+   The mockup's `.panel-body.tight`: the panel's padding is for prose and
+   controls, and a table brings its own cell padding. Doubling the two put 32px
+   of nothing before the first character of every row.
+
+   Horizontal only. Full-bleeding the BOTTOM as well would need `overflow:
+   hidden` on `.panel` to keep the last row inside the radius, and that would
+   crop the focus ring of every control in the panel — a 3px cosmetic win for
+   an accessibility loss. ═══════════════════════════════════════════════ */
+
+.panel > .table-wrap {
+  margin-inline: calc(var(--pad-panel) * -1);
+}
+
+/* An empty table says something, and what it says is prose: it gets the
+   reading size and a measure, not the scanning size. */
+.data-table .cell-empty {
+  font-size: var(--f15);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+  white-space: normal;
+  color: var(--text-secondary);
+}
+
+/* ══ 3 · THE FULL-HEIGHT DATA VIEWS ARE PANELS ════════════════════════════
+   The browser, search and SQL. One raised surface holding a head, a scrollport
+   and a status line — the mockup's panel / panel-body.tight / panel-foot, and
+   the shape `.panel-head`'s negative margin was written for.
+
+   The verdict is NOT in here. `Perch` is a sibling of this section, on the
+   canvas above it, because it is about the screen and this is one thing on the
+   screen. See MessagesView's render. ══════════════════════════════════ */
+
+.messages-view {
+  padding: var(--pad-panel);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+  /* The scrollport and the status line both reach the panel's edges, so the
+     radius has to clip them. Safe: every popover in these views (the CEL
+     cheatsheet, the SQL examples, every glossary gloss) is portalled to
+     <body> and positioned `fixed`, precisely so no clipping ancestor can
+     crop it. */
+  overflow: hidden;
+}
+
+/* The verdict must not stretch or shrink in the stage's flex column — it is
+   as tall as its sentence and no taller. */
+.tabpanel > .perch {
+  flex: 0 0 auto;
+}
+
+/* The rows begin here. One hairline between the controls and the data is the
+   whole division this screen needs; the head already carries its own. */
+.messages-view > .messages-main {
+  margin-inline: calc(var(--pad-panel) * -1);
+  border-top: 1px solid var(--hairline);
+}
+
+/* The status line is the panel's foot: full-bleed, hairline above, and the
+   panel's own ground rather than a second colour. */
+.messages-view > .view-statusline {
+  margin: 0 calc(var(--pad-panel) * -1) calc(var(--pad-panel) * -1);
+  padding: 0 var(--pad-panel);
+  height: auto;
+  min-height: var(--statusbar-h);
+}
+
+/* The docked inspector is a recessed pane beside the rows, not a second card
+   on top of one — a card inside a card is the composition Jackdaw's panels
+   exist to avoid. */
+.messages-main > .inspector {
+  border-left: 1px solid var(--hairline-strong);
+  background: var(--bg-canvas);
+}
+
+/* ══ 4 · THE TEACHING EMPTY STATE ═════════════════════════════════════════
+   Every empty state in these views is a sentence about WHY there is nothing
+   here and what to do about it, so it reads at the body size the rest of
+   Jackdaw does — not at the table's scanning size. ═════════════════════ */
+
+.messages-empty {
+  max-width: 64ch;
+  gap: var(--s-4);
+}
+
+.messages-empty .empty-hint {
+  font-size: var(--f15);
+  line-height: var(--lh-prose);
+  color: var(--text-secondary);
+}
+
+/* ══ 5 · ROWS ═════════════════════════════════════════════════════════════
+   LAW 3 APPLIES TO EVERYTHING BELOW. No transition, no filter, no radius, no
+   shadow may appear in this section: these selectors all land inside a
+   scrollport that the virtualizer places rows into by arithmetic, and any one
+   of the four costs a repaint per scrolled frame.
+
+   Selection is carried by THREE channels, none of them colour alone: the
+   brass-tinted row ground (--bg-row-sel, which follows the accent), the
+   accent rule on the ledger gutter, and `aria-selected` on the row. The
+   mockup's inset box-shadow spine is deliberately not reproduced — it is a
+   shadow, inside a scroller. ══════════════════════════════════════════ */
+
+.messages-table tbody tr[aria-selected="true"] td,
+.result-table tbody tr[aria-selected="true"] td {
+  color: var(--text-primary);
+}
+
+/* A tombstone and a masked value are facts about the ROW, and the word is the
+   signal — the tick and the tag colour are decoration that greyscale can lose
+   without losing the meaning (Law 2). */
+.messages-table .cell-tag {
+  font-style: normal;
+  white-space: nowrap;
+}
+
+/* ══ 6 · THE CONTROL SHELF ════════════════════════════════════════════════
+   The seek bar, the search bar, the SQL editor and the plain-English bar all
+   sit between the head and the data. They are already inset controls on the
+   panel's ground; what they need from Jackdaw is a label that reads at the
+   new body size rather than at Ledger's 12px. ═════════════════════════ */
+
+.seekbar-label {
+  font-size: var(--t-base);
+  color: var(--text-primary);
+  font-weight: var(--w-semi);
+}
+
+/* The scope note under a scan's controls is the sentence that stops someone
+   reading a capped answer as a complete one. It is prose. */
+.sql-scope-note,
+.searchbar-hint {
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+  max-width: var(--measure);
+}
+
+/* ══ 7 · PROGRESSIVE DISCLOSURE ═══════════════════════════════════════════
+   The partition table folds four expert columns behind a checkbox in its
+   panel tools (see TopicsTab). HEALTH IS NOT IN THE FOLD and must never be:
+   a guardrail behind a disclosure is a guardrail nobody reads. The same goes
+   for every honesty caveat — those live in the Perch, which has no fold at
+   all.
+
+   The control itself is the app's existing `.check-row`; all it needs here is
+   to sit on the type baseline of the buttons beside it. ═══════════════ */
+
+.panel-tools > .check-row {
+  min-height: var(--control-h);
+  white-space: nowrap;
+}
+
+/* ══ 8 · DENSITY ══════════════════════════════════════════════════════════
+   Nothing in this file may put a px height on a row. Comfortable is 44px and
+   compact is 30px, both from --row-h, and src/virtual.ts reads that token at
+   runtime, asserts it against a laid-out row in dev, and re-anchors the
+   viewport on the row it was showing when the token moves. The one thing the
+   stylesheet owes that machinery is that a cell never WRAPS: a wrapped cell is
+   taller than the token, and every row below it lands in the wrong place.
+   ═════════════════════════════════════════════════════════════════════ */
+
+.messages-table td,
+.result-table td {
+  white-space: nowrap;
+}
+
+/* Compact narrows the ledger gutter with the rest of the app, and the
+   message table's offset column already answers `data-density` on its own
+   (see `.mcol-offset` in styles.css). Nothing to add — this comment exists so
+   the next person looking for the density hook finds it rather than adding a
+   second one.
+
+   ══ 9 · WHAT IS DELIBERATELY NOT HERE ════════════════════════════════════
+   · No `.stat-grid` restyle. It is shared with the cluster overview and the
+     broker screens, and the shell sweep owns that composition.
+   · No accent-derived syntax colours in the inspector. A plum accent must not
+     recolour every JSON number — the payload's colours are fixed.
+   · No dismiss on anything that qualifies a number. A caveat one click away
+     is a caveat that gets quoted without it.
+   ═════════════════════════════════════════════════════════════════════ */

@@ -17,7 +17,9 @@ import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { useIsProtected } from "./environments";
 import { classifyError } from "./errors";
+import { useI18n } from "./i18n";
 import Overlay from "./Overlay";
+import Perch from "./Perch";
 import { ErrorBanner } from "./ProfileEditor";
 import { ToastStack, useToasts } from "./Toast";
 
@@ -319,11 +321,18 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
   const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<AclBinding | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The filter form folds away. It is an expert control on a screen a novice
+   * opens to read one sentence — but the SUMMARY says when a filter is in
+   * force, so folding it can never hide the reason the list looks short.
+   */
+  const [filterOpen, setFilterOpen] = useState(false);
 
   const toaster = useToasts();
   const push = toaster.push;
   const seq = useRef(0);
 
+  const { t } = useI18n();
   useDangerSignal(error !== null, onDanger);
 
   const isProtected = useIsProtected(profile.environment);
@@ -420,6 +429,45 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
         <ErrorBanner raw={error} onDismiss={() => setError(null)} />
       )}
 
+      {/* A cluster with no authorizer is not a cluster with no rules, and the
+          verdict keeps those two apart — the first means the brokers' default
+          decides every request, which is a fact about the cluster nobody should
+          have to infer from an empty table. */}
+      <Perch
+        screen={t("rail.item.acls")}
+        loading={acls === null && loading}
+        tone={
+          authorizerNote !== null || acls === null || listFailed
+            ? "unknown"
+            : acls.length === 0 || denies > 0
+              ? "watch"
+              : "ok"
+        }
+        caveat={
+          authorizerNote !== null
+            ? t("perch.acls.noAuthorizerNext")
+            : acls === null || listFailed
+              ? undefined
+              : filtered
+                ? t("perch.acls.caveat.filtered")
+                : denies > 0
+                  ? t("perch.acls.caveat.removing")
+                  : undefined
+        }
+      >
+        {authorizerNote !== null
+          ? t("perch.acls.noAuthorizer")
+          : acls === null || listFailed
+            ? t("perch.acls.unread")
+            : filtered
+              ? t("perch.acls.filtered", { count: acls.length })
+              : acls.length === 0
+                ? t("perch.acls.none")
+                : denies > 0
+                  ? t("perch.acls.someDeny", { count: acls.length, denies })
+                  : t("perch.acls.allAllow", { count: acls.length })}
+      </Perch>
+
       <section className="panel">
         <div className="panel-head">
           <h2 className="panel-title">
@@ -459,6 +507,33 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
         </div>
 
         {readOnly && <p className="readonly-note">{READ_ONLY_WHY}</p>}
+
+        {/* PROGRESSIVE DISCLOSURE, with the honesty kept outside the fold: the
+            summary carries "a filter is in force" whenever one is, so a
+            collapsed form can never be the reason a list looks empty. */}
+        <details
+          className="disclose disclose-inline"
+          open={filterOpen || filtered}
+          onToggle={(e) => setFilterOpen(e.currentTarget.open)}
+        >
+          <summary>
+            <svg
+              className="caret"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M6 4l4 4-4 4" />
+            </svg>
+            {t("acls.filter.summary")}
+            <span className="sum-note">
+              {filtered ? t("acls.filter.active") : t("acls.filter.note")}
+            </span>
+          </summary>
 
         {/* The filter is a form: it applies on submit, never on keystroke. */}
         <form
@@ -528,6 +603,7 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
             </div>
           )}
         </form>
+        </details>
 
         {acls === null && loading ? (
           <>

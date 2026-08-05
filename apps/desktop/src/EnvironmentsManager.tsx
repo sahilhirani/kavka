@@ -400,7 +400,20 @@ export default function EnvironmentsManager({
             {defs.map((def) => {
               const users = usersOf(def.name);
               return (
-                <li key={def.name} className="env-list-row">
+                // The ATTRIBUTES ARE ON THE ROW, not only on the chip. This
+                // list is the one screen whose subject is which environments
+                // are protected, and a chip alone left the answer to a 26px
+                // pill — legible in the dark theme's warm ground, close to
+                // invisible against warm paper. Carrying the flag on the <li>
+                // gives the row the protected substrate that every other
+                // protected surface in the app has, in BOTH themes, and the
+                // spine and warm ground come from tokens rather than from a
+                // literal that would only be right in one of them.
+                //
+                // Identity still comes from the chip, protection from the
+                // ground, and the WORD in `.env-list-meta` still says which
+                // is which — Law 2 is what makes the ground safe to add.
+                <li key={def.name} className="env-list-row" {...envAttrs(def)}>
                   <span className="env-chip" {...envAttrs(def)}>
                     {def.name}
                   </span>

@@ -3,16 +3,87 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Rewritten before first paint by the script below, and again by
+         appearance.ts on every change. The literal here is only what a
+         browser with no script sees. -->
     <meta name="color-scheme" content="dark" />
     <title>Kavka</title>
-    <style>
-      /* Avoid a white flash before the stylesheet loads. Must stay in sync
-         with --bg-canvas in src/styles.css, or the app flashes the old
-         theme on every cold start. */
-      html {
-        background: #0f1317;
-      }
-    </style>
+    <script>
+      /* PRE-PAINT. Stamps the appearance attributes and a matching background
+         before the stylesheet or React exist, so a cold start never flashes
+         the wrong theme.
+
+         THIS IS A DELIBERATE DUPLICATE of src/appearance.ts — a module import
+         cannot run before first paint. Five things are shared and the two
+         files must be changed together: the storage key "kavka.appearance",
+         the five attribute names, the defaults, the two --bg-canvas literals
+         below, and the SIDE the media query asks about — both files ask
+         `prefers-color-scheme: light` so that "no opinion" falls to dark in
+         both, which is the only way the second paint matches the first.
+         Nothing else here needs to agree.
+
+         localStorage throws when storage is disabled, so every read is
+         guarded; the whole block degrades to the defaults. */
+      (function () {
+        var DEFAULTS = {
+          theme: "system",
+          accent: "brass",
+          density: "comfortable",
+          fontSize: "m",
+          motion: "system",
+        };
+        var ALLOWED = {
+          theme: ["system", "light", "dark"],
+          accent: ["brass", "moss", "sky", "plum"],
+          density: ["comfortable", "compact"],
+          fontSize: ["s", "m", "l"],
+          motion: ["system", "reduce"],
+        };
+        var pref = DEFAULTS;
+        try {
+          var raw = localStorage.getItem("kavka.appearance");
+          if (raw) {
+            var saved = JSON.parse(raw);
+            if (saved && typeof saved === "object") {
+              pref = {};
+              for (var field in DEFAULTS) {
+                pref[field] =
+                  ALLOWED[field].indexOf(saved[field]) >= 0
+                    ? saved[field]
+                    : DEFAULTS[field];
+              }
+            }
+          }
+        } catch (e) {
+          pref = DEFAULTS;
+        }
+        var theme = pref.theme;
+        if (theme === "system") {
+          var dark = true;
+          try {
+            /* No opinion resolves to dark: Kavka's ground is dark, and an
+               unknown answer must not flash a user into a theme they never
+               chose. Same rule as systemTheme() in appearance.ts. */
+            dark = !window.matchMedia("(prefers-color-scheme: light)").matches;
+          } catch (e2) {
+            dark = true;
+          }
+          theme = dark ? "dark" : "light";
+        }
+        var root = document.documentElement;
+        root.setAttribute("data-theme", theme);
+        root.setAttribute("data-accent", pref.accent);
+        root.setAttribute("data-density", pref.density);
+        root.setAttribute("data-fontsize", pref.fontSize);
+        root.setAttribute("data-motion", pref.motion);
+        /* --bg-canvas for each theme, from src/styles.css. Inline rather than
+           var(--bg-canvas): the stylesheet has not loaded yet, which is the
+           entire reason this exists. */
+        root.style.background = theme === "light" ? "#F6F1E8" : "#191512";
+        var meta = document.querySelector('meta[name="color-scheme"]');
+        if (meta) meta.setAttribute("content", theme);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
