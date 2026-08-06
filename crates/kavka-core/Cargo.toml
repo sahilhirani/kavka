@@ -98,7 +98,7 @@ rdkafka = { version = "0.39", features = ["cmake-build", "tokio"], optional = tr
 # ships pregenerated Windows objects — so it adds no build-tool requirement.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 # Basic auth for Schema Registry (src/sr.rs) and SigV4 for MSK (src/auth/msk.rs).
-base64 = "0.22"
+base64 = "0.23"
 
 # --- Serde pipeline (src/serdes.rs, docs/ARCHITECTURE.md D4) ----------------
 # Avro is the only wire format whose decoder needs a schema, so it is the only
