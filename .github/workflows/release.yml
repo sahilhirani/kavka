@@ -47,6 +47,11 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.name }})
+    # The signing key lives in the `release` environment, not in repo-level
+    # secrets: the environment only deploys from `main` and `v*` tags, so a
+    # workflow run from any other ref asks for the key and gets nothing.
+    # SECURITY-AUDIT.md CI-02.
+    environment: release
     strategy:
       fail-fast: false
       matrix:
