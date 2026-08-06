@@ -79,7 +79,7 @@ tracing.workspace = true
 # in-memory mock store.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
-rdkafka = { version = "0.37", features = ["cmake-build", "tokio"], optional = true }
+rdkafka = { version = "0.39", features = ["cmake-build", "tokio"], optional = true }
 
 # --- HTTP (src/auth OAUTHBEARER providers, src/sr Schema Registry) ----------
 # ureq + rustls, deliberately NOT reqwest/native-tls: both callers are blocking
