@@ -312,7 +312,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # The OS trust store, for a TLS cluster with no CA file configured — same reason
 # ureq enables it (enterprise clusters behind an internal CA). Its own defaults
 # pull no crypto provider, so it inherits `ring` from the line above.
-rustls-platform-verifier = { version = "0.6", optional = true }
+rustls-platform-verifier = { version = "0.7", optional = true }
 # SCRAM (RFC 5802) needs HMAC-SHA-256/512, SHA-256/512 and PBKDF2 — all four of
 # which are already linked, because ring is the provider rustls is compiled
 # with. Depending on it directly costs nothing and keeps a SCRAM crate's second
