@@ -735,6 +735,13 @@ export default function ConnectTab({
                 </table>
               </div>
             )}
+
+            {/* Restart is a request, not an act. The row does not change
+                because the worker answered — it changes when Kavka reads the
+                workers again. */}
+            {tasks.length > 0 && (
+              <p className="panel-foot">{t("connect.tasks.foot")}</p>
+            )}
           </section>
         )}
 
@@ -898,25 +905,65 @@ export default function ConnectTab({
             from the brokers', usually 8083.
           </p>
         ) : connectors.length === 0 ? (
-          <>
-            <p className="table-note">
-              No connectors on {activeName}. A connector is a running job the
-              workers own: a <em>source</em> brings data into Kafka, a{" "}
-              <em>sink</em> sends it out. Its config is a flat set of keys, and
-              the workers keep it — Kavka just writes it.
-            </p>
-            <div className="empty-actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={readOnly}
-                title={readOnly ? READ_ONLY_WHY : undefined}
-                onClick={() => setEditing({ name: null })}
+          /* THE IN-PANEL EMPTY STATE, the same idiom Monitoring uses when it
+             has nothing to draw: the cause as a sentence, the mechanism, and
+             three lines answering what you would get, how to get it, and what
+             is unaffected. Left-aligned inside the panel where the table would
+             have been — a centred illustration in the middle of a panel is a
+             different component pretending to be this one. */
+          <div className="teach">
+            <div className="teach-art" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                focusable="false"
               >
-                New connector
-              </button>
+                <path d="M9 15l-3 3a3.5 3.5 0 0 1-5-5l3-3" />
+                <path d="M15 9l3-3a3.5 3.5 0 0 1 5 5l-3 3" />
+                <path d="M4 4l16 16" />
+              </svg>
             </div>
-          </>
+            <div className="teach-body">
+              <h3 className="teach-title">
+                {activeName} is running, and has no connectors on it
+              </h3>
+              <p className="teach-text">
+                The workers answered — this is an empty fleet, not a failed
+                read. A connector is a running job the workers own: a{" "}
+                <em>source</em> brings data into Kafka, a <em>sink</em> sends it
+                out.
+              </p>
+              <ul className="teach-list">
+                <li>
+                  What you would get: each job's state, its tasks and which
+                  worker holds them, plus the stack trace when one fails.
+                </li>
+                <li>
+                  How to add one: its config is a flat set of keys, and the
+                  workers keep it — Kavka only writes it and reads it back.
+                </li>
+                <li>
+                  Nothing else here depends on it: topics, groups and lag are
+                  read from the brokers, not from these workers.
+                </li>
+              </ul>
+              <div className="teach-acts">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={readOnly}
+                  title={readOnly ? READ_ONLY_WHY : undefined}
+                  onClick={() => setEditing({ name: null })}
+                >
+                  New connector
+                </button>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="table-wrap">
             {loading && <div className="table-loading" role="presentation" />}
@@ -991,6 +1038,15 @@ export default function ConnectTab({
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* THE ONE THING THE STATE COLUMN GETS WRONG BY DESIGN. Connect
+            reports the connector and its tasks separately, so a connector can
+            say RUNNING while every task under it has failed — which is why
+            the task counts are in the row beside it and not folded into the
+            chip. */}
+        {connectors !== null && !failed && connectors.length > 0 && (
+          <p className="panel-foot">{t("connect.connectors.foot")}</p>
         )}
       </section>
 
@@ -1390,7 +1446,7 @@ function ConnectorEditor({
           <div className="panel-tools">
             <button
               type="button"
-              className="btn"
+              className="btn btn-swap"
               disabled={validating || loading}
               aria-busy={validating || undefined}
               title={
@@ -1402,14 +1458,17 @@ function ConnectorEditor({
               }
               onClick={() => void validate()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {validating ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Validate
               </span>
-              Validate
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Validate
+              </span>
             </button>
             <button
               type="button"
-              className={`btn ${isProtected || !clean ? "btn-danger" : "btn-primary"}`}
+              className={`btn ${isProtected || !clean ? "btn-danger" : "btn-primary"} btn-swap`}
               disabled={applying || loading}
               aria-busy={applying || undefined}
               title={
@@ -1426,10 +1485,13 @@ function ConnectorEditor({
                 else setConfirming(true);
               }}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {applying ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                {creating ? "Create connector" : "Apply config"}
               </span>
-              {creating ? "Create connector" : "Apply config"}
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                {creating ? "Create connector" : "Apply config"}
+              </span>
             </button>
           </div>
         </div>

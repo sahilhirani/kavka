@@ -245,3 +245,224 @@
    · No dismiss on anything that qualifies a number. A caveat one click away
      is a caveat that gets quoted without it.
    ═════════════════════════════════════════════════════════════════════ */
+
+/* ══ 10 · PROVENANCE — HOW THESE BYTES WERE READ ══════════════════════════
+   The mockup opens every inspector tabpanel with this box and the app was
+   rendering the same sentence LAST, unstyled, under a row of Copy buttons.
+   Order is the whole claim: Kavka's pretty-printed object is Kavka's guess,
+   and a reader who meets the prettiness first has already believed it.
+
+   `--info` and not `--warn`: this is not a problem, it is a disclosure. The
+   3px left edge is the only place in the data surfaces where a tone colour
+   carries weight, and it never carries it alone — the sentence says the same
+   thing in words, so greyscale loses nothing (Law 2). ══════════════════ */
+
+.provenance {
+  display: flex;
+  gap: var(--s-4);
+  align-items: flex-start;
+  margin: 0 0 var(--s-5);
+  padding: var(--s-4) var(--s-5);
+  background: var(--bg-inset);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--info);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  /* It is prose, so it wraps and it has a measure. The inspector is
+     resizable down to 320px and this must reflow rather than clip. */
+  max-width: var(--measure);
+}
+
+.provenance > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-top: 2px;
+  color: var(--info);
+}
+
+.provenance code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
+
+/* The inspector's own foot: the one fact about READING that nobody asks
+   until they have already worried about it. Full-bleed under a hairline, the
+   shape `.panel-foot` takes everywhere else — but written against the
+   inspector's own padding rather than `--pad-panel`, because the inspector is
+   a docked pane and not a panel. */
+
+.inspector-caveat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin: 0;
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* The dot is decoration; the sentence beside it carries the whole meaning,
+   so it is `aria-hidden` in the markup and never the only signal. */
+.inspector-caveat > .status-dot {
+  flex: none;
+  align-self: center;
+}
+
+/* Walking the list from the panel head. `.btn-sm` is the SC 2.5.8 floor at
+   24px; the arrow glyph is centred in a square so ↑ and ↓ do not shuffle the
+   head's width between them. */
+.inspector-step {
+  display: inline-flex;
+  gap: var(--s-3);
+  flex: none;
+}
+
+/* `.inspector-head` is `justify-content: space-between`, which was written for
+   exactly two children — address and Close. A third child turns that into
+   three evenly spread groups and floats ↑/↓ into the middle of the bar. Let
+   the address take the slack instead, so both control groups sit right where
+   the mockup's `.ph-right` puts them. */
+.inspector-head > .inspector-address {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inspector-step .btn {
+  min-width: var(--hit-min);
+  padding-inline: var(--s-3);
+  justify-content: center;
+}
+
+/* The muted count on the Headers tab — it qualifies the word rather than
+   competing with it, so it is quieter and never bolder. */
+.tab-count {
+  color: var(--text-tertiary);
+  font-weight: var(--w-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ══ 11 · THE SEEK BAR'S FOUR VISIBLE START POSITIONS ═════════════════════
+   Was a `<select>`, which showed one of four and hid the other three behind a
+   click — including the fact that reading from a timestamp is possible at
+   all. It is Settings' `.seg` radiogroup now, so both surfaces answer the
+   arrow keys the same way and there is one segmented control in the product,
+   not two.
+
+   The seg sits in a `.seekbar-field` beside inputs whose height is
+   `--control-h`, and it is TALLER than they are by its own 3px padding ring.
+   `align-items: flex-end` on `.seekbar` puts them on a common baseline
+   anyway, which is what the mockup's `align-items:flex-end` row does.
+   ═════════════════════════════════════════════════════════════════════ */
+
+.seekbar-seg {
+  /* Four segments is the widest control in this row. On a narrow stage — the
+     900px reflow, or the inspector docked open — the segments wrap INSIDE the
+     pill rather than overflowing it. `.seg-btn` keeps `white-space: nowrap`,
+     so a word never breaks; only the row does. */
+  flex-wrap: wrap;
+}
+
+/* Settings' `.seg` has no disabled state because nothing there is ever
+   disabled. Here the whole bar goes dead while a scan runs, and a segment
+   that still looks pressable is a click the user thinks landed.
+   `--t-off` is the token for this and SC 1.4.3 exempts it. */
+.seekbar-seg .seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.seekbar-seg .seg-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.seekbar-seg .seg-btn[aria-checked="true"]:disabled:hover {
+  background: var(--brass-fill);
+  color: var(--on-brass);
+}
+
+/* The sentence under the bar: what the chosen mode will actually do, before
+   a fetch is spent finding out. Prose measure, not a form hint — it is two
+   clauses on the modes that need two. */
+.seekbar-note {
+  margin: var(--s-4) 0 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* ══ 12 · THE PANE'S TRAIL ════════════════════════════════════════════════
+   The wayfinding half of a stage head, for the three panes that cannot spare
+   the band (see ViewTrail.tsx). `.whereami` is the shell's own treatment and
+   is reused verbatim; all this adds is the gap to the panel head under it,
+   since here it sits inside a pane rather than in `.stage-head`'s flex
+   column. ═══════════════════════════════════════════════════════════════ */
+
+.view-trail {
+  margin: 0 0 var(--s-4);
+}
+
+/* ══ 13 · THE STATUS LINE IS THE PANEL'S FOOT ═════════════════════════════
+   §3 already made it one. What the fidelity audit added is the mockup's
+   CAVEAT beside the counts — "Showing 26 of the 50 you fetched" and "offsets
+   start at 1 379 because retention removed everything older" are middot-
+   separated items on one foot there, which is exactly this bar's shape.
+
+   So the bar has to be able to grow. It was a fixed `--statusbar-h` row of
+   short numbers; a sentence in it wraps, and a wrapped sentence in a fixed
+   row is a clipped sentence. §3 already relaxed the height — this adds the
+   wrap and the row gap that make the second line land properly, and stops
+   `.statusbar-right` being dragged onto the caveat's line.
+   ═════════════════════════════════════════════════════════════════════ */
+
+.messages-view > .view-statusline {
+  flex-wrap: wrap;
+  row-gap: var(--s-2);
+  padding-block: var(--s-3);
+  align-items: baseline;
+}
+
+.statusline-caveat {
+  /* A caveat is prose and reads at the prose size; the counts around it are
+     numbers and stay at the bar's. The two sit on a shared baseline. */
+  min-width: 0;
+  max-width: 88ch;
+  line-height: var(--lh-prose);
+  white-space: normal;
+}
+
+/* The keycaps stay right, and go to their own line rather than squeezing the
+   caveat when the bar is narrow. */
+.messages-view > .view-statusline > .statusbar-right {
+  margin-left: auto;
+}
+
+/* ══ 14 · A CAVEAT ON A MODAL ═════════════════════════════════════════════
+   Produce is an overlay, not a panel, so it cannot use `.panel-foot` — that
+   class full-bleeds itself with `--pad-panel`, which is not the modal's
+   padding, and the negative margin would pull it through the surface's edge.
+   Same job, written against the modal's own box. ══════════════════════ */
+
+.produce-caveat {
+  margin-top: var(--s-6);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+  max-width: var(--measure);
+}
+
+/* ══ 15 · WHAT IS STILL DELIBERATELY NOT HERE ═════════════════════════════
+   (§9 above listed the first three; the alignment sweep adds two more.)
+   · No `.empty` in-panel rework. The mockup's left-aligned 56px-art empty
+     state is a shell-wide idiom (`.empty-state` in styles.css) and belongs to
+     whoever owns that block — restyling it from here would fork it.
+   · No `.panel-foot` of our own. `styles/jackdaw-ops.css` declares it once and
+     the data surfaces USE it; two owners for one honesty idiom is how the
+     idiom ends up looking like two.
+   ═════════════════════════════════════════════════════════════════════ */

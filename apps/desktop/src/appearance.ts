@@ -23,6 +23,17 @@
  * purpose — a module import cannot run before first paint — and the two must
  * be changed together. The storage key, the attribute names and the defaults
  * are the shared surface; everything else here is React-side.
+ *
+ * `perch` IS THE ONE AXIS WITH NO ATTRIBUTE, and deliberately so. The other
+ * five are answered by the stylesheet alone, which is why they have to be on
+ * `<html>` before the first byte of CSS arrives. Perch visibility is answered
+ * by `Perch.tsx`, because it is not absolute: a hidden Perch still renders
+ * while a screen is LOADING and still renders when a read FAILED, and no
+ * `[data-perch="hidden"] .perch { display: none }` can know which of those it
+ * is looking at. So it is stored with the other five — one record, one key,
+ * one Settings screen — and read in React. There is nothing for the pre-paint
+ * script to stamp, and adding a sixth field to its DEFAULTS would be a
+ * duplicate that does nothing.
  */
 
 import { lsGet, lsSet } from "./storage";
@@ -35,12 +46,37 @@ export type Density = "comfortable" | "compact";
 export type FontSize = "s" | "m" | "l";
 export type MotionPref = "system" | "reduce";
 
+/**
+ * HOW MUCH OF THE PERCH TO DRAW — the mockup's Hide control, made durable.
+ *
+ * The mockup drew a "Hide" pill on every Perch and restored it with a "Show
+ * the note for this screen" button; the app refused it, on the grounds that a
+ * verdict the user can switch off is a verdict the app stops being accountable
+ * for. Both are right about different halves, so the preference is three
+ * states rather than a switch:
+ *
+ *   full    the Perch as designed — kicker, verdict, caveat. The default.
+ *   line    one line: the kicker and the verdict, nothing wrapped. For
+ *           somebody who has read the note on this screen forty times and
+ *           still wants the state at a glance.
+ *   hidden  no Perch on screens that have nothing to report.
+ *
+ * WHAT NONE OF THEM DO IS SUPPRESS A LOADING OR A FAILED READ. "Hidden" means
+ * "do not tell me the cluster is fine"; it has never meant "do not tell me the
+ * numbers are missing". `Perch.tsx` forces the full form whenever it is
+ * loading or holding an error, in every mode, and the Hide control disappears
+ * while it does — see the precedence block there. That is the whole reason
+ * this is a React-side preference and not a CSS attribute.
+ */
+export type PerchMode = "full" | "line" | "hidden";
+
 export interface Appearance {
   theme: ThemePref;
   accent: AccentId;
   density: Density;
   fontSize: FontSize;
   motion: MotionPref;
+  perch: PerchMode;
 }
 
 /** Shared with the inline script in index.html. Changing it strands the file. */
@@ -58,6 +94,9 @@ export const DEFAULT_APPEARANCE: Appearance = {
   density: "comfortable",
   fontSize: "m",
   motion: "system",
+  // The direction as drawn. A first-run user has never seen a Perch and is
+  // exactly the person its teaching half is for.
+  perch: "full",
 };
 
 export const ACCENTS: readonly AccentId[] = ["brass", "moss", "sky", "plum"];
@@ -65,6 +104,8 @@ export const DENSITIES: readonly Density[] = ["comfortable", "compact"];
 export const FONT_SIZES: readonly FontSize[] = ["s", "m", "l"];
 export const THEMES: readonly ThemePref[] = ["system", "light", "dark"];
 export const MOTIONS: readonly MotionPref[] = ["system", "reduce"];
+/** Order is the order the Settings segmented control offers them. */
+export const PERCH_MODES: readonly PerchMode[] = ["full", "line", "hidden"];
 
 function oneOf<T extends string>(
   value: unknown,
@@ -95,6 +136,9 @@ export function readAppearance(): Appearance {
       density: oneOf(v.density, DENSITIES, DEFAULT_APPEARANCE.density),
       fontSize: oneOf(v.fontSize, FONT_SIZES, DEFAULT_APPEARANCE.fontSize),
       motion: oneOf(v.motion, MOTIONS, DEFAULT_APPEARANCE.motion),
+      // Absent in every record written before this axis existed, which reads
+      // as "full" — the behaviour those users already have.
+      perch: oneOf(v.perch, PERCH_MODES, DEFAULT_APPEARANCE.perch),
     };
   } catch {
     return DEFAULT_APPEARANCE;
@@ -186,7 +230,8 @@ export function setAppearance(next: Partial<Appearance>): void {
     merged.accent === current.accent &&
     merged.density === current.density &&
     merged.fontSize === current.fontSize &&
-    merged.motion === current.motion
+    merged.motion === current.motion &&
+    merged.perch === current.perch
   ) {
     return;
   }

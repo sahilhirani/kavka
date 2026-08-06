@@ -372,7 +372,7 @@ export default function Playground({ onReady }: PlaygroundProps) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn-danger"
+                  className="btn btn-danger btn-swap"
                   disabled={busy !== null}
                   // The same promise the start button makes: this one drives
                   // `docker compose down`, which is the same kind of wait, and
@@ -386,16 +386,17 @@ export default function Playground({ onReady }: PlaygroundProps) {
                   }
                   onClick={() => void run("stop")}
                 >
-                  <span className="btn-busy-slot" aria-hidden="true">
-                    {busy === "stop" ? "·" : ""}
+                  <span className="btn-swap-face">Stop the playground</span>
+                  <span className="btn-swap-face btn-swap-busy">
+                    <span className="spinner" aria-hidden="true" />
+                    Stop the playground
                   </span>
-                  Stop the playground
                 </button>
               </>
             ) : (
               <button
                 type="button"
-                className="btn"
+                className="btn btn-swap"
                 disabled={busy !== null}
                 aria-busy={busy === "start"}
                 title={
@@ -405,12 +406,18 @@ export default function Playground({ onReady }: PlaygroundProps) {
                 }
                 onClick={() => void run("start")}
               >
-                {/* The label survives the wait; a fixed 16px slot keeps the
-                    button from resizing mid-click (docs/DESIGN.md §5.5). */}
-                <span className="btn-busy-slot" aria-hidden="true">
-                  {busy === "start" ? "·" : ""}
+                {/* THE LABEL SURVIVES THE WAIT AND THE BUTTON DOES NOT RESIZE,
+                    which is what the old `.btn-busy-slot` was for — except it
+                    reserved a visibly empty 16px box on an idle button, which
+                    reads as a missing icon. Both faces share one grid cell
+                    instead, so the wider one fixes the width and the idle
+                    button carries no void. See `.btn-swap` in
+                    styles/jackdaw-shell.css. */}
+                <span className="btn-swap-face">Start a local playground</span>
+                <span className="btn-swap-face btn-swap-busy">
+                  <span className="spinner" aria-hidden="true" />
+                  Start a local playground
                 </span>
-                Start a local playground
               </button>
             )}
           </div>

@@ -73,6 +73,30 @@ export default function Overlay({
   const surface = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    /**
+     * AN OVERLAY OPENS AT ITS TOP. Always, and stated rather than inferred.
+     *
+     * The scrolling element IS this surface (`.modal-wide` caps its height and
+     * takes `overflow-y: auto`), and the field report was that About could
+     * open part-way down — a dialog whose first line is its title opening on
+     * its third section reads as a broken build. A fresh mount starts at zero
+     * on its own in the common case, but "on its own" is not a promise: the
+     * focus call below scrolls its target into view, and any future overlay
+     * whose `initialFocus` is not the first element would land wherever that
+     * control happens to be. One line here is the whole guarantee, for every
+     * overlay, rather than each one remembering.
+     *
+     * IT RUNS BEFORE THE FOCUS CALL, NOT AFTER, and the order is the design.
+     * Several overlays legitimately focus a control that is not their first —
+     * `EnvironmentsManager` focuses the name field of a draft, `AclsTab` its
+     * principal input — and for those, the browser scrolling that control into
+     * view is correct. Resetting first and then letting `focus()` scroll means
+     * "top unless something asked for somewhere else", which is the rule.
+     * `preventScroll` would have made it "top, and the focused control may be
+     * off screen", which is worse than the bug.
+     */
+    if (surface.current !== null) surface.current.scrollTop = 0;
+
     // Whatever had focus when we opened. Captured on mount rather than passed
     // in, so no caller can forget to do it.
     const invoker = document.activeElement as HTMLElement | null;

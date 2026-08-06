@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   errorMessage,
   profilesDelete,
@@ -12,22 +19,26 @@ import {
   type AuthConfig,
   type ConnectClusterConfig,
   type ConnectionProfile,
+  type ConnState,
   type ConnStatus,
   type Environment,
   type ScramMechanism,
 } from "./api";
 import EnvironmentsManager from "./EnvironmentsManager";
 import {
+  EnvChip,
   envAttrs,
   isKnownEnvironment,
+  PadLock,
   resolveEnvironment,
   sameEnvironmentName,
   useEnvironments,
 } from "./environments";
 import { classifyError } from "./errors";
 import { Term } from "./Glossary";
-import { useI18n, type TFunction } from "./i18n";
+import { useI18n, type MessageKey, type TFunction } from "./i18n";
 import Perch from "./Perch";
+import StageHead from "./StageHead";
 import WasmSerdesFields from "./WasmSerdesFields";
 
 /**
@@ -375,6 +386,162 @@ const NOTHING_STORED: StoredSecrets = {
   metricsPassword: false,
 };
 
+/** The status word each row carries beside its dot. Law 2, per row. */
+const ROW_STATUS_KEY: Record<ConnStatus, MessageKey> = {
+  disconnected: "switcher.status.disconnected",
+  connecting: "switcher.status.connecting",
+  connected: "switcher.status.connected",
+};
+
+interface SavedClustersProps {
+  profiles: readonly ConnectionProfile[];
+  connections: Record<string, ConnState>;
+  selectedId: string | null;
+  /** True while the editor holds a draft nobody has saved. */
+  creating: boolean;
+  onSelect: (profileId: string) => void;
+}
+
+/**
+ * THE CANONICAL ENUMERATION — the mockup's 330px "Saved clusters" panel.
+ *
+ * The switcher menu in the rail is the SHORT list: a thing you open for two
+ * seconds to move somewhere else. This is the long one, and it is the reason
+ * deleting the permanent sidebar cost nothing — the list did not disappear,
+ * it moved to the screen whose subject is the list.
+ *
+ * THE ROWS ARE THE SWITCHER'S ROWS, deliberately. `.cc-menu-item` and its
+ * selected/protected variants are reused rather than reimplemented as the
+ * mockup's `.plist button`, because two surfaces that both answer "which of
+ * these is production" must never be able to disagree about the answer. The
+ * only thing this screen changes is the container: full-bleed rows with
+ * hairlines between them instead of floating pills in a popover.
+ *
+ * ONE JOB PER ROW HERE. The switcher's rows carry a trailing Connect button
+ * because the menu is the only thing on screen; here the editor beside the
+ * list already has Connect in its foot, and a second one per row would be
+ * eleven ways to do one thing.
+ */
+function SavedClusters({
+  profiles,
+  connections,
+  selectedId,
+  creating,
+  onSelect,
+}: SavedClustersProps) {
+  const { t, tx } = useI18n();
+  // Resolved once for the whole list rather than per row, so one paint
+  // cannot disagree with itself about what is protected.
+  const envDefs = useEnvironments();
+  return (
+    <aside className="panel plist-panel" aria-labelledby="pe-list-title">
+      <div className="panel-head">
+        <h2 className="panel-title" id="pe-list-title">
+          {t("connections.list.title")}
+          <span className="panel-count">{profiles.length}</span>
+        </h2>
+      </div>
+
+      {profiles.length === 0 && !creating ? (
+        <p className="plist-empty">{t("connections.list.empty")}</p>
+      ) : (
+        <div className="plist">
+          {/* The draft is in the list because the editor beside it is
+              showing something, and a list that omits what you are looking
+              at is a list that makes you doubt where you are. It is not a
+              button: it is already the current row, and there is nowhere
+              for a click to go. */}
+          {creating && (
+            <div className="cc-menu-item cc-menu-item-draft cc-menu-item-selected">
+              <div className="cc-menu-row" aria-current="true">
+                <span className="cc-row-line">
+                  <span
+                    className="status-dot status-disconnected"
+                    aria-hidden="true"
+                  />
+                  <span className="cc-row-name">{t("switcher.draftName")}</span>
+                </span>
+                <span className="cc-row-meta">{t("switcher.draftMeta")}</span>
+              </div>
+            </div>
+          )}
+
+          {profiles.map((profile) => {
+            const status = connections[profile.id]?.status ?? "disconnected";
+            const address = profile.bootstrap_servers.join(", ");
+            const def = resolveEnvironment(profile.environment, envDefs);
+            // While a draft is open nothing else is current, even though the
+            // app still remembers which cluster you came from.
+            const isCurrent = !creating && profile.id === selectedId;
+            const classes = [
+              "cc-menu-item",
+              def.protected ? "cc-menu-item-protected" : "",
+              isCurrent ? "cc-menu-item-selected" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <div className={classes} key={profile.id}>
+                <button
+                  type="button"
+                  className="cc-menu-row"
+                  aria-current={isCurrent ? "true" : undefined}
+                  title={address}
+                  onClick={() => onSelect(profile.id)}
+                >
+                  <span className="cc-row-line">
+                    <span
+                      className={`status-dot status-${status}`}
+                      aria-hidden="true"
+                    />
+                    <span className="cc-row-name">{profile.name}</span>
+                    <EnvChip env={profile.environment} />
+                    {/* The switcher's third channel, and for the same reason
+                        (§6, audit C8): the panel foot below explains what the
+                        warm rows MEAN, but a foot is not a per-row signal and
+                        the chip names the environment rather than its
+                        protection. Glyph for the eye, `sr-only` word for the
+                        screen reader. */}
+                    {def.protected && (
+                      <>
+                        <PadLock />
+                        <span className="sr-only">
+                          {t("switcher.protected")}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                  {/* Guardrail layer 3: the bootstrap address is always on
+                      screen. And law 2: the dot always has its word, so this
+                      line reads "address · state" in every state. */}
+                  <span className="cc-row-meta">
+                    {t("switcher.rowMeta", {
+                      address,
+                      status: t(ROW_STATUS_KEY[status]),
+                    })}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* THE PANEL FOOT AS A CAVEAT — the mockup's honesty idiom, and the
+          two things this list cannot tell you. The first is what the warm
+          rows actually mean; the second is that "not connected" is a fact
+          about this session and not about the cluster, because Kavka does
+          not poll clusters it is not connected to. */}
+      <div className="panel-foot">
+        {tx("connections.list.foot", {
+          protected: <strong>{t("connections.list.footProtected")}</strong>,
+        })}{" "}
+        {t("connections.list.footSession")}
+      </div>
+    </aside>
+  );
+}
+
 interface ProfileEditorProps {
   /** null = creating a new profile. */
   profile: ConnectionProfile | null;
@@ -393,6 +560,28 @@ interface ProfileEditorProps {
    * business reloading the sidebar itself, so it reports up.
    */
   onProfilesChanged: () => void;
+
+  /* ── The screen around the form ──────────────────────────────────────────
+     THESE FIVE ARE OPTIONAL AND THAT IS A HANDOVER, NOT A DEFAULT.
+
+     The mockup's Connections screen is a list BESIDE an editor, and the list
+     is the app's saved connections — state that lives in `App`, not here.
+     Passing it down is a one-line change in `App` that this phase does not
+     own, so the props are optional and the screen degrades to exactly what
+     it renders today (the editor alone, full width) until they arrive. When
+     they do, the 330px panel appears and the screen matches the drawing.
+     See the blocker note in this phase's report.                          */
+
+  /** Every saved connection, in the order `App` holds them. */
+  profiles?: readonly ConnectionProfile[];
+  /** Live connection state per profile id, for each row's status word. */
+  connections?: Record<string, ConnState>;
+  /** Which row is current. Ignored while `profile` is null (a draft). */
+  selectedId?: string | null;
+  /** Clicking a row. Without it the list is not rendered at all. */
+  onSelect?: (profileId: string) => void;
+  /** The stage head's primary action. Also lives in ⌘K and the switcher. */
+  onCreate?: () => void;
 }
 
 export default function ProfileEditor({
@@ -405,6 +594,11 @@ export default function ProfileEditor({
   onCancelNew,
   onError,
   onProfilesChanged,
+  profiles,
+  connections,
+  selectedId,
+  onSelect,
+  onCreate,
 }: ProfileEditorProps) {
   const { t, tx } = useI18n();
   const isNew = profile === null;
@@ -1371,24 +1565,108 @@ export default function ProfileEditor({
     </summary>
   );
 
+  /**
+   * One rung of the ladder.
+   *
+   * A plain render helper rather than a nested component, for the same reason
+   * `fieldMessage` is one: a component declared inside this function would be
+   * a new type on every render and would remount its input on every keystroke.
+   *
+   * The numeral is `aria-hidden`. The `<ol>` already tells assistive tech this
+   * is item 3 of 6, and a screen reader that reads "3" and then "3. Where does
+   * it live?" is reading the furniture out loud.
+   */
+  const step = (
+    n: number,
+    question: ReactNode,
+    why: ReactNode,
+    control: ReactNode,
+  ) => (
+    <li className="step">
+      <div className="step-n" aria-hidden="true">
+        {n}
+      </div>
+      <div>
+        {question}
+        {why}
+        <div className="step-ctl">{control}</div>
+      </div>
+      {/* The connector, drawn from THIS numeral down to the next one. It is
+          two cells because the grid has two columns; the second is empty. */}
+      {n < 6 && (
+        <>
+          <div className="step-line" />
+          <div />
+        </>
+      )}
+    </li>
+  );
+
+  /** How many saved connections there are, for the head's one sentence. */
+  const savedCount = profiles?.length ?? 0;
+
   return (
-    // Picking a PROTECTED environment swaps this form's substrate live — the
+    // Picking a PROTECTED environment swaps this screen's substrate live — the
     // rule, the tints and the picker all turn warm. That is the single best
-    // moment in the product to teach the guardrail, and it now fires for
-    // whatever the user marked protected instead of for one hard-coded name.
-    <form
-      className="editor"
-      {...envAttrs(formEnv)}
-      onKeyDown={handleKeyDown}
-      onSubmit={(e) => {
-        e.preventDefault();
-        void handleConnect();
-      }}
-    >
+    // moment in the product to teach the guardrail, and it fires for whatever
+    // the user marked protected instead of for one hard-coded name.
+    <div className="conn-screen" {...envAttrs(formEnv)}>
+      {/* WHERE YOU ARE, WHAT THIS IS, WHAT YOU CAN DO — the same three
+          registers every other screen opens with. It replaces the old
+          `.view-header`, whose `<h1>` was the profile's name; the name is a
+          property of the record in the panel below, not of the screen. */}
+      <StageHead
+        trail={[t("rail.group.setup"), t("rail.item.connections")]}
+        title={t("rail.item.connections")}
+        sub={
+          profiles === undefined
+            ? t("connections.sub.unknown")
+            : t("connections.sub", { count: savedCount })
+        }
+        actions={
+          <>
+            {/* The environments modal's second opener — the first is the
+                segment picker's own link, six inches lower down a form. */}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setManagingEnvs(true)}
+            >
+              {t("connections.manageEnvironments")}
+            </button>
+            {onCreate && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onCreate}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                {t("common.addConnection")}
+              </button>
+            )}
+          </>
+        }
+      />
+
       {/* ANSWER FIRST. Before the eleven fields, one sentence about what
           Kavka has actually established — which, on a form nobody has
           pressed Connect on, is "nothing". Saying that is the whole point;
-          a form that merely looks ready is the thing this replaces. */}
+          a form that merely looks ready is the thing this replaces.
+
+          Above the split, not inside the form: it is a verdict about the
+          screen, and the list beside the editor is part of the screen. */}
       <Perch
         screen={t("editor.perch.screen")}
         // `unknown` at rest. Only a live connection earns `ok`, and Perch
@@ -1410,1062 +1688,1170 @@ export default function ProfileEditor({
             : t("editor.perch.saved", { name: profile.name })}
       </Perch>
 
-      <div className="view-header">
-        <h1 className="view-title">
-          {isNew ? t("editor.new.title") : profile.name}
-        </h1>
-        <span className="view-subtitle">
-          {isNew ? t("editor.new.subtitle") : t("editor.saved.subtitle")}
-        </span>
-      </div>
+      {managingEnvs && (
+        <EnvironmentsManager
+          onClose={() => setManagingEnvs(false)}
+          onProfilesChanged={onProfilesChanged}
+          // The form holds an environment NAME in local state, and the manager
+          // rewriting the stored profiles does not reach it. Follow the move,
+          // or renaming the environment you are looking at leaves the picker
+          // reading "unknown" about a change you just made.
+          onEnvironmentMoved={(from, to) => {
+            setForm((prev) =>
+              sameEnvironmentName(prev.environment, from)
+                ? { ...prev, environment: to }
+                : prev,
+            );
+          }}
+        />
+      )}
 
-      {/* Name, environment and address were three bare fields floating on the
-          canvas. They are one raised panel now — Jackdaw's central bet is that
-          a junior engineer needs to see where one thing ends and the next
-          begins, and these three are the one group nobody can skip. */}
-      <fieldset className="fieldset">
-        <legend className="eyebrow">{t("editor.cluster.legend")}</legend>
-
-        <div className="field">
-          <label className="field-label" htmlFor="pe-name">
-            {t("editor.name.label")}
-          </label>
-          <input
-            id="pe-name"
-            ref={bind("name")}
-            type="text"
-            className={cls("name")}
-            value={form.name}
-            placeholder={t("editor.name.placeholder")}
-            autoFocus={isNew}
-            aria-invalid={invalid("name")}
-            aria-describedby={describe("name", "pe-name-hint")}
-            onChange={(e) => edit("name", { name: e.target.value })}
-          />
-          {fieldMessage("name")}
-          <span className="field-hint" id="pe-name-hint">
-            {t("editor.name.hint")}
-          </span>
-        </div>
-
-        <div className="field">
-          <span className="field-label">{t("editor.env.label")}</span>
-          <div className="env-row">
-            <div
-              className="env-picker"
-              role="radiogroup"
-              aria-label={t("editor.env.label")}
-            >
-              {envOptions.map((def, index) => {
-                // The registry's own uniqueness rule, not `===`: a profile
-                // stored as `Prod` names the same environment the manager holds
-                // as `prod`, and an exact comparison would leave the picker
-                // showing nothing checked for a value it is already carrying.
-                const active = sameEnvironmentName(def.name, form.environment);
-                return (
-                  <button
-                    key={def.name}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    // One tab stop for the group; the arrows walk it. When
-                    // NOTHING is checked — a profile whose environment is the
-                    // empty string, which a hand-edited profiles.json can
-                    // produce — the first segment takes the stop anyway, or the
-                    // whole group drops out of the tab order (SC 2.1.1).
-                    tabIndex={index === rovingIndex ? 0 : -1}
-                    ref={(el) => {
-                      envRefs.current[def.name] = el;
-                    }}
-                    className={`env-option ${active ? "env-option-active" : ""}`}
-                    {...envAttrs(def)}
-                    onClick={() => patch({ environment: def.name })}
-                    onKeyDown={(e) => onEnvKeyDown(e, index)}
-                  >
-                    {/* Law 2: the chosen segment is never chosen by colour
-                        alone. `aria-checked` says it to assistive tech; this
-                        glyph says it to everyone else. */}
-                    {active && (
-                      <span className="env-option-check" aria-hidden="true">
-                        ✓
-                      </span>
-                    )}
-                    {def.name}
-                  </button>
-                );
-              })}
-            </div>
-            {/* Not inside the radio group: it is not one of the choices, and a
-                radiogroup with a non-radio child is a broken promise about what
-                the arrow keys reach. */}
-            <button
-              type="button"
-              className="btn btn-ghost env-manage-btn"
-              onClick={() => setManagingEnvs(true)}
-            >
-              {t("editor.env.manage")}
-            </button>
-          </div>
-          {/* The segment labels are NOT translated. They are user data now, and
-              they are the same strings as `data-env-color`'s sibling attribute,
-              the forced-colors wire label and the CLI's refusal — a guardrail
-              that reads differently per locale is two signals where the design
-              specifies one. */}
-          <span className="field-hint">
-            {envUnknown
-              ? t("editor.env.hint.unknown", { name: form.environment })
-              : formEnv.protected
-                ? t("editor.env.hint.protected")
-                : t("editor.env.hint.other")}
-          </span>
-        </div>
-
-        {managingEnvs && (
-          <EnvironmentsManager
-            onClose={() => setManagingEnvs(false)}
-            onProfilesChanged={onProfilesChanged}
-            // The form holds an environment NAME in local state, and the manager
-            // rewriting the stored profiles does not reach it. Follow the move,
-            // or renaming the environment you are looking at leaves the picker
-            // reading "unknown" about a change you just made.
-            onEnvironmentMoved={(from, to) => {
-              setForm((prev) =>
-                sameEnvironmentName(prev.environment, from)
-                  ? { ...prev, environment: to }
-                  : prev,
-              );
-            }}
+      <div className="conn-split">
+        {profiles !== undefined && onSelect !== undefined && (
+          <SavedClusters
+            profiles={profiles}
+            connections={connections ?? {}}
+            selectedId={selectedId ?? null}
+            creating={isNew}
+            onSelect={onSelect}
           />
         )}
 
-        <div className="field">
-          <label className="field-label" htmlFor="pe-bootstrap">
-            <Term name="bootstrap-server">{t("editor.bootstrap.label")}</Term>
-          </label>
-          <textarea
-            id="pe-bootstrap"
-            ref={bind("bootstrap")}
-            rows={3}
-            className={cls("bootstrap")}
-            value={form.bootstrap}
-            placeholder={"broker-1:9092\nbroker-2:9092"}
-            spellCheck={false}
-            aria-invalid={invalid("bootstrap")}
-            aria-describedby={describe("bootstrap", "pe-bootstrap-hint")}
-            onChange={(e) => edit("bootstrap", { bootstrap: e.target.value })}
-          />
-          {fieldMessage("bootstrap")}
-          <span className="field-hint" id="pe-bootstrap-hint">
-            {tx("editor.bootstrap.hint", { local: <code>localhost:9092</code> })}
-          </span>
-        </div>
-      </fieldset>
-
-      {/* Sign-in is never folded. It is the section a connection cannot work
-          without, and the one whose plain-language options ("Username and
-          password — SASL/PLAIN") are the direction's floor under the jargon. */}
-      <fieldset className="fieldset">
-        <legend className="eyebrow">{t("editor.auth.legend")}</legend>
-
-        {unsupportedAuth && (
-          <span className="field-hint">
-            {tx("editor.auth.kerberos", {
-              service: <code>{unsupportedAuth.service_name}</code>,
-              principal: <code>{unsupportedAuth.principal}</code>,
-            })}
-          </span>
-        )}
-
-        {!unsupportedAuth && (
-          <div className="field">
-            <label className="field-label" htmlFor="pe-auth-kind">
-              {t("editor.auth.label")}
-            </label>
-            <select
-              id="pe-auth-kind"
-              value={form.authKind}
-              onChange={(e) =>
-                changeAuthKind(e.target.value as EditableAuthKind)
-              }
-            >
-              <option value="plaintext">{t("editor.auth.plaintext")}</option>
-              <option value="sasl_plain">{t("editor.auth.saslPlain")}</option>
-              <option value="sasl_scram">{t("editor.auth.saslScram")}</option>
-              <option value="tls">{t("editor.auth.mtls")}</option>
-              <option value="aws_msk_iam">{t("editor.auth.mskIam")}</option>
-              <option value="oauth_bearer">{t("editor.auth.oauth")}</option>
-              {/* Every disabled control says why. No dead ends. */}
-              <option
-                value="kerberos"
-                disabled
-                title={t("editor.auth.notYet")}
-              >
-                {t("editor.auth.kerberosOption")}
-              </option>
-            </select>
-            <span className="field-hint">{t("editor.auth.hint")}</span>
-          </div>
-        )}
-
-        {!unsupportedAuth && form.authKind === "sasl_scram" && (
-          <div className="field">
-            <label className="field-label" htmlFor="pe-mechanism">
-              {t("editor.mechanism.label")}
-            </label>
-            <select
-              id="pe-mechanism"
-              value={form.mechanism}
-              onChange={(e) =>
-                patch({ mechanism: e.target.value as ScramMechanism })
-              }
-            >
-              <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
-              <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
-            </select>
-            <span className="field-hint">{t("editor.mechanism.hint")}</span>
-          </div>
-        )}
-
-        {!unsupportedAuth && showSasl && (
-          <>
-            <div className="field">
-              <label className="field-label" htmlFor="pe-username">
-                {t("editor.username.label")}
-              </label>
-              <input
-                id="pe-username"
-                ref={bind("username")}
-                type="text"
-                className={cls("username", "input-mono")}
-                value={form.username}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("username")}
-                aria-describedby={describe("username")}
-                onChange={(e) => edit("username", { username: e.target.value })}
-              />
-              {fieldMessage("username")}
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-password">
-                {t("editor.password.label")}
-              </label>
-              <input
-                id="pe-password"
-                ref={bind("password")}
-                type="password"
-                className={cls("password")}
-                value={form.password}
-                autoComplete="new-password"
-                placeholder={
-                  hasStoredPassword
-                    ? t("editor.secret.unchanged")
-                    : t("editor.password.placeholder")
-                }
-                aria-invalid={invalid("password")}
-                aria-describedby={describe("password", "pe-password-hint")}
-                onChange={(e) => edit("password", { password: e.target.value })}
-              />
-              {fieldMessage("password")}
-              <span className="field-hint" id="pe-password-hint">
-                {t("editor.password.hint")}
-              </span>
-            </div>
-
-            {/* 18px box in an 18px/1fr grid with the hint in row 2 /
-                column 2. The hint is a sibling, not part of the label, so it
-                describes the control instead of renaming it. */}
-            <div className="check-field">
-              <input
-                id="pe-tls"
-                type="checkbox"
-                checked={form.tls}
-                aria-describedby="pe-tls-hint"
-                onChange={(e) => patch({ tls: e.target.checked })}
-              />
-              <label className="check-label" htmlFor="pe-tls">
-                {t("editor.tls.label")}
-              </label>
-              <span className="field-hint" id="pe-tls-hint">
-                {t("editor.tls.hint")}
-              </span>
-            </div>
-          </>
-        )}
-
-        {!unsupportedAuth && showMtls && (
-          <>
-            <span className="field-hint">{t("editor.mtls.hint")}</span>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-ca-path">
-                {t("editor.caPath.label")}
-              </label>
-              <input
-                id="pe-ca-path"
-                ref={bind("caPath")}
-                type="text"
-                className={cls("caPath", "input-mono")}
-                value={form.caPath}
-                placeholder="/etc/kafka/ca.pem"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("caPath")}
-                aria-describedby={describe("caPath", "pe-ca-path-hint")}
-                onChange={(e) => edit("caPath", { caPath: e.target.value })}
-              />
-              {fieldMessage("caPath")}
-              <span className="field-hint" id="pe-ca-path-hint">
-                {t("editor.caPath.hint")}
-              </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-client-cert">
-                {t("editor.clientCert.label")}
-              </label>
-              <input
-                id="pe-client-cert"
-                ref={bind("clientCert")}
-                type="text"
-                className={cls("clientCert", "input-mono")}
-                value={form.clientCert}
-                placeholder="/etc/kafka/client.pem"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("clientCert")}
-                aria-describedby={describe(
-                  "clientCert",
-                  "pe-client-cert-hint",
-                )}
-                onChange={(e) =>
-                  edit("clientCert", { clientCert: e.target.value })
-                }
-              />
-              {fieldMessage("clientCert")}
-              <span className="field-hint" id="pe-client-cert-hint">
-                {t("editor.clientCert.hint")}
-              </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-client-key">
-                {t("editor.clientKey.label")}
-              </label>
-              <textarea
-                id="pe-client-key"
-                ref={bind("clientKey")}
-                rows={5}
-                className={cls("clientKey")}
-                value={form.clientKey}
-                placeholder={
-                  hasStoredClientKey
-                    ? t("editor.secret.unchanged")
-                    : // A PEM header is a literal, not prose: it stays
-                      // verbatim in every locale (§4).
-                      "-----BEGIN PRIVATE KEY-----\n…"
-                }
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("clientKey")}
-                aria-describedby={describe("clientKey", "pe-client-key-hint")}
-                onChange={(e) =>
-                  edit("clientKey", { clientKey: e.target.value })
-                }
-              />
-              {fieldMessage("clientKey")}
-              <span className="field-hint" id="pe-client-key-hint">
-                {t("editor.clientKey.hint")}
-                {hasStoredClientKey ? ` ${t("editor.clientKey.storedHint")}` : ""}
-              </span>
-            </div>
-          </>
-        )}
-
-        {!unsupportedAuth && showAws && (
-          <>
-            <span className="field-hint">
-              {tx("editor.aws.hint", {
-                host: <code>.amazonaws.com</code>,
-              })}
-            </span>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-region">
-                {t("editor.region.label")}
-              </label>
-              <input
-                id="pe-region"
-                ref={bind("region")}
-                type="text"
-                className={cls("region", "input-mono")}
-                value={form.region}
-                placeholder="eu-west-1"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("region")}
-                aria-describedby={describe("region", "pe-region-hint")}
-                onChange={(e) => edit("region", { region: e.target.value })}
-              />
-              {fieldMessage("region")}
-              <span className="field-hint" id="pe-region-hint">
-                {t("editor.region.hint")}
-              </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-aws-profile">
-                {t("editor.awsProfile.label")}
-              </label>
-              <input
-                id="pe-aws-profile"
-                ref={bind("awsProfile")}
-                type="text"
-                className={cls("awsProfile", "input-mono")}
-                value={form.awsProfile}
-                placeholder="default"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("awsProfile")}
-                aria-describedby={describe("awsProfile", "pe-aws-profile-hint")}
-                onChange={(e) =>
-                  edit("awsProfile", { awsProfile: e.target.value })
-                }
-              />
-              {fieldMessage("awsProfile")}
-              <span className="field-hint" id="pe-aws-profile-hint">
-                {tx("editor.awsProfile.hint", {
-                  config: <code>~/.aws/config</code>,
-                  dir: <code>~/.aws</code>,
-                })}
-              </span>
-            </div>
-          </>
-        )}
-
-        {!unsupportedAuth && showOauth && (
-          <>
-            <span className="field-hint">{t("editor.oauth.hint")}</span>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-token-endpoint">
-                {t("editor.tokenEndpoint.label")}
-              </label>
-              <input
-                id="pe-token-endpoint"
-                ref={bind("tokenEndpoint")}
-                type="text"
-                className={cls("tokenEndpoint", "input-mono")}
-                value={form.tokenEndpoint}
-                placeholder="https://login.example.com/oauth2/token"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("tokenEndpoint")}
-                aria-describedby={describe(
-                  "tokenEndpoint",
-                  "pe-token-endpoint-hint",
-                )}
-                onChange={(e) =>
-                  edit("tokenEndpoint", { tokenEndpoint: e.target.value })
-                }
-              />
-              {fieldMessage("tokenEndpoint")}
-              <span className="field-hint" id="pe-token-endpoint-hint">
-                {t("editor.tokenEndpoint.hint")}
-              </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-client-id">
-                {t("editor.clientId.label")}
-              </label>
-              <input
-                id="pe-client-id"
-                ref={bind("clientId")}
-                type="text"
-                className={cls("clientId", "input-mono")}
-                value={form.clientId}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={invalid("clientId")}
-                aria-describedby={describe("clientId", "pe-client-id-hint")}
-                onChange={(e) => edit("clientId", { clientId: e.target.value })}
-              />
-              {fieldMessage("clientId")}
-              <span className="field-hint" id="pe-client-id-hint">
-                {t("editor.clientId.hint")}
-              </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label" htmlFor="pe-client-secret">
-                {t("editor.clientSecret.label")}
-              </label>
-              <input
-                id="pe-client-secret"
-                ref={bind("clientSecret")}
-                type="password"
-                className={cls("clientSecret")}
-                value={form.clientSecret}
-                autoComplete="new-password"
-                placeholder={
-                  hasStoredClientSecret
-                    ? t("editor.secret.unchanged")
-                    : t("editor.clientSecret.placeholder")
-                }
-                aria-invalid={invalid("clientSecret")}
-                aria-describedby={describe(
-                  "clientSecret",
-                  "pe-client-secret-hint",
-                )}
-                onChange={(e) =>
-                  edit("clientSecret", { clientSecret: e.target.value })
-                }
-              />
-              {fieldMessage("clientSecret")}
-              <span className="field-hint" id="pe-client-secret-hint">
-                {t("editor.clientSecret.hint")}
-              </span>
-            </div>
-          </>
-        )}
-      </fieldset>
-
-      {/* Schema Registry — optional, and independent of how the cluster checks
-          who you are: a broker on mTLS can sit in front of a registry behind
-          basic auth. Leaving the address empty is the same as having no
-          registry, and clearing it removes the stored password with it.
-
-          FOLDED, and open when it holds anything. Progressive disclosure earns
-          its place on the three sections most connections leave empty; it does
-          NOT get to hide a value somebody set, which is what `srConfigured`
-          and the note on the summary are both for. */}
-      <details className="fold" open={srConfigured}>
-        {foldSummary(
-          t("editor.sr.legend"),
-          srConfigured ? t("editor.fold.set") : t("editor.fold.notSet"),
-        )}
-        <fieldset className="fieldset fold-body" aria-label={t("editor.sr.legend")}>
-          <span className="field-hint">{t("editor.sr.hint")}</span>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-sr-url">
-              {t("editor.srUrl.label")}
-            </label>
-            <input
-              id="pe-sr-url"
-              ref={bind("srUrl")}
-              type="text"
-              className={cls("srUrl", "input-mono")}
-              value={form.srUrl}
-              placeholder="http://localhost:8081"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={invalid("srUrl")}
-              aria-describedby={describe("srUrl", "pe-sr-url-hint")}
-              onChange={(e) => edit("srUrl", { srUrl: e.target.value })}
-            />
-            {fieldMessage("srUrl")}
-            <span className="field-hint" id="pe-sr-url-hint">
-              {t("editor.srUrl.hint")}
-            </span>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-sr-username">
-              {t("editor.srUsername.label")}
-            </label>
-            <input
-              id="pe-sr-username"
-              ref={bind("srUsername")}
-              type="text"
-              className={cls("srUsername", "input-mono")}
-              value={form.srUsername}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={invalid("srUsername")}
-              aria-describedby={describe("srUsername", "pe-sr-username-hint")}
-              onChange={(e) => edit("srUsername", { srUsername: e.target.value })}
-            />
-            {fieldMessage("srUsername")}
-            <span className="field-hint" id="pe-sr-username-hint">
-              {t("editor.srUsername.hint")}
-            </span>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-sr-password">
-              {t("editor.srPassword.label")}
-            </label>
-            <input
-              id="pe-sr-password"
-              ref={bind("srPassword")}
-              type="password"
-              className={cls("srPassword")}
-              value={form.srPassword}
-              autoComplete="new-password"
-              placeholder={
-                hasStoredSrPassword
-                  ? t("editor.secret.unchanged")
-                  : t("editor.password.placeholder")
-              }
-              aria-invalid={invalid("srPassword")}
-              aria-describedby={describe("srPassword", "pe-sr-password-hint")}
-              onChange={(e) => edit("srPassword", { srPassword: e.target.value })}
-            />
-            {fieldMessage("srPassword")}
-            <span className="field-hint" id="pe-sr-password-hint">
-              {t("editor.password.hint")}
-              {hasStoredSrPassword ? ` ${t("editor.srPassword.storedHint")}` : ""}
-            </span>
-          </div>
-        </fieldset>
-      </details>
-
-      {/* Kafka Connect — optional, plural, and independent of both the
-          sign-in method and the registry: the workers are a separate service
-          with their own address and their own credentials. Removing a cluster
-          here takes its keychain entry with it, exactly like clearing the
-          registry's address does.
-
-          The summary note is a COUNT rather than a yes/no: this is the one
-          repeated section, so "3 clusters" is the fact worth having before
-          you decide whether to open it. */}
-      <details className="fold" open={connectConfigured}>
-        {foldSummary(
-          t("editor.connect.legend"),
-          connectConfigured
-            ? t("editor.fold.connectCount", { count: form.connect.length })
-            : t("editor.fold.notSet"),
-        )}
-        <fieldset
-          className="fieldset fold-body"
-          aria-label={t("editor.connect.legend")}
+        <form
+          className="editor"
+          onKeyDown={handleKeyDown}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleConnect();
+          }}
         >
-          <span className="field-hint">{t("editor.connect.hint")}</span>
+          <div className="panel-head">
+            <h2 className="panel-title">
+              {isNew ? t("editor.new.title") : profile.name}
+              {!isNew && <EnvChip env={profile.environment} />}
+            </h2>
+            {/* The mockup puts "Saved 4 August, 14:19" here. A connection
+                profile carries no saved-at timestamp — see the blocker — so
+                this says the one thing about this record that is true and
+                knowable, and says nothing when there is nothing to say. */}
+            {isNew && (
+              <span className="ph-right">{t("editor.head.unsaved")}</span>
+            )}
+          </div>
 
-          {form.connect.map((cluster, row) => (
-            <div className="connect-cluster" key={cluster.key}>
-              <div className="connect-cluster-head">
-                <span className="eyebrow">
-                  {cluster.name.trim().length > 0
-                    ? cluster.name
-                    : t("editor.connect.unnamed", { number: row + 1 })}
+          <div className="editor-body">
+            <ol className="steps">
+              {step(
+                1,
+                <label className="step-q" htmlFor="pe-name">
+                  {t("editor.step.name")}
+                </label>,
+                <span className="step-why" id="pe-name-hint">
+                  {t("editor.name.hint")}
+                </span>,
+                <div className="field">
+                  {/* The question above IS this control's label, so the field
+                      carries none of its own. `.step-q` is a real `<label>`
+                      with `htmlFor`, which is why nothing was lost. */}
+                  <input
+                    id="pe-name"
+                    ref={bind("name")}
+                    type="text"
+                    className={cls("name")}
+                    value={form.name}
+                    placeholder={t("editor.name.placeholder")}
+                    autoFocus={isNew}
+                    aria-invalid={invalid("name")}
+                    aria-describedby={describe("name", "pe-name-hint")}
+                    onChange={(e) => edit("name", { name: e.target.value })}
+                  />
+                  {fieldMessage("name")}
+                </div>,
+              )}
+
+              {step(
+                2,
+                <div className="step-q">{t("editor.step.env")}</div>,
+                <span className="step-why">{t("editor.step.env.why")}</span>,
+                <div className="field">
+                  <div className="env-row">
+                    <div
+                      className="env-picker"
+                      role="radiogroup"
+                      aria-label={t("editor.env.label")}
+                    >
+                      {envOptions.map((def, index) => {
+                        // The registry's own uniqueness rule, not `===`: a profile
+                        // stored as `Prod` names the same environment the manager holds
+                        // as `prod`, and an exact comparison would leave the picker
+                        // showing nothing checked for a value it is already carrying.
+                        const active = sameEnvironmentName(def.name, form.environment);
+                        return (
+                          <button
+                            key={def.name}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            // One tab stop for the group; the arrows walk it. When
+                            // NOTHING is checked — a profile whose environment is the
+                            // empty string, which a hand-edited profiles.json can
+                            // produce — the first segment takes the stop anyway, or the
+                            // whole group drops out of the tab order (SC 2.1.1).
+                            tabIndex={index === rovingIndex ? 0 : -1}
+                            ref={(el) => {
+                              envRefs.current[def.name] = el;
+                            }}
+                            className={`env-option ${active ? "env-option-active" : ""}`}
+                            {...envAttrs(def)}
+                            onClick={() => patch({ environment: def.name })}
+                            onKeyDown={(e) => onEnvKeyDown(e, index)}
+                          >
+                            {/* Law 2: the chosen segment is never chosen by colour
+                                alone. `aria-checked` says it to assistive tech; this
+                                glyph says it to everyone else. */}
+                            {active && (
+                              <span className="env-option-check" aria-hidden="true">
+                                ✓
+                              </span>
+                            )}
+                            {def.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* Not inside the radio group: it is not one of the choices, and a
+                        radiogroup with a non-radio child is a broken promise about what
+                        the arrow keys reach. */}
+                    <button
+                      type="button"
+                      className="btn btn-ghost env-manage-btn"
+                      onClick={() => setManagingEnvs(true)}
+                    >
+                      {t("editor.env.manage")}
+                    </button>
+                  </div>
+                  {/* The segment labels are NOT translated. They are user data now, and
+                      they are the same strings as `data-env-color`'s sibling attribute,
+                      the forced-colors wire label and the CLI's refusal — a guardrail
+                      that reads differently per locale is two signals where the design
+                      specifies one. */}
+                  <span className="field-hint">
+                    {envUnknown
+                      ? t("editor.env.hint.unknown", { name: form.environment })
+                      : formEnv.protected
+                        ? t("editor.env.hint.protected")
+                        : t("editor.env.hint.other")}
+                  </span>
+                </div>,
+              )}
+
+              {step(
+                3,
+                <label className="step-q" htmlFor="pe-bootstrap">
+                  {t("editor.step.bootstrap")}
+                </label>,
+                <span className="step-why">
+                  {tx("editor.step.bootstrap.why", {
+                    term: (
+                      <Term name="bootstrap-server">
+                        {t("editor.bootstrap.term")}
+                      </Term>
+                    ),
+                  })}
+                </span>,
+                <div className="field">
+                  <textarea
+                    id="pe-bootstrap"
+                    ref={bind("bootstrap")}
+                    rows={3}
+                    className={cls("bootstrap")}
+                    value={form.bootstrap}
+                    placeholder={"broker-1:9092\nbroker-2:9092"}
+                    spellCheck={false}
+                    aria-invalid={invalid("bootstrap")}
+                    aria-describedby={describe("bootstrap", "pe-bootstrap-hint")}
+                    onChange={(e) => edit("bootstrap", { bootstrap: e.target.value })}
+                  />
+                  {fieldMessage("bootstrap")}
+                  <span className="field-hint" id="pe-bootstrap-hint">
+                    {tx("editor.bootstrap.hint", { local: <code>localhost:9092</code> })}
+                  </span>
+                </div>,
+              )}
+
+              {/* Sign-in is never folded. It is the step a connection cannot
+                  work without, and the one whose plain-language options
+                  ("Username and password — SASL/PLAIN") are the direction's
+                  floor under the jargon. The question is the app's own
+                  `editor.auth.label`, which was already phrased as one. */}
+              {step(
+                4,
+                unsupportedAuth ? (
+                  <div className="step-q">{t("editor.auth.label")}</div>
+                ) : (
+                  <label className="step-q" htmlFor="pe-auth-kind">
+                    {t("editor.auth.label")}
+                  </label>
+                ),
+                <span className="step-why">{t("editor.auth.hint")}</span>,
+                // The old `<fieldset>`'s grouping semantics, kept. Only its
+                // legend is redundant with the question above, so the legend
+                // is hidden rather than deleted.
+                <fieldset className="step-fields">
+                  <legend className="sr-only">{t("editor.auth.legend")}</legend>
+
+                  {unsupportedAuth && (
+                    <span className="field-hint">
+                      {tx("editor.auth.kerberos", {
+                        service: <code>{unsupportedAuth.service_name}</code>,
+                        principal: <code>{unsupportedAuth.principal}</code>,
+                      })}
+                    </span>
+                  )}
+
+                  {!unsupportedAuth && (
+                    <div className="field">
+                      {/* No `.field-label`: the step's question is this select's label,
+                          and the hint that used to sit under it is the step's why. */}
+                      <select
+                        id="pe-auth-kind"
+                        value={form.authKind}
+                        onChange={(e) =>
+                          changeAuthKind(e.target.value as EditableAuthKind)
+                        }
+                      >
+                        <option value="plaintext">{t("editor.auth.plaintext")}</option>
+                        <option value="sasl_plain">{t("editor.auth.saslPlain")}</option>
+                        <option value="sasl_scram">{t("editor.auth.saslScram")}</option>
+                        <option value="tls">{t("editor.auth.mtls")}</option>
+                        <option value="aws_msk_iam">{t("editor.auth.mskIam")}</option>
+                        <option value="oauth_bearer">{t("editor.auth.oauth")}</option>
+                        {/* Every disabled control says why. No dead ends. */}
+                        <option
+                          value="kerberos"
+                          disabled
+                          title={t("editor.auth.notYet")}
+                        >
+                          {t("editor.auth.kerberosOption")}
+                        </option>
+                      </select>
+                    </div>
+                  )}
+
+                  {!unsupportedAuth && form.authKind === "sasl_scram" && (
+                    <div className="field">
+                      <label className="field-label" htmlFor="pe-mechanism">
+                        {t("editor.mechanism.label")}
+                      </label>
+                      <select
+                        id="pe-mechanism"
+                        value={form.mechanism}
+                        onChange={(e) =>
+                          patch({ mechanism: e.target.value as ScramMechanism })
+                        }
+                      >
+                        <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                        <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
+                      </select>
+                      <span className="field-hint">{t("editor.mechanism.hint")}</span>
+                    </div>
+                  )}
+
+                  {!unsupportedAuth && showSasl && (
+                    <>
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-username">
+                          {t("editor.username.label")}
+                        </label>
+                        <input
+                          id="pe-username"
+                          ref={bind("username")}
+                          type="text"
+                          className={cls("username", "input-mono")}
+                          value={form.username}
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("username")}
+                          aria-describedby={describe("username")}
+                          onChange={(e) => edit("username", { username: e.target.value })}
+                        />
+                        {fieldMessage("username")}
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-password">
+                          {t("editor.password.label")}
+                        </label>
+                        <input
+                          id="pe-password"
+                          ref={bind("password")}
+                          type="password"
+                          className={cls("password")}
+                          value={form.password}
+                          autoComplete="new-password"
+                          placeholder={
+                            hasStoredPassword
+                              ? t("editor.secret.unchanged")
+                              : t("editor.password.placeholder")
+                          }
+                          aria-invalid={invalid("password")}
+                          aria-describedby={describe("password", "pe-password-hint")}
+                          onChange={(e) => edit("password", { password: e.target.value })}
+                        />
+                        {fieldMessage("password")}
+                        <span className="field-hint" id="pe-password-hint">
+                          {t("editor.password.hint")}
+                        </span>
+                      </div>
+
+                      {/* 18px box in an 18px/1fr grid with the hint in row 2 /
+                          column 2. The hint is a sibling, not part of the label, so it
+                          describes the control instead of renaming it. */}
+                      <div className="check-field">
+                        <input
+                          id="pe-tls"
+                          type="checkbox"
+                          checked={form.tls}
+                          aria-describedby="pe-tls-hint"
+                          onChange={(e) => patch({ tls: e.target.checked })}
+                        />
+                        <label className="check-label" htmlFor="pe-tls">
+                          {t("editor.tls.label")}
+                        </label>
+                        <span className="field-hint" id="pe-tls-hint">
+                          {t("editor.tls.hint")}
+                        </span>
+                      </div>
+                    </>
+                  )}
+
+                  {!unsupportedAuth && showMtls && (
+                    <>
+                      <span className="field-hint">{t("editor.mtls.hint")}</span>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-ca-path">
+                          {t("editor.caPath.label")}
+                        </label>
+                        <input
+                          id="pe-ca-path"
+                          ref={bind("caPath")}
+                          type="text"
+                          className={cls("caPath", "input-mono")}
+                          value={form.caPath}
+                          placeholder="/etc/kafka/ca.pem"
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("caPath")}
+                          aria-describedby={describe("caPath", "pe-ca-path-hint")}
+                          onChange={(e) => edit("caPath", { caPath: e.target.value })}
+                        />
+                        {fieldMessage("caPath")}
+                        <span className="field-hint" id="pe-ca-path-hint">
+                          {t("editor.caPath.hint")}
+                        </span>
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-client-cert">
+                          {t("editor.clientCert.label")}
+                        </label>
+                        <input
+                          id="pe-client-cert"
+                          ref={bind("clientCert")}
+                          type="text"
+                          className={cls("clientCert", "input-mono")}
+                          value={form.clientCert}
+                          placeholder="/etc/kafka/client.pem"
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("clientCert")}
+                          aria-describedby={describe(
+                            "clientCert",
+                            "pe-client-cert-hint",
+                          )}
+                          onChange={(e) =>
+                            edit("clientCert", { clientCert: e.target.value })
+                          }
+                        />
+                        {fieldMessage("clientCert")}
+                        <span className="field-hint" id="pe-client-cert-hint">
+                          {t("editor.clientCert.hint")}
+                        </span>
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-client-key">
+                          {t("editor.clientKey.label")}
+                        </label>
+                        <textarea
+                          id="pe-client-key"
+                          ref={bind("clientKey")}
+                          rows={5}
+                          className={cls("clientKey")}
+                          value={form.clientKey}
+                          placeholder={
+                            hasStoredClientKey
+                              ? t("editor.secret.unchanged")
+                              : // A PEM header is a literal, not prose: it stays
+                                // verbatim in every locale (§4).
+                                "-----BEGIN PRIVATE KEY-----\n…"
+                          }
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("clientKey")}
+                          aria-describedby={describe("clientKey", "pe-client-key-hint")}
+                          onChange={(e) =>
+                            edit("clientKey", { clientKey: e.target.value })
+                          }
+                        />
+                        {fieldMessage("clientKey")}
+                        <span className="field-hint" id="pe-client-key-hint">
+                          {t("editor.clientKey.hint")}
+                          {hasStoredClientKey ? ` ${t("editor.clientKey.storedHint")}` : ""}
+                        </span>
+                      </div>
+                    </>
+                  )}
+
+                  {!unsupportedAuth && showAws && (
+                    <>
+                      <span className="field-hint">
+                        {tx("editor.aws.hint", {
+                          host: <code>.amazonaws.com</code>,
+                        })}
+                      </span>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-region">
+                          {t("editor.region.label")}
+                        </label>
+                        <input
+                          id="pe-region"
+                          ref={bind("region")}
+                          type="text"
+                          className={cls("region", "input-mono")}
+                          value={form.region}
+                          placeholder="eu-west-1"
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("region")}
+                          aria-describedby={describe("region", "pe-region-hint")}
+                          onChange={(e) => edit("region", { region: e.target.value })}
+                        />
+                        {fieldMessage("region")}
+                        <span className="field-hint" id="pe-region-hint">
+                          {t("editor.region.hint")}
+                        </span>
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-aws-profile">
+                          {t("editor.awsProfile.label")}
+                        </label>
+                        <input
+                          id="pe-aws-profile"
+                          ref={bind("awsProfile")}
+                          type="text"
+                          className={cls("awsProfile", "input-mono")}
+                          value={form.awsProfile}
+                          placeholder="default"
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("awsProfile")}
+                          aria-describedby={describe("awsProfile", "pe-aws-profile-hint")}
+                          onChange={(e) =>
+                            edit("awsProfile", { awsProfile: e.target.value })
+                          }
+                        />
+                        {fieldMessage("awsProfile")}
+                        <span className="field-hint" id="pe-aws-profile-hint">
+                          {tx("editor.awsProfile.hint", {
+                            config: <code>~/.aws/config</code>,
+                            dir: <code>~/.aws</code>,
+                          })}
+                        </span>
+                      </div>
+                    </>
+                  )}
+
+                  {!unsupportedAuth && showOauth && (
+                    <>
+                      <span className="field-hint">{t("editor.oauth.hint")}</span>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-token-endpoint">
+                          {t("editor.tokenEndpoint.label")}
+                        </label>
+                        <input
+                          id="pe-token-endpoint"
+                          ref={bind("tokenEndpoint")}
+                          type="text"
+                          className={cls("tokenEndpoint", "input-mono")}
+                          value={form.tokenEndpoint}
+                          placeholder="https://login.example.com/oauth2/token"
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("tokenEndpoint")}
+                          aria-describedby={describe(
+                            "tokenEndpoint",
+                            "pe-token-endpoint-hint",
+                          )}
+                          onChange={(e) =>
+                            edit("tokenEndpoint", { tokenEndpoint: e.target.value })
+                          }
+                        />
+                        {fieldMessage("tokenEndpoint")}
+                        <span className="field-hint" id="pe-token-endpoint-hint">
+                          {t("editor.tokenEndpoint.hint")}
+                        </span>
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-client-id">
+                          {t("editor.clientId.label")}
+                        </label>
+                        <input
+                          id="pe-client-id"
+                          ref={bind("clientId")}
+                          type="text"
+                          className={cls("clientId", "input-mono")}
+                          value={form.clientId}
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-invalid={invalid("clientId")}
+                          aria-describedby={describe("clientId", "pe-client-id-hint")}
+                          onChange={(e) => edit("clientId", { clientId: e.target.value })}
+                        />
+                        {fieldMessage("clientId")}
+                        <span className="field-hint" id="pe-client-id-hint">
+                          {t("editor.clientId.hint")}
+                        </span>
+                      </div>
+
+                      <div className="field">
+                        <label className="field-label" htmlFor="pe-client-secret">
+                          {t("editor.clientSecret.label")}
+                        </label>
+                        <input
+                          id="pe-client-secret"
+                          ref={bind("clientSecret")}
+                          type="password"
+                          className={cls("clientSecret")}
+                          value={form.clientSecret}
+                          autoComplete="new-password"
+                          placeholder={
+                            hasStoredClientSecret
+                              ? t("editor.secret.unchanged")
+                              : t("editor.clientSecret.placeholder")
+                          }
+                          aria-invalid={invalid("clientSecret")}
+                          aria-describedby={describe(
+                            "clientSecret",
+                            "pe-client-secret-hint",
+                          )}
+                          onChange={(e) =>
+                            edit("clientSecret", { clientSecret: e.target.value })
+                          }
+                        />
+                        {fieldMessage("clientSecret")}
+                        <span className="field-hint" id="pe-client-secret-hint">
+                          {t("editor.clientSecret.hint")}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </fieldset>,
+              )}
+
+              {/* Schema Registry — optional, and independent of how the cluster
+                  checks who you are: a broker on mTLS can sit in front of a
+                  registry behind basic auth. Leaving the address empty is the
+                  same as having no registry, and clearing it removes the
+                  stored password with it.
+
+                  A STEP WHOSE CONTROL IS A FOLD, exactly as the mockup draws
+                  it. Progressive disclosure earns its place on the sections
+                  most connections leave empty; it does NOT get to hide a value
+                  somebody set, which is what `srConfigured` and the note on
+                  the summary are both for. */}
+              {step(
+                5,
+                <div className="step-q">
+                  {t("editor.step.sr")}{" "}
+                  <span className="step-q-optional">
+                    {t("editor.step.optional")}
+                  </span>
+                </div>,
+                <span className="step-why">{t("editor.sr.hint")}</span>,
+                <details className="fold" open={srConfigured}>
+                  {foldSummary(
+                    t("editor.sr.legend"),
+                    srConfigured ? t("editor.fold.set") : t("editor.fold.notSet"),
+                  )}
+                  <fieldset className="fieldset fold-body" aria-label={t("editor.sr.legend")}>
+                    <div className="field">
+                      <label className="field-label" htmlFor="pe-sr-url">
+                        {t("editor.srUrl.label")}
+                      </label>
+                      <input
+                        id="pe-sr-url"
+                        ref={bind("srUrl")}
+                        type="text"
+                        className={cls("srUrl", "input-mono")}
+                        value={form.srUrl}
+                        placeholder="http://localhost:8081"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-invalid={invalid("srUrl")}
+                        aria-describedby={describe("srUrl", "pe-sr-url-hint")}
+                        onChange={(e) => edit("srUrl", { srUrl: e.target.value })}
+                      />
+                      {fieldMessage("srUrl")}
+                      <span className="field-hint" id="pe-sr-url-hint">
+                        {t("editor.srUrl.hint")}
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label className="field-label" htmlFor="pe-sr-username">
+                        {t("editor.srUsername.label")}
+                      </label>
+                      <input
+                        id="pe-sr-username"
+                        ref={bind("srUsername")}
+                        type="text"
+                        className={cls("srUsername", "input-mono")}
+                        value={form.srUsername}
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-invalid={invalid("srUsername")}
+                        aria-describedby={describe("srUsername", "pe-sr-username-hint")}
+                        onChange={(e) => edit("srUsername", { srUsername: e.target.value })}
+                      />
+                      {fieldMessage("srUsername")}
+                      <span className="field-hint" id="pe-sr-username-hint">
+                        {t("editor.srUsername.hint")}
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label className="field-label" htmlFor="pe-sr-password">
+                        {t("editor.srPassword.label")}
+                      </label>
+                      <input
+                        id="pe-sr-password"
+                        ref={bind("srPassword")}
+                        type="password"
+                        className={cls("srPassword")}
+                        value={form.srPassword}
+                        autoComplete="new-password"
+                        placeholder={
+                          hasStoredSrPassword
+                            ? t("editor.secret.unchanged")
+                            : t("editor.password.placeholder")
+                        }
+                        aria-invalid={invalid("srPassword")}
+                        aria-describedby={describe("srPassword", "pe-sr-password-hint")}
+                        onChange={(e) => edit("srPassword", { srPassword: e.target.value })}
+                      />
+                      {fieldMessage("srPassword")}
+                      <span className="field-hint" id="pe-sr-password-hint">
+                        {t("editor.password.hint")}
+                        {hasStoredSrPassword ? ` ${t("editor.srPassword.storedHint")}` : ""}
+                      </span>
+                    </div>
+                  </fieldset>
+                </details>,
+              )}
+
+              {/* THE ONE STEP THAT IS NEVER A FOLD, and the last question the
+                  ladder asks because it is the one you answer about somebody
+                  else's cluster. Read-only is guardrail layer 2, and §6's rule
+                  is that a guardrail is legible without being looked for. */}
+              {step(
+                6,
+                <div className="step-q">{t("editor.step.readonly")}</div>,
+                <span className="step-why">{t("editor.step.readonly.why")}</span>,
+                <div className="check-field">
+                  <input
+                    id="pe-readonly"
+                    type="checkbox"
+                    checked={form.readOnly}
+                    aria-describedby="pe-readonly-hint"
+                    onChange={(e) => patch({ readOnly: e.target.checked })}
+                  />
+                  <label className="check-label" htmlFor="pe-readonly">
+                    {t("editor.readonly.label")}
+                  </label>
+                  <span className="field-hint" id="pe-readonly-hint">
+                    {t("editor.readonly.hint")}
+                  </span>
+                </div>,
+              )}
+            </ol>
+
+            {/* Kafka Connect — optional, plural, and independent of both the
+                sign-in method and the registry: the workers are a separate
+                service with their own address and their own credentials.
+                Removing a cluster here takes its keychain entry with it,
+                exactly like clearing the registry's address does.
+
+                The summary note is a COUNT rather than a yes/no: this is the
+                one repeated section, so "3 clusters" is the fact worth having
+                before you decide whether to open it. */}
+            <details className="fold" open={connectConfigured}>
+              {foldSummary(
+                t("editor.connect.legend"),
+                connectConfigured
+                  ? t("editor.fold.connectCount", { count: form.connect.length })
+                  : t("editor.fold.notSet"),
+              )}
+              <fieldset
+                className="fieldset fold-body"
+                aria-label={t("editor.connect.legend")}
+              >
+                <span className="field-hint">{t("editor.connect.hint")}</span>
+
+                {form.connect.map((cluster, row) => (
+                  <div className="connect-cluster" key={cluster.key}>
+                    <div className="connect-cluster-head">
+                      <span className="eyebrow">
+                        {cluster.name.trim().length > 0
+                          ? cluster.name
+                          : t("editor.connect.unnamed", { number: row + 1 })}
+                      </span>
+                      {/* Every Connect row has a Remove button, so "Remove" on its
+                          own is N identically-named controls in one form. The label
+                          says which row it belongs to; the visible word does not
+                          change (SC 2.4.6). */}
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        aria-label={t("editor.connect.removeLabel", {
+                          name:
+                            cluster.name.trim().length > 0
+                              ? cluster.name
+                              : t("editor.connect.unnamedLong", { number: row + 1 }),
+                        })}
+                        title={t("editor.connect.remove")}
+                        onClick={() => removeConnect(row)}
+                      >
+                        {t("common.remove")}
+                      </button>
+                    </div>
+
+                    <div className="field">
+                      <label
+                        className="field-label"
+                        htmlFor={`pe-connect-${row}-name`}
+                      >
+                        {t("editor.connect.name.label")}
+                      </label>
+                      <input
+                        id={`pe-connect-${row}-name`}
+                        ref={connectBind(row, "name")}
+                        type="text"
+                        className={connCls(row, "connectName")}
+                        value={cluster.name}
+                        placeholder={t("editor.connect.name.placeholder")}
+                        autoComplete="off"
+                        aria-invalid={connInvalid(row, "connectName")}
+                        aria-describedby={connDescribe(
+                          row,
+                          "connectName",
+                          `pe-connect-${row}-name-hint`,
+                        )}
+                        onChange={(e) => editConnect(row, { name: e.target.value })}
+                      />
+                      {connMessage(row, "connectName")}
+                      <span
+                        className="field-hint"
+                        id={`pe-connect-${row}-name-hint`}
+                      >
+                        {t("editor.connect.name.hint")}
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label className="field-label" htmlFor={`pe-connect-${row}-url`}>
+                        {t("editor.connect.url.label")}
+                      </label>
+                      <input
+                        id={`pe-connect-${row}-url`}
+                        ref={connectBind(row, "url")}
+                        type="text"
+                        className={connCls(row, "connectUrl", "input-mono")}
+                        value={cluster.url}
+                        placeholder="http://connect-1.internal:8083"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-invalid={connInvalid(row, "connectUrl")}
+                        aria-describedby={connDescribe(
+                          row,
+                          "connectUrl",
+                          `pe-connect-${row}-url-hint`,
+                        )}
+                        onChange={(e) => editConnect(row, { url: e.target.value })}
+                      />
+                      {connMessage(row, "connectUrl")}
+                      <span className="field-hint" id={`pe-connect-${row}-url-hint`}>
+                        {t("editor.connect.url.hint")}
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label
+                        className="field-label"
+                        htmlFor={`pe-connect-${row}-user`}
+                      >
+                        {t("editor.username.label")}
+                      </label>
+                      <input
+                        id={`pe-connect-${row}-user`}
+                        type="text"
+                        className="input-mono"
+                        value={cluster.username}
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-describedby={`pe-connect-${row}-user-hint`}
+                        onChange={(e) => editConnect(row, { username: e.target.value })}
+                      />
+                      <span className="field-hint" id={`pe-connect-${row}-user-hint`}>
+                        {t("editor.connect.username.hint")}
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label
+                        className="field-label"
+                        htmlFor={`pe-connect-${row}-password`}
+                      >
+                        {t("editor.password.label")}
+                      </label>
+                      <input
+                        id={`pe-connect-${row}-password`}
+                        type="password"
+                        value={cluster.password}
+                        autoComplete="new-password"
+                        placeholder={
+                          cluster.entry !== null && connectStored[cluster.entry]
+                            ? t("editor.secret.unchanged")
+                            : t("editor.password.placeholder")
+                        }
+                        aria-describedby={`pe-connect-${row}-password-hint`}
+                        onChange={(e) => editConnect(row, { password: e.target.value })}
+                      />
+                      <span
+                        className="field-hint"
+                        id={`pe-connect-${row}-password-hint`}
+                      >
+                        {t("editor.password.hint")}
+                        {cluster.entry !== null && connectStored[cluster.entry]
+                          ? ` ${t("editor.connect.password.storedHint")}`
+                          : ""}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+
+                <button type="button" className="btn" onClick={addConnect}>
+                  {t("editor.connect.add")}
+                </button>
+              </fieldset>
+            </details>
+
+            {/* Monitoring — optional, and independent of everything above it. The
+                metrics endpoint is a plain HTTP address in front of JMX, and the
+                sampler is Kavka's own clock. Neither has anything to do with how the
+                cluster checks who you are. */}
+            <details className="fold" open={monitoringConfigured}>
+              {foldSummary(
+                t("editor.monitoring.legend"),
+                monitoringConfigured ? t("editor.fold.set") : t("editor.fold.notSet"),
+              )}
+              <fieldset
+                className="fieldset fold-body"
+                aria-label={t("editor.monitoring.legend")}
+              >
+                <span className="field-hint">{t("editor.monitoring.hint")}</span>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="pe-metrics-url">
+                    {t("editor.metricsUrl.label")}
+                  </label>
+                  <input
+                    id="pe-metrics-url"
+                    ref={bind("metricsUrl")}
+                    type="text"
+                    className={cls("metricsUrl", "input-mono")}
+                    value={form.metricsUrl}
+                    placeholder="http://broker-1.internal:7071/metrics"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={invalid("metricsUrl")}
+                    aria-describedby={describe("metricsUrl", "pe-metrics-url-hint")}
+                    onChange={(e) => edit("metricsUrl", { metricsUrl: e.target.value })}
+                  />
+                  {fieldMessage("metricsUrl")}
+                  <span className="field-hint" id="pe-metrics-url-hint">
+                    {tx("editor.metricsUrl.hint", {
+                      agent: <code>jmx_exporter</code>,
+                      flag: (
+                        <code>
+                          -javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml
+                        </code>
+                      ),
+                    })}
+                  </span>
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="pe-metrics-user">
+                    {t("editor.metricsUsername.label")}
+                  </label>
+                  <input
+                    id="pe-metrics-user"
+                    ref={bind("metricsUsername")}
+                    type="text"
+                    className={cls("metricsUsername", "input-mono")}
+                    value={form.metricsUsername}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={invalid("metricsUsername")}
+                    aria-describedby={describe(
+                      "metricsUsername",
+                      "pe-metrics-user-hint",
+                    )}
+                    onChange={(e) =>
+                      edit("metricsUsername", { metricsUsername: e.target.value })
+                    }
+                  />
+                  {fieldMessage("metricsUsername")}
+                  <span className="field-hint" id="pe-metrics-user-hint">
+                    {t("editor.metricsUsername.hint")}
+                  </span>
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="pe-metrics-password">
+                    {t("editor.metricsPassword.label")}
+                  </label>
+                  <input
+                    id="pe-metrics-password"
+                    ref={bind("metricsPassword")}
+                    type="password"
+                    className={cls("metricsPassword")}
+                    value={form.metricsPassword}
+                    autoComplete="new-password"
+                    placeholder={
+                      hasStoredMetricsPassword
+                        ? t("editor.secret.unchanged")
+                        : t("editor.password.placeholder")
+                    }
+                    aria-invalid={invalid("metricsPassword")}
+                    aria-describedby={describe(
+                      "metricsPassword",
+                      "pe-metrics-password-hint",
+                    )}
+                    onChange={(e) =>
+                      edit("metricsPassword", { metricsPassword: e.target.value })
+                    }
+                  />
+                  {fieldMessage("metricsPassword")}
+                  <span className="field-hint" id="pe-metrics-password-hint">
+                    {t("editor.password.hint")}
+                    {hasStoredMetricsPassword
+                      ? ` ${t("editor.metricsPassword.storedHint")}`
+                      : ""}
+                  </span>
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="pe-sampler">
+                    {t("editor.sampler.label")}
+                  </label>
+                  <input
+                    id="pe-sampler"
+                    ref={bind("samplerSeconds")}
+                    type="number"
+                    min={SAMPLER_MIN_MS / 1000}
+                    step={1}
+                    className={cls("samplerSeconds")}
+                    value={form.samplerSeconds}
+                    aria-invalid={invalid("samplerSeconds")}
+                    aria-describedby={describe("samplerSeconds", "pe-sampler-hint")}
+                    onChange={(e) =>
+                      edit("samplerSeconds", { samplerSeconds: e.target.value })
+                    }
+                  />
+                  {fieldMessage("samplerSeconds")}
+                  <span className="field-hint" id="pe-sampler-hint">
+                    {tx("editor.sampler.hint", {
+                      days: t("unit.days", { count: HISTORY_RETENTION_DAYS }),
+                      // The <strong> is a param, so the emphasis travels with the
+                      // sentence rather than a translator having to guess which
+                      // clause it wrapped.
+                      warning: <strong>{t("editor.sampler.warning")}</strong>,
+                      floor: spanText(t, SAMPLER_MIN_MS),
+                      default: spanText(t, SAMPLER_DEFAULT_MS),
+                    })}
+                  </span>
+                </div>
+              </fieldset>
+            </details>
+
+            {/* Custom decoders — independent of everything above, and stored beside
+                the connection rather than inside it. The section states that, since
+                it is the one part of this form that writes as you type.
+
+                NOT folded from out here: it renders its own `.fieldset`, which
+                `.editor-body > .fieldset` dresses as a sunken block in place,
+                and wrapping somebody else's heading in a summary of mine would
+                put two headings on one section. */}
+            <WasmSerdesFields profileId={profile?.id ?? null} />
+
+            {/* The last connect failure, in full, right above the button that
+                caused it — and still on screen while the user fixes the field it
+                points at. It clears when the next attempt starts, not on a timer
+                and not on a click somewhere else.
+
+                IT SAYS THE SAME THING AS THE PERCH, AND THAT IS DELIBERATE. The
+                Perch answers "what happened" in one line at the TOP of a form that
+                is several screens tall; by the time you are standing on the Connect
+                button it is long out of view. This banner is the same classification
+                where the fix is, plus the one thing the Perch will never carry — the
+                broker's verbatim reply, behind Show details. Two surfaces, two jobs;
+                neither is the other's leftovers. */}
+            {connError && !connecting && <ErrorBanner raw={connError} />}
+          </div>
+
+          {/* THE ACTION BAR, in the mockup's `.panel-foot` — the panel's own
+              bottom edge rather than three buttons trailing off the end of a
+              column. Two rows: Save and Connect on the first with the live
+              state pushed right, Delete on the second, because a destructive
+              button beside the primary is a destructive button somebody
+              eventually hits instead of it. */}
+          <div className="panel-foot editor-foot">
+            <div className="editor-foot-row">
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || connecting}
+                title={waitReason}
+                onClick={() => void handleSave()}
+              >
+                {t("editor.saveConnection")}
+              </button>
+
+              {/* THE CONNECT BUTTON, AND THE GLITCH THIS PHASE WAS SENT TO FIX.
+                  Both faces sit in ONE grid cell (see `.btn-swap`): the cell is
+                  sized by the wider of them, so the button's width is fixed by
+                  construction and the spinner cannot resize it mid-click — the
+                  property the old `.btn-busy-slot` was reaching for. What it
+                  no longer does is reserve a permanently EMPTY 16px box on an
+                  idle button, which is what read as a missing icon and pushed
+                  the label off centre. */}
+              <button
+                type="submit"
+                className="btn btn-primary btn-swap"
+                disabled={busy || connecting}
+                aria-busy={connecting}
+                title={waitReason}
+              >
+                <span className="btn-swap-face">{t("common.connect")}</span>
+                <span className="btn-swap-face btn-swap-busy">
+                  <span className="spinner" aria-hidden="true" />
+                  {t("common.connect")}
                 </span>
-                {/* Every Connect row has a Remove button, so "Remove" on its
-                    own is N identically-named controls in one form. The label
-                    says which row it belongs to; the visible word does not
-                    change (SC 2.4.6). */}
+              </button>
+
+              {isNew && (
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  aria-label={t("editor.connect.removeLabel", {
-                    name:
-                      cluster.name.trim().length > 0
-                        ? cluster.name
-                        : t("editor.connect.unnamedLong", { number: row + 1 }),
-                  })}
-                  title={t("editor.connect.remove")}
-                  onClick={() => removeConnect(row)}
-                >
-                  {t("common.remove")}
-                </button>
-              </div>
-
-              <div className="field">
-                <label
-                  className="field-label"
-                  htmlFor={`pe-connect-${row}-name`}
-                >
-                  {t("editor.connect.name.label")}
-                </label>
-                <input
-                  id={`pe-connect-${row}-name`}
-                  ref={connectBind(row, "name")}
-                  type="text"
-                  className={connCls(row, "connectName")}
-                  value={cluster.name}
-                  placeholder={t("editor.connect.name.placeholder")}
-                  autoComplete="off"
-                  aria-invalid={connInvalid(row, "connectName")}
-                  aria-describedby={connDescribe(
-                    row,
-                    "connectName",
-                    `pe-connect-${row}-name-hint`,
-                  )}
-                  onChange={(e) => editConnect(row, { name: e.target.value })}
-                />
-                {connMessage(row, "connectName")}
-                <span
-                  className="field-hint"
-                  id={`pe-connect-${row}-name-hint`}
-                >
-                  {t("editor.connect.name.hint")}
-                </span>
-              </div>
-
-              <div className="field">
-                <label className="field-label" htmlFor={`pe-connect-${row}-url`}>
-                  {t("editor.connect.url.label")}
-                </label>
-                <input
-                  id={`pe-connect-${row}-url`}
-                  ref={connectBind(row, "url")}
-                  type="text"
-                  className={connCls(row, "connectUrl", "input-mono")}
-                  value={cluster.url}
-                  placeholder="http://connect-1.internal:8083"
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-invalid={connInvalid(row, "connectUrl")}
-                  aria-describedby={connDescribe(
-                    row,
-                    "connectUrl",
-                    `pe-connect-${row}-url-hint`,
-                  )}
-                  onChange={(e) => editConnect(row, { url: e.target.value })}
-                />
-                {connMessage(row, "connectUrl")}
-                <span className="field-hint" id={`pe-connect-${row}-url-hint`}>
-                  {t("editor.connect.url.hint")}
-                </span>
-              </div>
-
-              <div className="field">
-                <label
-                  className="field-label"
-                  htmlFor={`pe-connect-${row}-user`}
-                >
-                  {t("editor.username.label")}
-                </label>
-                <input
-                  id={`pe-connect-${row}-user`}
-                  type="text"
-                  className="input-mono"
-                  value={cluster.username}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-describedby={`pe-connect-${row}-user-hint`}
-                  onChange={(e) => editConnect(row, { username: e.target.value })}
-                />
-                <span className="field-hint" id={`pe-connect-${row}-user-hint`}>
-                  {t("editor.connect.username.hint")}
-                </span>
-              </div>
-
-              <div className="field">
-                <label
-                  className="field-label"
-                  htmlFor={`pe-connect-${row}-password`}
-                >
-                  {t("editor.password.label")}
-                </label>
-                <input
-                  id={`pe-connect-${row}-password`}
-                  type="password"
-                  value={cluster.password}
-                  autoComplete="new-password"
-                  placeholder={
-                    cluster.entry !== null && connectStored[cluster.entry]
-                      ? t("editor.secret.unchanged")
-                      : t("editor.password.placeholder")
-                  }
-                  aria-describedby={`pe-connect-${row}-password-hint`}
-                  onChange={(e) => editConnect(row, { password: e.target.value })}
-                />
-                <span
-                  className="field-hint"
-                  id={`pe-connect-${row}-password-hint`}
-                >
-                  {t("editor.password.hint")}
-                  {cluster.entry !== null && connectStored[cluster.entry]
-                    ? ` ${t("editor.connect.password.storedHint")}`
-                    : ""}
-                </span>
-              </div>
-            </div>
-          ))}
-
-          <button type="button" className="btn" onClick={addConnect}>
-            {t("editor.connect.add")}
-          </button>
-        </fieldset>
-      </details>
-
-      {/* Monitoring — optional, and independent of everything above it. The
-          metrics endpoint is a plain HTTP address in front of JMX, and the
-          sampler is Kavka's own clock. Neither has anything to do with how the
-          cluster checks who you are. */}
-      <details className="fold" open={monitoringConfigured}>
-        {foldSummary(
-          t("editor.monitoring.legend"),
-          monitoringConfigured ? t("editor.fold.set") : t("editor.fold.notSet"),
-        )}
-        <fieldset
-          className="fieldset fold-body"
-          aria-label={t("editor.monitoring.legend")}
-        >
-          <span className="field-hint">{t("editor.monitoring.hint")}</span>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-metrics-url">
-              {t("editor.metricsUrl.label")}
-            </label>
-            <input
-              id="pe-metrics-url"
-              ref={bind("metricsUrl")}
-              type="text"
-              className={cls("metricsUrl", "input-mono")}
-              value={form.metricsUrl}
-              placeholder="http://broker-1.internal:7071/metrics"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={invalid("metricsUrl")}
-              aria-describedby={describe("metricsUrl", "pe-metrics-url-hint")}
-              onChange={(e) => edit("metricsUrl", { metricsUrl: e.target.value })}
-            />
-            {fieldMessage("metricsUrl")}
-            <span className="field-hint" id="pe-metrics-url-hint">
-              {tx("editor.metricsUrl.hint", {
-                agent: <code>jmx_exporter</code>,
-                flag: (
-                  <code>
-                    -javaagent:jmx_prometheus_javaagent.jar=7071:kafka.yml
-                  </code>
-                ),
-              })}
-            </span>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-metrics-user">
-              {t("editor.metricsUsername.label")}
-            </label>
-            <input
-              id="pe-metrics-user"
-              ref={bind("metricsUsername")}
-              type="text"
-              className={cls("metricsUsername", "input-mono")}
-              value={form.metricsUsername}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={invalid("metricsUsername")}
-              aria-describedby={describe(
-                "metricsUsername",
-                "pe-metrics-user-hint",
-              )}
-              onChange={(e) =>
-                edit("metricsUsername", { metricsUsername: e.target.value })
-              }
-            />
-            {fieldMessage("metricsUsername")}
-            <span className="field-hint" id="pe-metrics-user-hint">
-              {t("editor.metricsUsername.hint")}
-            </span>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-metrics-password">
-              {t("editor.metricsPassword.label")}
-            </label>
-            <input
-              id="pe-metrics-password"
-              ref={bind("metricsPassword")}
-              type="password"
-              className={cls("metricsPassword")}
-              value={form.metricsPassword}
-              autoComplete="new-password"
-              placeholder={
-                hasStoredMetricsPassword
-                  ? t("editor.secret.unchanged")
-                  : t("editor.password.placeholder")
-              }
-              aria-invalid={invalid("metricsPassword")}
-              aria-describedby={describe(
-                "metricsPassword",
-                "pe-metrics-password-hint",
-              )}
-              onChange={(e) =>
-                edit("metricsPassword", { metricsPassword: e.target.value })
-              }
-            />
-            {fieldMessage("metricsPassword")}
-            <span className="field-hint" id="pe-metrics-password-hint">
-              {t("editor.password.hint")}
-              {hasStoredMetricsPassword
-                ? ` ${t("editor.metricsPassword.storedHint")}`
-                : ""}
-            </span>
-          </div>
-
-          <div className="field">
-            <label className="field-label" htmlFor="pe-sampler">
-              {t("editor.sampler.label")}
-            </label>
-            <input
-              id="pe-sampler"
-              ref={bind("samplerSeconds")}
-              type="number"
-              min={SAMPLER_MIN_MS / 1000}
-              step={1}
-              className={cls("samplerSeconds")}
-              value={form.samplerSeconds}
-              aria-invalid={invalid("samplerSeconds")}
-              aria-describedby={describe("samplerSeconds", "pe-sampler-hint")}
-              onChange={(e) =>
-                edit("samplerSeconds", { samplerSeconds: e.target.value })
-              }
-            />
-            {fieldMessage("samplerSeconds")}
-            <span className="field-hint" id="pe-sampler-hint">
-              {tx("editor.sampler.hint", {
-                days: t("unit.days", { count: HISTORY_RETENTION_DAYS }),
-                // The <strong> is a param, so the emphasis travels with the
-                // sentence rather than a translator having to guess which
-                // clause it wrapped.
-                warning: <strong>{t("editor.sampler.warning")}</strong>,
-                floor: spanText(t, SAMPLER_MIN_MS),
-                default: spanText(t, SAMPLER_DEFAULT_MS),
-              })}
-            </span>
-          </div>
-        </fieldset>
-      </details>
-
-      {/* Custom decoders — independent of everything above, and stored beside
-          the connection rather than inside it. The section states that, since
-          it is the one part of this form that writes as you type.
-
-          NOT folded from out here: it renders its own `.fieldset`, which this
-          sweep restyles into a raised panel in place, and wrapping somebody
-          else's heading in a summary of mine would put two headings on one
-          section. */}
-      <WasmSerdesFields profileId={profile?.id ?? null} />
-
-      {/* THE ONE SECTION THAT IS NEVER A FOLD. Read-only is guardrail layer 2,
-          and §6's rule is that a guardrail is legible without being looked
-          for — so it gets a panel of its own with a heading, rather than
-          trailing off the bottom of the form as a loose checkbox. */}
-      <fieldset className="fieldset">
-        <legend className="eyebrow">{t("editor.guardrails.legend")}</legend>
-        <div className="check-field">
-          <input
-            id="pe-readonly"
-            type="checkbox"
-            checked={form.readOnly}
-            aria-describedby="pe-readonly-hint"
-            onChange={(e) => patch({ readOnly: e.target.checked })}
-          />
-          <label className="check-label" htmlFor="pe-readonly">
-            {t("editor.readonly.label")}
-          </label>
-          <span className="field-hint" id="pe-readonly-hint">
-            {t("editor.readonly.hint")}
-          </span>
-        </div>
-      </fieldset>
-
-      {/* The last connect failure, in full, right above the button that
-          caused it — and still on screen while the user fixes the field it
-          points at. It clears when the next attempt starts, not on a timer
-          and not on a click somewhere else.
-
-          IT SAYS THE SAME THING AS THE PERCH, AND THAT IS DELIBERATE. The
-          Perch answers "what happened" in one line at the TOP of a form that
-          is several screens tall; by the time you are standing on the Connect
-          button it is long out of view. This banner is the same classification
-          where the fix is, plus the one thing the Perch will never carry — the
-          broker's verbatim reply, behind Show details. Two surfaces, two jobs;
-          neither is the other's leftovers. */}
-      {connError && !connecting && <ErrorBanner raw={connError} />}
-
-      <div className="editor-actions">
-        <div className="editor-actions-left">
-          <button
-            type="button"
-            className="btn"
-            disabled={busy || connecting}
-            title={waitReason}
-            onClick={() => void handleSave()}
-          >
-            {t("common.save")}
-          </button>
-          {/* The busy slot is a fixed 16px and always present, so the button
-              never resizes mid-click and shifts everything after it. */}
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={busy || connecting}
-            aria-busy={connecting}
-            title={waitReason}
-          >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {connecting ? <span className="spinner" /> : null}
-            </span>
-            {t("common.connect")}
-          </button>
-          {isNew && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={busy}
-              title={savingReason}
-              onClick={onCancelNew}
-            >
-              {t("common.cancel")}
-            </button>
-          )}
-        </div>
-        {!isNew && (
-          <div className="editor-actions-right">
-            {confirmingDelete ? (
-              <span className="confirm-inline">
-                {/* Destructive copy states the blast radius before the button,
-                    and the confirm restates the verb — never "OK". */}
-                <span className="confirm-text">
-                  {t("editor.delete.confirm", { name: profile.name })}
-                </span>
-                <button
-                  type="button"
-                  className="btn"
                   disabled={busy}
                   title={savingReason}
-                  onClick={() => setConfirmingDelete(false)}
+                  onClick={onCancelNew}
                 >
                   {t("common.cancel")}
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-danger-confirm"
-                  disabled={busy || connecting}
-                  title={waitReason}
-                  onClick={() => void handleDelete()}
-                >
-                  {t("editor.delete")}
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-danger"
-                disabled={busy || connecting}
-                title={waitReason}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                {t("editor.delete")}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+              )}
 
-      <span className="editor-kbd-hint">
-        <span className="kbd">Enter</span> {t("editor.kbd.connect")}
-        <span aria-hidden="true">·</span>
-        <span className="kbd">Esc</span>{" "}
-        {isNew ? t("editor.kbd.cancel") : t("editor.kbd.undo")}
-      </span>
-    </form>
+              {/* Where the mockup prints "● Last connected 2 minutes ago · 1
+                  broker answered in 41 ms". Kavka keeps no last-connected
+                  time, so this states what it does know — the live state of
+                  this session — and the disconnected case says out loud that
+                  the history the mockup implied does not exist. Law 2: the dot
+                  never carries it alone. */}
+              <span className="editor-state">
+                <span
+                  className={`status-dot status-${connStatus}`}
+                  aria-hidden="true"
+                />
+                {connecting
+                  ? t("editor.state.connecting")
+                  : connected
+                    ? t("editor.state.connected")
+                    : connError
+                      ? t("editor.state.failed")
+                      : isNew
+                        ? t("editor.state.draft")
+                        : t("editor.state.idle")}
+              </span>
+            </div>
+
+            <div className="editor-foot-row">
+              {!isNew &&
+                (confirmingDelete ? (
+                  <span className="confirm-inline">
+                    {/* Destructive copy states the blast radius before the
+                        button, and the confirm restates the verb — never
+                        "OK". */}
+                    <span className="confirm-text">
+                      {t("editor.delete.confirm", { name: profile.name })}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy}
+                      title={savingReason}
+                      onClick={() => setConfirmingDelete(false)}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger-confirm"
+                      disabled={busy || connecting}
+                      title={waitReason}
+                      onClick={() => void handleDelete()}
+                    >
+                      {t("editor.delete")}
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={busy || connecting}
+                    title={waitReason}
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    {t("editor.delete")}
+                  </button>
+                ))}
+
+              <span className="editor-kbd-hint">
+                <span className="kbd">Enter</span> {t("editor.kbd.connect")}
+                <span aria-hidden="true">·</span>
+                <span className="kbd">Esc</span>{" "}
+                {isNew ? t("editor.kbd.cancel") : t("editor.kbd.undo")}
+              </span>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

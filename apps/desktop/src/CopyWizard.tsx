@@ -16,7 +16,7 @@ import {
   type PartitionDetail,
 } from "./api";
 import ConfirmModal from "./ConfirmModal";
-import { envAttrs, envWireLabel, useEnvironment } from "./environments";
+import { EnvChip, envAttrs, envWireLabel, useEnvironment } from "./environments";
 import { classifyError } from "./errors";
 import { approxCount, groupDigits } from "./format";
 import Overlay from "./Overlay";
@@ -28,7 +28,6 @@ import SeekBar, {
   type SeekField,
   type SeekState,
 } from "./SeekBar";
-import { EnvChip } from "./Sidebar";
 import type { ToastSpec } from "./Toast";
 
 /**
@@ -774,7 +773,7 @@ export default function CopyWizard({
                 />
                 <button
                   type="button"
-                  className="btn"
+                  className="btn btn-swap"
                   disabled={check.state === "checking" || destTopic.trim().length === 0}
                   aria-busy={check.state === "checking" || undefined}
                   title={
@@ -784,12 +783,13 @@ export default function CopyWizard({
                   }
                   onClick={() => void runCheck()}
                 >
-                  <span className="btn-busy-slot" aria-hidden="true">
-                    {check.state === "checking" ? (
-                      <span className="spinner" />
-                    ) : null}
+                  <span className="btn-swap-face">
+                    Check
                   </span>
-                  Check
+                  <span className="btn-swap-face btn-swap-busy">
+                    <span className="spinner" aria-hidden="true" />
+                    Check
+                  </span>
                 </button>
               </div>
               <DestCheckNote
@@ -1136,7 +1136,7 @@ export default function CopyWizard({
             (running ? (
               <button
                 type="button"
-                className="btn btn-latched"
+                className="btn btn-latched btn-swap"
                 onClick={stopCopy}
                 disabled={stopping}
                 aria-busy={stopping || undefined}
@@ -1146,10 +1146,13 @@ export default function CopyWizard({
                     : "Stop copying — what has already been written stays written"
                 }
               >
-                <span className="btn-busy-slot" aria-hidden="true">
-                  {stopping ? <span className="spinner" /> : null}
+                <span className="btn-swap-face">
+                  Stop
                 </span>
-                Stop
+                <span className="btn-swap-face btn-swap-busy">
+                  <span className="spinner" aria-hidden="true" />
+                  Stop
+                </span>
               </button>
             ) : (
               // §6 layer 7: a write control reads as danger on a prod

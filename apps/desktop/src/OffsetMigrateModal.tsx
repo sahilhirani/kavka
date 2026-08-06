@@ -11,12 +11,11 @@ import {
   type GroupOffset,
   type OffsetMigrationRow,
 } from "./api";
-import { envAttrs, envWireLabel, useEnvironment } from "./environments";
+import { EnvChip, envAttrs, envWireLabel, useEnvironment } from "./environments";
 import { classifyError } from "./errors";
 import { formatStamp, groupDigits } from "./format";
 import { Term } from "./Glossary";
 import Overlay from "./Overlay";
-import { EnvChip } from "./Sidebar";
 
 /**
  * OFFSET MIGRATION — moving "where an application had got to" between two
@@ -388,7 +387,7 @@ export default function OffsetMigrateModal({
             </span>
             <button
               type="button"
-              className="btn"
+              className="btn btn-swap"
               disabled={
                 planning ||
                 destGroup.trim().length === 0 ||
@@ -402,10 +401,13 @@ export default function OffsetMigrateModal({
               }
               onClick={() => void buildPlan()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {planning ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Plan
               </span>
-              Plan
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Plan
+              </span>
             </button>
           </div>
         </div>
@@ -604,7 +606,7 @@ export default function OffsetMigrateModal({
           {applied === null && (
             <button
               type="button"
-              className={`btn ${destIsProtected ? "btn-danger-confirm" : "btn-primary"}`}
+              className={`btn ${destIsProtected ? "btn-danger-confirm" : "btn-primary"} btn-swap`}
               disabled={
                 busy ||
                 destReadOnly ||
@@ -617,10 +619,13 @@ export default function OffsetMigrateModal({
               title={applyWhy}
               onClick={() => void apply()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {busy ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Commit offsets
               </span>
-              Commit offsets
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Commit offsets
+              </span>
             </button>
           )}
         </div>

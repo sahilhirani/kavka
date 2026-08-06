@@ -1197,6 +1197,18 @@ export default function ProducePanel({
         </div>
       )}
 
+      {/* THE CAVEAT ABOVE THE ACTION, which is the only place it can do any
+          good — after the send it is an excuse. What "sent" proves is exactly
+          one thing: a broker took the bytes and returned a partition and an
+          offset. People read it as proof that the pipeline works, and a topic
+          with nothing consuming it accepts messages exactly as happily as one
+          with ten consumers. */}
+      <p className="dialog-note produce-caveat">
+        A successful send means a broker acknowledged the write and told Kavka
+        where it landed. It is not evidence that anything read it — the topic's
+        consumer groups are where that question is answered.
+      </p>
+
       <div className="modal-actions">
         <button
           type="button"
@@ -1216,7 +1228,7 @@ export default function ProducePanel({
           // is in the progress line above, where it costs no layout.
           <button
             type="button"
-            className="btn btn-latched"
+            className="btn btn-latched btn-swap"
             onClick={stopBulk}
             disabled={stopping}
             aria-busy={stopping || undefined}
@@ -1226,26 +1238,32 @@ export default function ProducePanel({
                 : "Stop sending — Kavka reports what actually reached the topic"
             }
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {stopping ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              Stop
             </span>
-            Stop
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              Stop
+            </span>
           </button>
         ) : (
           // §6 layer 7: a write action renders as danger-outlined on prod even
           // when it is routine. Off prod it is the surface's one primary.
           <button
             type="button"
-            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"} btn-swap`}
             disabled={readOnly || busy}
             aria-busy={busy || undefined}
             title={sendReason}
             onClick={act}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              {tab === "one" ? "Send message" : "Send messages"}
             </span>
-            {tab === "one" ? "Send message" : "Send messages"}
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              {tab === "one" ? "Send message" : "Send messages"}
+            </span>
           </button>
         )}
       </div>

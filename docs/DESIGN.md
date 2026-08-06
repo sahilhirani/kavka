@@ -58,7 +58,7 @@ difference by hue, it is broken.
 `disconnected: ""` is the bug this law is written to prevent: the one state
 rendered as a hollow ring — the state hardest to read at a glance — was also
 the only one with no word anywhere in its row. Every status produces text, so
-the sidebar's second line reads *"address · state"* in **every** state, and the
+a switcher row's second line reads *"address · state"* in **every** state, and the
 dot stays `aria-hidden` decoration.
 
 This is WCAG 2.2 SC 1.4.1, but it is mostly just correct: a support engineer
@@ -220,7 +220,7 @@ elevation, not a shade.
 | Token | Dark | Light | Use |
 |---|---|---|---|
 | `--bg-desk` | `#0A0908` | `#DCD3C4` | behind the app window |
-| `--bg-app` | `#100E0B` | `#EAE3D8` | sidebar, rail, status bar — recedes |
+| `--bg-app` | `#100E0B` | `#EAE3D8` | rail, status bar — recedes |
 | `--bg-canvas` | `#191512` | `#F6F1E8` | the working ground |
 | `--bg-panel` | `#221D18` | `#FFFDF8` | **every raised panel** |
 | `--bg-panel-hi` | `#2A241E` | `#F0E9DC` | hover on a raised surface |
@@ -248,7 +248,7 @@ Hierarchy lives in weight and these values, not in boxes.
 | `--t-off` | `#8A7E70` | 3.59:1 | `#867C6F` | 3.21:1 | `:disabled` controls **only** |
 | `--t-inv` | `#1A1206` | — | `#FFFDF8` | — | ink on a near-solid fill |
 
-Dark's worst case is a selected row; light's is the sidebar. `--t3` carries the
+Dark's worst case is a selected row; light's is the rail. `--t3` carries the
 placeholder and `∅` roles as well: both are text a sighted user is expected to
 read, so both clear 4.5:1 rather than 3:1.
 
@@ -262,7 +262,7 @@ read, so both clear 4.5:1 rather than 3:1.
 | `--focus` | `#FFD489` (10.19:1) | `#7A4B00` (5.81:1) | 3:1 | always with `outline-offset` |
 
 `--line-strong` is the only thing satisfying SC 1.4.11 on a transparent-filled
-control, and the figures above are on a selected row (dark) and the sidebar
+control, and the figures above are on a selected row (dark) and the rail
 (light) — the two surfaces that bind.
 
 ### Accent — four choices, both themes
@@ -384,11 +384,29 @@ every existing rule answers the font-size preference without being edited.
 
 ### Space, metrics, shape, motion
 
-4px base. Two ladders exist: `--s1`…`--s9` (the Jackdaw mockup's) and
-`--s-1`…`--s-12` (Ledger's, which every existing rule uses). Both are kept;
-prefer the hyphenated one in existing files.
+4px base. **One ladder: `--s-1`…`--s-12`** (2 · 4 · 6 · 8 · 12 · 16 · 20 · 24 ·
+32 · 40 · 56 · 72).
 
-`--rail-w` 248 (connections sidebar) · `--nav-w` 224 (cluster rail) ·
+> **There used to be two, and the second one was dead.** The mockup's
+> `--s1`…`--s9` was declared beside this one and used **zero** times, while all
+> 504 spacing declarations in the app used the hyphenated set — a second live
+> name for the same nine values, with nothing to say which was canonical. The
+> audit classified that as maintenance debt that "will silently generate drift
+> in every future component", and the fix is to delete the unused one rather
+> than to keep documenting the choice. **Reading a Jackdaw measurement:** the
+> mockup's numbers map exactly onto rungs of this ladder — `--s1`→`--s-2`,
+> `--s2`→`--s-4`, `--s3`→`--s-5`, `--s4`→`--s-6`, `--s5`→`--s-7`, `--s6`→`--s-8`,
+> `--s7`→`--s-9`, `--s8`→`--s-10`, `--s9`→`--s-11`. `--s-1` (2px), `--s-3` (6px)
+> and `--s-12` (72px) are this ladder's own; the mockup had no rung there and
+> the app needs all three.
+>
+> **The type tokens are a different case and stay.** `--t-xs`…`--t-display` are
+> *aliases* — each is declared as `var(--f11)`, `var(--f12)`, … — so there is
+> one source of truth and two names for it, which is the legacy alias layer
+> above working as designed. Folding those would mean rewriting 231 call sites
+> to gain nothing. Prefer `--t-*` in new rules.
+
+`--rail-w` 254 (the app rail — there is only one) ·
 `--topbar-h` 44 · `--statusbar-h` 26 · `--tabstrip-h` = `--control-h-lg`
 (inline tabs only) · `--gutter-w` 72 · `--gutter-w-code` 40 · `--inspector-w`
 480 · `--palette-w` 580 · `--measure` 74ch · **`--hit-min` 24px** (SC 2.5.8 —
@@ -475,43 +493,247 @@ colour decision.
 
 ### 5.1 Shell
 
-Two shells, nested. The **app shell** is the connections sidebar plus the
-workspace; the **cluster workspace** inside it is the grouped rail plus the
-stage.
+**One shell. One rail.** The window is a two-column grid — a 254px rail and the
+stage — plus the environment wire above and the status bar below.
+
+> **This section used to describe a different app, and that is the point.**
+> Kavka shipped Jackdaw's *components* on top of Ledger's *shell*: a permanent
+> 248px "Clusters" sidebar, a second 224px cluster rail inside the workspace,
+> and screens with no header. A connected user spent 472px on chrome before any
+> content, and the message table had to scroll horizontally to show a key. The
+> fidelity audit called that inherited-structure drift and found this section
+> presenting it as the design. It was not the design; it was what was left when
+> nobody deleted the old thing. The sidebar is gone. If a future PR proposes a
+> second permanent navigator, this paragraph is the reason to say no.
 
 ```
-┌──────────────┬──────────────┬────────────────────────────┬─────────────┐
-│ CLUSTERS     │ orders-prd   │  ┌──────────────────────┐  │             │
-│ ● orders-prd │ ▮ PROD       │  │ 🐦 HOME · LOOKS FINE │  │  INSPECTOR  │
-│   local      │ 10.0.4.19:…  │  │ Connected to 3 brok… │  │  Value      │
-│              │              │  └──────────────────────┘  │  ─────────  │
-│              │ CLUSTER      │  ┌──────────────────────┐  │  {          │
-│              │  ▸ Home      │  │ OFFSET│ TIME │ KEY   │  │   "id": …   │
-│              │    Topics    │  │1204882│12:04 │ A-102 │  │  }          │
-│              │    Consumer… │  │ …virtualized…        │  │             │
-│              │    Brokers   │  └──────────────────────┘  │             │
-│              │ OBSERVE      │                            │             │
-│ ──────────── │  Monitoring  │                            │             │
-│ Settings·… │    Alerts  ⑴ │                            │             │
-└──────────────┴──────────────┴────────────────────────────┴─────────────┘
-                 ↑ the rail     ↑ 1px --rule, coloured by environment
+┌────────────────────┬──────────────────────────────────────────────────────┐
+│ 🐦 Kavka    0.4.0  │  ┌────────────────────────────────────────────────┐  │
+│ ┌────────────────┐ │  │ 🐦 HOME · LOOKS FINE                           │  │
+│ │ orders-prd ▮PRD│ │  │ Connected to 3 brokers …                       │  │
+│ │ 10.0.4.19:9093 │ │  └────────────────────────────────────────────────┘  │
+│ │ ● Connected ·3 │ │  ┌────────────────────────────────────────────────┐  │
+│ │ Switch cluster▾│ │  │ OFFSET │ TIME  │ KEY    │ VALUE                │  │
+│ └────────────────┘ │  │1204882 │ 12:04 │ A-102  │ {"id": …             │  │
+│ SET UP             │  │ …virtualized…                                  │  │
+│   Connections      │  └────────────────────────────────────────────────┘  │
+│ CLUSTER            │                                                      │
+│  ▸ Home            │                     ↑ 1px --rule, coloured by env    │
+│    Topics          │                                                      │
+│    Consumer groups │                                                      │
+│    Brokers         │                                                      │
+│ OBSERVE            │                                                      │
+│    Monitoring      │                                                      │
+│    Alerts       ⑴ │                                                      │
+│ APPLICATION        │                                                      │
+│    Settings        │                                                      │
+│ ────────────────── │                                                      │
+│ 🛡 Read-only: off  │                                                      │
+│ Kavka can produce  │                                                      │
+├────────────────────┴──────────────────────────────────────────────────────┤
+│ ● Connected · orders-prd · 10.0.4.19:9093 · READ-ONLY      ⌘K commands     │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Sidebar** (`--rail-w` 248) — saved connections. **If the sidebar becomes
-  primary navigation, the design has failed** — `⌘K` is the real navigation.
-  Its footer carries **Settings · About · Support**; Settings is app-level and
-  works with nothing connected (§10).
-- **The cluster rail** (`--nav-w` 224) — the ten cluster screens, in four named
-  groups. Detailed below.
-- **Stage** — the current screen: a Perch, then panels, spaced by `--stack`.
-- **Inspector dock** — 480px, resizable 320–60%, `Ctrl/Cmd+I`.
 - **`.app-wire`** — 2px, painted across the very top of the window, inside the
   webview and below the native title bar. Native window chrome is untouched.
-- **Status bar** (`--statusbar-h` 26) — progressive search progress, tail rate,
-  connection latency, the read-only chip and the two most relevant shortcuts.
-  Phase 2's "search never silently truncates" acceptance gate depends on it.
+- **The rail** (`--rail-w` 254) — brand lockup, cluster card, and every
+  destination in the app. Two render modes; see below.
+- **Stage** — the current screen: a Perch, then panels, spaced by `--stack`.
+  It is the scrollport, and **every navigation returns it to the top**.
+- **Inspector dock** — 480px, resizable 320–60%, `Ctrl/Cmd+I`.
+- **Status bar** (`--statusbar-h` 26) — spans the whole window. Live
+  operational state only: progressive search progress, tail rate, connection
+  latency, the always-visible bootstrap address (§6 layer 3), the read-only and
+  masking chips, and the `⌘K` hint. Phase 2's "search never silently truncates"
+  gate depends on it existing. **The version is not here** — see the brand
+  lockup.
 
-#### The cluster rail — grouping, and why it covers more than the mockup drew
+> **One token, one meaning.** There used to be two: `--rail-w` meant the 248px
+> sidebar while the *mockup's* `--rail-w` meant the 254px screen rail, and
+> `--nav-w` was the one that actually corresponded. `--nav-w` is deleted and
+> `--rail-w` is 254px. Anyone reading a mockup measurement can now trust the
+> name.
+
+#### The rail renders in two modes
+
+| | Always | Also, when `conn.status === "connected"` |
+|---|---|---|
+| **Identity** | brand lockup · cluster card | — |
+| **Groups** | Set up → Connections<br>Application → Settings | Cluster · Observe · Safety · Integrations (the ten screens) |
+| **Foot** | the read-only readout | — |
+
+Everything in the *always* column has to work with **nothing connected**. That
+is the whole reason Settings is a rail item rather than a cluster screen: on
+first launch there is no cluster, and the two preferences a new user wants are
+the theme and the font size.
+
+`App.tsx` owns the rail and therefore owns which screen is on. `ClusterView` is
+controlled — `tab` arrives as a prop, its first value read from
+`initialTab(profileId)` — and still owns everything below the tab (which topic,
+which pane, which broker) and the persistence of the whole record.
+
+**A rail click always opens that section's ROOT.** Restoring a placement is a
+promise about *reconnecting* — come back tomorrow and you are where you left
+off. It is not a promise about pressing "Topics", which means *show me the
+topics*, not *show me the message browser I had open three screens ago*. The
+reset lives in `ClusterView`'s `lastNav` effect — keyed on the tab **and** the
+nav nonce, so pressing the rail item you are already on counts as a navigation
+and resets the placement too — and it lives there so the shell stays ignorant of
+what a placement contains.
+
+#### The brand lockup — and the version
+
+`.brand` is the rail's first child: a 26px brass jackdaw, **Kavka** at
+17px/680/-.015em, and `.brand-ver` right-pushed at 11px in `--text-tertiary`.
+
+There was no brand lockup at all. The top-left of the window was the micro-cap
+eyebrow `CLUSTERS`, the wordmark was a small grey word in the sidebar's footer
+with no bird beside it, and the version sat in the far *right* end of the status
+bar — the diagonally opposite corner, on a strip specced for live operational
+state. A build number is not operational state. As an annotation on the name it
+reads once and recedes. It also appears in the About dialog, and nowhere else.
+
+#### The cluster card and the switcher
+
+`.cluster-card` is a raised panel pinned between the brand row and the first
+group: name + `EnvChip`, the mono bootstrap address, then a `status-dot` and a
+sentence — *Connected · 3 brokers* / *Connecting…* / *Not connected*. **Prod
+guardrail layer 3 lives here**: name, environment and address are pinned beside
+every screen rather than above one of them, because most production accidents
+are right-action-wrong-cluster. Law 2 holds — the connected line carries the
+broker count, because "Connected" with no number is a claim nobody can check.
+
+Its last child is `.cc-switch`: full width, `space-between`, the word *Switch
+cluster* and a 13px chevron-down. **A down-caret on a full-width trigger reads
+as a menu, not a drawer**, and that is what let the permanent 248px list go.
+
+`ClusterSwitcher.tsx` owns the menu, which the mockup asserts and never draws —
+so its anatomy is ours:
+
+```jsx
+<button className="cc-switch" aria-haspopup="menu" aria-expanded>…</button>
+<div className="cc-menu" role="menu" aria-label={t("switcher.menuLabel")}>
+  <div className="cc-menu-scroll" role="none">
+    <div className="cc-menu-group" role="group" aria-label={env.name}>
+      <div className="cc-menu-label" aria-hidden="true">{env.name}</div>
+      <div className="cc-menu-item cc-menu-item-protected cc-menu-item-selected" role="none">
+        <button role="menuitem" className="cc-menu-row" aria-current="true">
+          <span className="cc-row-line">
+            ·dot· name <EnvChip/> <PadLock/> <span className="sr-only">Protected</span>
+          </span>
+          <span className="cc-row-meta">{address} · {status}</span>
+        </button>
+        <button role="menuitem" className="btn btn-sm cc-menu-act"
+                aria-disabled={busy || undefined}>Disconnect</button>
+      </div>
+    </div>
+  </div>
+  <div className="cc-menu-foot" role="none">
+    <button role="menuitem" className="cc-menu-add">Add connection</button>
+  </div>
+</div>
+```
+
+- **The row is a container with two controls.** The row selects; the trailing
+  button connects or disconnects. Choosing a cold cluster used to swap the whole
+  workspace for a connection form — the sharpest single finding in the audit.
+  It no longer does anything of the kind.
+- **`position: fixed`, measured from the trigger.** The rail is a scrollport, so
+  an absolutely positioned popover would be clipped. Fixed positioning escapes
+  the clip without leaving the `.app` subtree, so the protected substrate and
+  the danger damper still cascade into it (same reasoning as `Overlay`).
+- **Rows are grouped by environment, in registry order** — the order the user
+  put their environments in, so the protected group does not move around
+  between openings. Profiles pointing at an environment the registry has never
+  heard of are gathered at the end under their literal name.
+- **The protected treatment moved over as the old `.profile-row` rules under
+  `.cc-menu-item*` names** — warm ground, a 2px `--danger` left border, the chip
+  beside it saying which environment — **and then gained the two channels those
+  rules never had.** Ground, border and chip fill are all colour, and the chip's
+  text names the *environment*, not its protection, so an org whose protected
+  environment is called `UAT` read nothing at all here. The row now also carries
+  `<PadLock/>` (the same glyph as the environments list, `aria-hidden`, inheriting
+  the row's own text colour so it clears SC 1.4.11 on the warm ground) and an
+  `sr-only` **Protected** — §6's third and fourth channels. The word is `sr-only`
+  rather than printed because the visible line is already the cluster's name and
+  its address, and guardrail layer 3 is the address staying legible. The
+  Connections screen's *Saved clusters* rows get the identical pair, since they
+  are the same markup.
+- **It is a menu, not a dialog.** It borrows `Overlay`'s two promises — Esc
+  closes, focus goes back to the trigger — and none of its furniture: no scrim,
+  no `aria-modal`, no focus trap. Click-outside closes on `pointerdown`; Tab
+  closes, because a menu you can Tab out of while it is still painted is a menu
+  that lies about where focus is.
+- **Roving focus over a FLAT list of menu items in DOM order** — row, its
+  action, the next row, …, *Add connection*. `↑`/`↓` alone reach every control,
+  which is the property that matters for rows with two jobs. `Home`/`End` jump
+  the ends. Opening lands on the cluster you are already on.
+- **A connecting row's action is `aria-disabled`, never `disabled`.** A disabled
+  `<button>` is not focusable, and roving focus walks this list by *index* — it
+  reads `document.activeElement` to find where it is. Focusing an unfocusable
+  item is a silent no-op, so the index never advances and the next `↓` lands on
+  the same dead control: arrow navigation stuck at whichever cluster is
+  connecting, which is exactly when you open this menu to go somewhere else. The
+  `onClick` guard is what makes the press do nothing; `.btn[aria-disabled="true"]`
+  in `styles.css` (and its forced-colors `GrayText` twin) is what makes it *look*
+  like the state it is. Any button inside a roving-focus widget owes the same.
+- **Three wrappers carry `role="none"`** — `.cc-menu-scroll`, `.cc-menu-item` and
+  `.cc-menu-foot`. ARIA 1.2 requires a `menu` to own its `menuitem`s (or a
+  `group` of them), and an unroled generic div in between breaks that
+  relationship — some AT responds by mis-counting the menu or dropping
+  position-in-set. `.cc-menu-group` was already `role="group"`; these three are
+  presentational, which is what `none` is for.
+
+#### Where every former sidebar duty lives now
+
+| Sidebar did | Now |
+|---|---|
+| the profile list | the switcher menu's rows **and** the Connections screen's 330px *Saved clusters* panel, which is the canonical enumeration — one `.cc-menu-row` markup, two homes |
+| connect / disconnect | the trailing `.btn-sm` on each menu row (and `⌘K`) |
+| **Add connection** | the menu's foot strip, `⌘K`, and the empty states |
+| env chip + status | the cluster card, and each menu row |
+| Settings | a rail item, in the Application group |
+| About · Support Kavka | **Settings → About** — two rows, beside each other |
+| the word *Kavka* | the brand lockup, with the bird back beside it |
+
+About and Support have no home in the mockup at all, and inventing chrome for
+them would be re-drifting. Settings → About already existed and already had an
+*Open About* button; Support is now the row under it. Both remain in `⌘K`.
+
+#### The rail foot — the safety readout
+
+`.crail-foot` is pinned by `margin-top: auto` under a hairline and carries a
+15px shield plus **read-only stated in BOTH directions**, with the consequence
+on the next line:
+
+> 🛡 Read-only: **off** — *Kavka can produce and delete here.*
+> 🛡 Read-only: **on** — *Kavka will not produce or delete here.*
+
+The app previously spoke only in the safe direction: a chip when read-only was
+ON, and silence when it was off. **A guardrail that is silent in its dangerous
+state is not a guardrail** — a user who wants to confirm that Kavka *cannot*
+delete here had nothing to read. The foot used to hold a bare Disconnect button;
+Disconnect is the trailing action on the cluster's own menu row now, **and it is
+also the second of Cluster home's two stage actions**, where the mockup has it.
+
+#### Cluster home's two actions — Refresh, then Disconnect
+
+`stage.overview` is the only screen the shell binds actions for; every other
+screen's actions arrive with the screen. It gets two, in the mockup's order:
+
+| | What it is | What it can and cannot do |
+|---|---|---|
+| **Refresh** | `App`'s `topicsNonce`, the same handle the palette's *Refresh topics* pulls | Remounts the workspace, so everything read **live** is read again: the consumer groups, the alert log, the quorum, the broker settings behind the fold. It **cannot** re-read the connect-time metadata snapshot — the four tiles and the broker list came back with `cluster_connect` and change only on reconnect. |
+| **Disconnect** | `onDisconnect(profile.id)` | Exactly what the switcher menu's trailing button does. |
+
+**Refresh is not primary and it says its own limit.** Its `title` states which
+half of the screen it re-reads, and Home's `.panel-foot` under the broker table
+states the other half — *"A broker that has joined or left since then appears
+here only after you reconnect."* A Refresh button whose promise is bigger than
+its behaviour is the same failure as a verdict from partial data.
+
+#### The cluster groups — grouping, and why they cover more than the mockup drew
 
 Ledger showed the ten cluster screens as a strip of ten equal tabs. Ten peers in
 a row tell you nothing about which one answers the question you arrived with,
@@ -538,13 +760,21 @@ Someone who does not yet know what an ACL is can still guess that it lives under
 > direction is making. Reproducing it would have deleted four working surfaces
 > from the product in the name of fidelity.
 >
-> `ClusterView.tsx` builds `TABS` by flattening `RAIL`, so a screen that is not
-> in a group is not in the app, and the omission is a compile-visible fact
-> rather than a UI someone has to notice is missing.
+> `ClusterView.tsx` builds `TABS` by flattening `CLUSTER_RAIL`, so a screen that
+> is not in a group is not in the app, and the omission is a compile-visible
+> fact rather than a UI someone has to notice is missing.
 
 > **`TabKey` values are PERSISTED and must not change.** They are written into
 > every user's `kavka.cluster.<id>.view` record. Renaming one silently moves
 > people off the screen they were last on. Only the presentation moved.
+
+**The mockup titled its cluster-scoped group with the live cluster** — a
+`state-dot` plus `local · DEV` instead of a static word — and called that its
+biggest wayfinding idea. Kavka keeps the four concept words instead, and takes
+the identity from the cluster card directly above them, which says the same
+three facts with the address as well. The concept naming is load-bearing here in
+a way it was not for a four-item rail: it is what teaches that ACLs live under
+Safety. **This is a deviation, and it is owned in §11.**
 
 **It is not a `role="tablist"`.** A tablist may not contain group headings, and
 the headings are the entire point. The rail is a `<nav>` whose current item
@@ -556,20 +786,27 @@ ground, a weight change, a 3px accent spine, and `aria-current`. In forced
 colors the tint and the spine collapse, so the spine re-declares `Highlight`
 with `forced-color-adjust: none`.
 
-**Prod guardrail layer 3 moved into the rail.** The cluster's name, its
-environment chip and its bootstrap address sit in `.crail-id` above the groups,
-pinned beside every screen rather than above one of them. Most production
-accidents are right-action-wrong-cluster.
-
-Below 900px the rail stops being a column and wraps into a band above the stage.
-That is why the old "make the tab strip scrollable" reflow rule is gone: there
-is no strip left to scroll.
+Below 900px the rail stops being a column and becomes a band above the stage,
+capped at 45vh. That is why the old "make the tab strip scrollable" reflow rule
+is gone: there is no strip left to scroll.
 
 #### Markup the sweep agents should reuse
 
 ```jsx
-<nav className="crail" aria-label={t("rail.label")}>
-  <div className="crail-id">…name · EnvChip · address…</div>
+<nav className="rail" aria-label={t("rail.navLabel")}>
+  <div className="brand">
+    <BrandBird />
+    <span className="brand-name">Kavka</span>
+    <span className="brand-ver">{version}</span>
+  </div>
+
+  <div className="cluster-card">
+    <div className="cc-top"><h1 className="cc-name">…</h1><EnvChip /></div>
+    <div className="cc-addr">…</div>
+    <div className="cc-state cc-state-connected">·dot· Connected · 3 brokers</div>
+    <ClusterSwitcher … />
+  </div>
+
   <div className="crail-group">
     <h2 className="crail-label">{t("rail.group.observe")}</h2>
     <button className="crail-item" aria-current="page">
@@ -578,13 +815,40 @@ is no strip left to scroll.
       <span className="crail-badge" title={…}>3<span className="sr-only"> firing</span></span>
     </button>
   </div>
-  <div className="crail-foot">…</div>
+
+  <div className="crail-foot">…the read-only readout…</div>
 </nav>
 ```
+
+The `crail-` prefix is historical: these rules were written when the cluster
+rail was a second navigator inside the workspace. There is one rail now, and
+these are its groups.
 
 Inline tabs (`.tab` / `.tab-active`) survive for genuine sibling panes inside one
 surface — the export/import pair, the inspector's panes, the producer's modes.
 `.tabstrip` and `.tab-badge` are gone.
+
+#### Still missing from this shell
+
+Named here so the next reader does not mistake absence for intent. The list is
+short now; the three items that used to be on it — the stage head, the
+Connections split, the panel feet — have all landed and are documented above.
+
+- **The three full-height panes draw no stage head.** Messages, search and SQL
+  own the whole stage: their own scrollport, their own status line, their own
+  docked inspector. A head above them would take that height from the table and
+  duplicate the `← orders` breadcrumb they already draw. They are the first
+  screens that should own their heads outright — the trail *local · DEV ·
+  Topics · orders · Messages* is exactly what repairs the
+  rail-says-Topics-while-you-read-messages confusion (§11) — and that is a
+  change inside those components, not a default the shell can guess.
+- **No screen passes `chips` yet.** `StageHead` accepts them; Cluster home is
+  the only screen passing `actions` (Refresh · Disconnect, above), and the rest
+  keep their controls in their panel heads where they were already discoverable.
+- **The 14 files in `docs/screenshots/` all show the deleted sidebar** and the
+  pre-alignment Cluster home and Settings. They need re-shooting against a
+  running app with a live cluster; nothing in this document describes what they
+  show.
 
 ### 5.2 Tables — the load-bearing component
 
@@ -715,7 +979,7 @@ surface — the export/import pair, the inspector's panes, the producer's modes.
   non-radio child is a broken promise about what the arrows reach). Each chip
   is `--control-h`, `--r-pill`, `--bg-sunken`, `--border-control`. The chosen
   one takes `--env-tint` fill / `--env-ink` text — or the badge pair when the
-  environment is protected, so the form previews the sidebar — **plus a `✓`
+  environment is protected, so the form previews the switcher — **plus a `✓`
   glyph and `--w-medium`**, because Law 2 applies to a picker too.
   **Picking a *protected* environment swaps the substrate live** and turns the
   rule its colour. That is the single best moment in the product to teach the
@@ -791,10 +1055,39 @@ outlined.
 **Latched state must read as ON across the room** — a live-tail toggle is a
 physical switch, not a link.
 
-**Loading keeps the label and reserves a fixed 16px leading slot**
-(`.btn-busy-slot`) with `aria-busy="true"`. A button that swaps
-`Connect` → `Connecting…` resizes mid-click and shifts everything after it.
-Anything over 2s gets a visible Cancel.
+**Loading keeps the label and cannot change the button's width** — `.btn-swap`,
+with `aria-busy` on the button. A button that swaps `Connect` → `Connecting…`
+resizes mid-click and shifts everything after it. Anything over 2s gets a
+visible Cancel.
+
+```jsx
+<button className="btn btn-primary btn-swap" aria-busy={busy}>
+  <span className="btn-swap-face">Connect</span>
+  <span className="btn-swap-face btn-swap-busy">
+    <span className="spinner" aria-hidden="true" />
+    Connect
+  </span>
+</button>
+```
+
+Both faces occupy **one `inline-grid` cell**, so the cell is sized by the wider
+of them and the width is fixed by construction. The inactive face is
+`visibility: hidden`, which keeps its layout box and removes it from the
+accessibility tree — which is why the label is duplicated rather than
+conditionally rendered, and why neither face carries `aria-hidden`.
+
+> **This replaced `.btn-busy-slot`, and the replacement is the field report.**
+> The old rule reserved a permanently rendered 16px box beside every
+> busy-capable label. It bought the no-resize property honestly, but it paid for
+> it with an **empty box on every idle button** — which the owner saw as "a weird
+> UI expansion, or an icon blending into the background" on the connection
+> editor's Connect button, and which pushed 33 labels off centre app-wide. All
+> 33 call sites are converted, the rule is deleted, and two of them turned out
+> to be buttons that could never spin at all (Search and Run, each swapped for
+> Stop the instant work starts) — those simply lost the box. `aria-busy` is now
+> load-bearing rather than decorative: `.btn-swap` keys its face swap on it, so
+> a busy button that forgets the attribute is a busy button that never spins.
+> One was found that way during the migration.
 
 **Disabled** — `opacity: .45`, `cursor: default`, and **always a `title`
 explaining why**. Never a dead control with no reason. This includes
@@ -815,7 +1108,7 @@ Phase 6 languages, and ship a `⋯` overflow menu from day one.
   **Protected → `--env-badge-ink` on solid `--env-badge-fill`**, the only
   *filled* chip, so it reads as a badge. Ratios per colour in §3.1. The chip
   carries its own `data-env-color` / `data-env-protected`, which is how a
-  sidebar full of different environments paints correctly underneath one
+  switcher full of different environments paints correctly underneath one
   app-level colour: the nearest declaration wins.
 - **Read-only** — tertiary, transparent, `1px --hairline-strong`, `--t-xs`,
   **sentence case**. Permanently in the top bar and the status bar. Uppercase
@@ -906,7 +1199,7 @@ signals die.
 > contrast, **4.55:1 worst case** (4.61 on a selected protected table row). It
 > reads as muted; it never reads as gone. Light has its own damper
 > (`#8A6F6A`, 4.09:1 on a selected light row, 3.41:1 on a selected light
-> protected sidebar row) or it inherits the dark one.
+> protected switcher row) or it inherits the dark one.
 >
 > **One damper serves all seven colours, and it keys on PROTECTION rather than
 > on the colour that collides.** The figures above are measured on the warm
@@ -1037,18 +1330,65 @@ app is judged by. See §7's error library.
 | verdict | `.perch-verdict` | one line, `--f15`, from live state |
 | caveat | `.perch-caveat` | what the verdict does not cover — **never behind a disclosure** |
 | actions | `.perch-actions` | optional, at most two |
+| hide | `.perch-hide` | *Hide*, or *Show the whole note* in one-line mode — see below |
+| restore | `.perch-restore` | the `.btn-sm` Hide leaves behind |
 
 Tone paints a 4px left edge (`--perch-edge`) in `--ok` / `--warn` / `--danger` /
 `--line-strong`. **The edge is decoration.** The kicker spells the same state in
 words on every screen, which is why forced-colors mode can drop the edge
 entirely and lose nothing.
 
-#### Two things it deliberately does not have
+#### Visibility — the Hide control, and the rule it does not break
 
-- **No dismiss control**, though the mockup drew a "Hide" button. A verdict the
-  user can switch off is a verdict the app stops being accountable for. If a
-  Perch is noise on some screen, that screen's verdict is wrong — fix the
-  sentence, not the visibility.
+This component used to refuse the mockup's *Hide* pill outright: a verdict the
+user can switch off is a verdict the app stops being accountable for. That
+argument is sound about a **verdict** and wrong about a **note**, and this one
+component is both — it absorbed the mockup's teaching note and its separate
+`.verdict` card. So the refusal is replaced by a distinction rather than
+dropped.
+
+- **What can be hidden** is the standing note: the sentence that reads the same
+  on the fortieth visit as it did on the first.
+- **What can never be hidden** is a screen that is still reading, or a screen
+  whose read failed. Both force the full form back, **in every mode, on every
+  screen**, and they take the Hide control away while they hold it — a control
+  that would have to do nothing is worse than one that is not there. *"Do not
+  tell me the cluster is fine"* has never meant *"do not tell me the numbers
+  are missing"*.
+
+Two controls express that, and the precedence between them is resolved in one
+expression in `Perch.tsx`: **forced** (loading or error) outranks **this
+screen's own Hide/Show** outranks **the stored preference**.
+
+| Control | Scope | What it does |
+|---|---|---|
+| `.perch-hide` | this screen, this session | *Hide* → the note is replaced by `.perch-restore`, a `.btn-sm` reading *Show the note for this screen*. In one-line mode the same pill reads *Show the whole note* and expands instead. This is the mockup's own behaviour, restore button included. |
+| `appearance.perch` | durable, all screens | `full` (default) · `line` · `hidden`. Settings → Appearance. |
+
+**A preference of `hidden` renders nothing at all** — not even the restore
+button — while a Perch the user hid *by hand* always leaves the way back on
+screen. The asymmetry is the point: somebody who pressed Hide a minute ago
+needs the door, and somebody who turned Perches off last month does not need a
+button on all ten screens reminding them they did.
+
+**Hide and Show hand focus to each other.** They are two elements in two
+branches — pressing one unmounts the other's parent — and React moves nothing,
+so an unguarded press drops focus to `<body>` and the next `Tab` restarts at the
+top of the document, which on this shell is the rail. `Perch.tsx` holds a ref on
+each button and focuses the newly-rendered one in an effect keyed on the local
+mode, gated by a *just toggled* ref so it fires on a **press** and never on
+mount — every screen renders a Perch, and an effect without that gate would
+yank focus to the Hide pill on arrival at all ten.
+
+**One-line mode drops exactly one thing: the caveat.** That is why the control
+beside it reads *Show the whole note* rather than *Expand* — nothing is
+silently missing, and the sentence that says so is one visible click away. A
+caveat that came from `classifyError` never reaches one-line mode, because an
+error is forced back to full. The verdict itself truncates with an ellipsis;
+it is the only sentence in the app that is allowed to.
+
+#### One thing it deliberately does not have
+
 - **No `role="status"`.** This is standing content that happens to change, not
   an announcement. `role="status"` would make a screen reader read every
   screen's verdict on arrival, over the heading the user came for. It is a
@@ -1069,6 +1409,210 @@ against it. Three things make it honest and all three are worth copying:
    at the moment of connection and do **not** track the cluster. A banner that
    let a user believe otherwise is precisely the failure §7 forbids.
 
+### 5.13 The stage head — how a screen introduces itself
+
+`apps/desktop/src/StageHead.tsx`, styled at `.stage-head` in `styles.css`.
+The first child of the stage, **above the Perch**.
+
+Three registers, in this order:
+
+| Part | Class | Rule |
+|---|---|---|
+| where you are | `.whereami` | 12px tertiary trail, a 13px right-arrow then middot-joined crumbs. Opens with the cluster identity or the rail group, ends with the screen. |
+| what this is | `.sh-title` | 26px/`--w-semi`/`--track-tight`, a flex row so `chips` sit on its baseline |
+| — | `.sh-sub` | **one** sentence, 82ch. This is where the screen says what it cannot tell you. |
+| what you can do | `.stage-actions` | `margin-left: auto`, two or three, rightmost usually `.btn-primary` |
+
+The order is the argument: the head says what this screen **is**, and then the
+Perch says what Kafka can actually **tell** you about it. A verdict that
+arrives before its subject is a verdict about nothing.
+
+**The trail is plain text, not links.** Nothing in it navigates today, and a
+breadcrumb whose crumbs are dead should not claim `role="navigation"`. It reads
+out in order immediately before the heading, which is where a screen-reader
+user wants it. The first crumb to earn a destination is *Topics* on the message
+browser.
+
+**It is an `<h2>`.** The rail's cluster card carries the document's `<h1>` — the
+cluster is what the whole window is about and the screen is a view of it. Panel
+titles inside the screens are `<h2>` as well, which is flat and was flat before
+this component existed; demoting them to `<h3>` belongs with the per-screen
+work below.
+
+**It scrolls with the screen,** which is the one deliberate departure from the
+mockup. There the head is a fixed band above a `.stage-body` that scrolls under
+it; here the stage **is** the scrollport (`.workspace-body`), so the head is the
+first child of `.cluster-view` and takes the stage's own horizontal padding
+rather than a second inset that would have to agree with it. Every navigation
+puts the scrollport back at the top (§5.14), so the head is on screen on
+arrival — which is what a fixed band buys, without a second scroll container.
+
+#### The registry
+
+```ts
+export const CLUSTER_HEADS: Record<TabKey, ScreenHead>
+interface ScreenHead { titleKey: MessageKey; subKey: MessageKey; ownHead?: true }
+```
+
+`Record<TabKey, …>` is the guard: **adding a screen to `CLUSTER_RAIL` without
+writing its title and its sentence is a compile error**, the same shape `TABS`
+gives the rail. No screen can ship headless by omission.
+
+- **Titles are usually the rail's own label.** The rail and the title agreeing
+  *is* the wayfinding, not a duplication to optimise away. `overview` is the
+  exception: "Home" does not read as a title on its own, so it gets the noun
+  back — *Cluster home*.
+- **Actions are not in the registry and never will be.** A registry can hold a
+  message key; it cannot hold a handler bound to the cluster on screen without
+  becoming a second copy of the screen's props.
+- **`ownHead` is the handover.** While it is absent, `ClusterView` draws the
+  head. A screen that has grown its own — with the chips, the actions and a
+  trail that knows which topic is open — sets it and renders `<StageHead>`
+  itself. It is a per-screen switch rather than a big-bang migration precisely
+  so the ten screens can convert one at a time without a frame that renders two
+  heads or none.
+
+**The three full-height panes get no head.** The message browser, search and
+SQL own the whole stage — their scrollport, their status line, their docked
+inspector — and a head above them would take that height from the table and
+duplicate the `← orders` breadcrumb they already draw. They are the first
+screens that should own their heads outright: the trail
+`local · DEV · Topics · orders · Messages` is exactly what repairs the
+rail-says-*Topics*-while-you-read-messages confusion (§11).
+
+### 5.14 Navigation — the stage goes back to the top, and a rail press opens the root
+
+Two behaviours, both invisible in review because both only misbehave when the
+screen you left was longer or deeper than the one you arrived on.
+
+**One scrollport, one mechanism** (`src/stage.ts`). The stage registers itself
+(`ref={registerStage}`); anything that knows it has moved the user calls
+`useStageTop(token)` with a string describing where "here" is. Two components
+own navigation and neither can see the other's state — `App` owns the screen
+and the rail item, `ClusterView` owns the placement below it (which topic,
+which pane, which broker, which connector) — so the **scrollport** is what they
+share rather than the state. No screen scrolls itself: ten copies of
+`useEffect(() => scrollTo(0))`, nine of them right, is the shape this exists to
+prevent.
+
+**A rail press always opens the section's root.** Restoring a placement is a
+promise about **reconnecting** — come back tomorrow and you are where you left
+off. It is not a promise about pressing *Topics*, which means "show me the
+topics", not "show me the message browser I had open on one of them three
+screens ago". `ClusterView`'s `lastNav` effect clears `topic`, `pane`, `group`,
+`broker`, `connect`, `connector` and `streamsGroup` on every press.
+
+> **It keys on the press, not on the tab.** Watching `tab` alone missed the
+> case users hit most: pressing *Topics* while already on Topics — the plainest
+> "take me back to the list" there is, and the one that changes no state at
+> all. `App` folds a counter (`session.nav`) into the props and the scroll
+> token, so the press itself is the event. A new cluster session resets it to
+> zero, because arriving on a restored placement must not look like a press.
+
+**The exception, and it is the only one.** Something can ask for a specific
+thing *inside* a section on the way — the alert toast's *View group
+demo-checkout* is the one caller. It parks the selection in `pendingGroup` and
+then presses the rail; the `lastNav` effect adopts it once instead of clearing,
+then forgets it. Without that hand-off the navigator would `setPlace` and the
+effect would wipe it one tick later, which is a bug neither file looks like it
+has on its own. Any future deep link goes through the same door.
+
+### 5.15 The panel foot — the sentence a table ends on
+
+**Law 4 says every screen answers before it reports. The panel foot is the
+other half: every table says what it cannot tell you, under itself, in plain
+English.** The Perch is the verdict for the screen; the foot is the caveat for
+one table, and it is where the qualification lives that would otherwise be
+either missing or buried in a tooltip nobody opens.
+
+```html
+<section class="panel">
+  …head, table, optional <details class="disclose">…
+  <p class="panel-foot">What the rows above cannot tell you.</p>
+</section>
+```
+
+- **Full-bleed.** `margin: 0 calc(var(--pad-panel) * -1) calc(var(--pad-panel) *
+  -1)`, so its top hairline spans the panel's whole width. A foot that floats
+  inside the padding reads as a box in a box.
+- **It must be the panel's last child.** `.disclose` full-bleeds too, and two
+  stacked full-bleeders each pull the next up over the panel's own edge.
+- **13px `--text-tertiary`.** Quieter than the table, never a warning. A foot
+  that shouts is a foot people stop reading.
+- **It is translated** even though the table above it is not. That is a
+  deliberate seam and `docs/I18N.md` §1 states the rule that draws it: a caveat
+  is translated when it stands alone as its own block, and stays inline English
+  when it is one clause in an already-English line.
+
+**What a foot must contain: a limit, not a summary.** *"Shape only — this is
+metadata read when the screen opened"* is a foot. *"5 topics, 12 partitions"* is
+a count, and counts belong in the panel head. The test that has worked: write
+the sentence a support engineer would have to add out loud if somebody quoted
+this table at them in an incident review.
+
+**Where they are today:** Topics, a topic's partitions and its config, schema
+versions, consumer groups and their members and lag, brokers and a broker's
+config, Monitoring's lag / health / throughput / no-endpoint / no-series states,
+Streams' topology, ACLs, Masking, both Connect tables, share groups, Alerts'
+rules and channels, Cluster home's triage list and broker table, and the
+Connections screen's saved-clusters panel. 28 catalog keys. The audit called
+this "the highest fidelity-per-effort item in the whole product"; it was right,
+and the reason is that it is prose, so it carries no layout risk at all.
+
+### 5.16 Cluster home — the one screen that triages
+
+The audit's sharpest sentence was about this screen: **"The app's Home reports
+and never triages."** It had three regions stacked full width — a floating row
+of four numbers, a broker table, a quorum panel. It now has five, and the two
+that carry the direction's whole thesis are the two that were absent.
+
+1. **Four tiles with a third tier** (`.stat-grid.stat-grid-tiles`). *Brokers 1*
+   is a number; *Brokers 1 / as the cluster named them when you connected* is an
+   answer **and** its own caveat. The fourth tile counts consumer groups and
+   says how many are settled; it takes the attention spine when any is not, and
+   the spine never carries that meaning alone (Law 2) — the sub-caption says the
+   word.
+2. **The cluster id, outside the tile row**, as a mono literal. It is a string
+   Kafka handed over, not a quantity Kavka counted, so it is not a card and it
+   is not sans (§4).
+3. **"Needs a look" — the triage list.** Every row is something Kavka can
+   **prove** from data it holds: an alert rule firing right now (from this
+   connection's own alert log, `resolved_ms === null`), and a consumer group
+   Kafka itself reports as anything other than Stable. The panel head says so
+   out loud, because a triage list that looks exhaustive and is not is worse
+   than no list. Each row carries a deep link to the screen that answers it —
+   and when no navigator is threaded down, it states the screen in words rather
+   than drawing a button that cannot navigate.
+4. **Brokers beside the quorum** (`.home-split`), not above it. Both are short
+   tables on a 1320px stage, and stacking them pushed the quorum — the thing you
+   read when the brokers all look fine and nothing works — below the fold. It
+   wraps to one column under the split's own min-width.
+5. **A `.panel-foot` on both tables** (§5.15).
+
+**Two things Home deliberately does not have.**
+
+- **No Topics table.** The mockup draws one; Topics is its own rail screen with
+  filtering, creation and per-topic drill-down, and a second poorer copy here
+  would be two places to look for one answer. The audit agrees — *"do not
+  restore that one"*.
+- **No worst-lag tile.** The mockup's fourth tile is *Worst lag 82 /
+  demo-checkout on payments*. Computing it means asking **every** consumer group
+  for its committed offsets — one admin round trip per group, on the screen that
+  opens the moment you connect. On a cluster with two groups that is invisible;
+  on one with four hundred it is a Home screen that hangs, and the number would
+  still be a snapshot the instant it arrived. Reporting a number Kavka did not
+  measure is the one thing this redesign exists to refuse, so the tile counts
+  groups instead and the lag question is answered where it is asked — the
+  Consumer groups screen, and any lag rule the user actually asked Kavka to
+  watch, which **does** appear in "Needs a look" the moment it fires.
+
+**Both sources, or neither.** The triage list is built from the alert log *and*
+the group list, so it reads as "still reading" while either is in flight, says
+which half is missing when one failed, and refuses to render *"Nothing needs a
+look"* while half the evidence is outstanding. A cheerful verdict from partial
+data is the exact failure this product exists to prevent, and Home is where it
+would have been most expensive.
+
 ---
 
 ## 6. Protected-environment guardrails — nine layers, ordered by survivability
@@ -1087,8 +1631,8 @@ protected gets them there too.
    permanently peripheral, no text to habituate to. In forced-colors it thickens
    and gains **the environment's own name, uppercased** — `PROD`, `PRODUCTION`,
    `UAT` — via `content: attr(data-env-label)`.
-3. **The bootstrap address is always on screen** — line 2 of the sidebar row and
-   in the status bar. *Most production accidents are
+3. **The bootstrap address is always on screen** — in the rail's cluster card,
+   on every switcher menu row, and in the status bar. *Most production accidents are
    right-action-wrong-cluster.*
 4. **Type-to-confirm on every destructive modal, environment-gated not
    action-gated.** A protected environment always asks; an unprotected one
@@ -1097,28 +1641,40 @@ protected gets them there too.
    This is the *bonus*, not the guardrail — layers 1–4 are load-bearing. Escape
    hatch: `[data-env-intensity="rule-only"]`. **One warm-danger substrate for
    every protected environment, whatever colour its chip is.**
-6. **Protected rows stay tinted in the sidebar** whether selected or not, plus a
-   2px `--danger` left border.
+6. **Protected rows stay tinted in the cluster switcher** whether selected or
+   not, plus a 2px `--danger` left border.
 7. **Write actions change class in a protected environment** — Produce, Delete,
    Reset render as danger-outlined even when routine, and the produce form
    carries an undismissable warning banner.
 8. **Read-only defaults ON** when a protected environment is picked in the
    connection form, with the reason stated as it happens. — *specified, not
    shipped.*
-9. **The window title carries it** — `orders-prod · PROD — Kavka`, the suffix
-   being the environment's own uppercased name, so the taskbar, Dock and
-   `Cmd+Tab` warn too. — *specified, not shipped.*
+9. **The window title carries it** — `Kavka · orders-prod · PROD`, the last
+   part being the environment's own uppercased name, so the taskbar, Dock and
+   `Cmd+Tab` warn too. `src/windowTitle.ts`, called once from the shell.
 
-> **Layers 8 and 9 are specified and not shipped**, marked the same way the
-> light theme is in §10 and for the same reason: a spec that reads as shipped
-> is worse than one that admits it isn't, because the next person audits
-> against it. Layer 8 needs a rule for the edit that *removes* protection from
-> an environment a connection already sits in — silently un-flipping somebody's
-> deliberate `read_only: false` is a worse failure than not defaulting at all —
-> and layer 9 needs the Tauri window title to follow both the selected profile
-> and the registry, which today have no shared owner in the shell. **Layers 1–7
-> ship, and 1–4 are the load-bearing ones** (§6's own ordering), so the
-> guardrail is not waiting on either of these.
+> **Layer 9 is the one layer not gated on `protected`.** Every connection puts
+> its environment in the title, protected or not — which is the mockup's own
+> titlebar (`Kavka · local · DEV`) and which weakens nothing, because the
+> warning here *is* the word: `PROD` appears in the taskbar only on a prod
+> cluster whether or not `DEV` appears on the others. The environment's
+> spelling comes from the registry rather than from `profile.environment`, so
+> a renamed environment renames the title and the chip together; the state
+> (connecting / connected) is deliberately **not** in it, because a title that
+> flickers is a title people stop reading. It needs
+> `core:window:allow-set-title` in `src-tauri/capabilities/default.json` —
+> `core:default` grants only the read side — and that grant reaches the binary
+> at build time, so a shell built before it landed rejects the call and the
+> title silently stays "Kavka".
+
+> **Layer 8 is specified and not shipped**, marked the same way the light theme
+> is in §10 and for the same reason: a spec that reads as shipped is worse than
+> one that admits it isn't, because the next person audits against it. It needs
+> a rule for the edit that *removes* protection from an environment a
+> connection already sits in — silently un-flipping somebody's deliberate
+> `read_only: false` is a worse failure than not defaulting at all. **Layers
+> 1–7 and 9 ship, and 1–4 are the load-bearing ones** (§6's own ordering), so
+> the guardrail is not waiting on it.
 
 Outside the app the same flag drives the two write gates: the CLI's
 **`--yes-prod`** and the MCP server's **`KAVKA_MCP_ALLOW_PROD`**. Both keep
@@ -1208,7 +1764,7 @@ before the request timed out.
 | `Save Profile` | `Save` |
 | `BOOTSTRAP SERVERS` | `Bootstrap servers` |
 | `Invalid input.` | `Use host:port, e.g. broker-1:9092` |
-| `Connection name is required.` | `Give this connection a name so you can find it in the sidebar.` |
+| `Connection name is required.` | `Give this connection a name so you can find it in the cluster switcher.` |
 | `Meta data fetch error: BrokerTransportFailure` | `Can't reach kafka-1.internal:9092` + *The hostname didn't resolve. Check the spelling, or whether you need to be on the VPN.* + `Show details ▾` |
 | `Are you sure?` | `This removes the topic and every message in it — about 4.2M records.` |
 | `OK` | `Delete topic` |
@@ -1261,11 +1817,36 @@ tombstone · under-replicated · ISR.
 
 ### Empty states
 
-Same anatomy every time: one sentence naming the situation, one sentence naming
-the action, at most one primary action. Centred block, `max-width: 44ch`,
-**left-aligned text inside it** (centred paragraphs are harder to read). No
-illustrations, no shrug emoji. Where a visual helps, render a 6-line mono
-skeleton of the table that will appear here, in `--text-absent`.
+**Two variants, and which one you want is decided by where the nothing is.**
+
+| | `.empty-state` / `.empty-block` (`styles.css`) | `.teach` (`styles/jackdaw-shell.css`) |
+|---|---|---|
+| Where | the whole viewport | **inside a panel**, where the data would have been |
+| Shape | centred block, 52ch, left-aligned text inside | left-aligned horizontal row: 56px `.teach-art` tile, then the words |
+| When | genuine first run, a failed profile read — the app has nothing to show at all | one panel came back empty while the rest of the screen is fine |
+| Today | `App.tsx`'s four states | Monitoring's *no metrics endpoint*, Connect's equivalent |
+
+Same anatomy in both: one sentence naming the situation, one sentence naming
+the action, at most one primary action. **Left-aligned text** (centred
+paragraphs are harder to read). No shrug emoji. Where a visual helps, render a
+6-line mono skeleton of the table that will appear here, in `--text-absent`.
+
+**`.teach` adds the three-item list, and that is the reusable part.** It answers
+the three questions every in-panel empty state gets asked, in this order — *what
+you would get* · *how to switch it on* · *what still works without it* — as an
+em-dashed `ul` (a list of three sentences, not three options). The governing
+line is Monitoring's: **"Kavka would rather show you nothing than draw a line it
+made up."** An empty panel that only says "no data" makes the user suspect the
+app; one that names the mechanism makes them fix the cluster.
+
+> **It is shell furniture and it lives in the shell sheet.** It was written
+> beside Monitoring, the screen that needed it first, in
+> `styles/jackdaw-ops.css`; Connect adopted it within the same sweep. An idiom
+> two screens share is not one screen's, and a shared idiom left in a
+> screen-scoped file is how the third screen forks it instead of reusing it. Its
+> `@media (max-width: 900px)` reflow and its `forced-colors` edge moved with it —
+> `jackdaw-shell.css` loads last, so an override left behind would have silently
+> lost to the base rule.
 
 **First launch** — the one screen that has to teach:
 
@@ -1288,7 +1869,7 @@ feature copy.
 
 Other required empty states:
 
-- **Sidebar, no connections** — *Nothing here yet. Add your first connection below.*
+- **Cluster switcher, no connections** — *No connections saved yet.*
 - **Connected, no topic chosen** — *Pick a topic to see its messages. `orders.v2`
   is the busiest one right now.* — **gate that second sentence on a fresh,
   successful metadata fetch and fall back silently**; it is embarrassing when
@@ -1377,7 +1958,7 @@ the message.**
 | Metadata timeout | Connected, but the cluster didn't answer in time | The broker accepted the connection but didn't return metadata within 15s. It may be overloaded, or a firewall may be blocking the address the broker advertises — which can differ from the one you typed. |
 | Authorization | Connected, but this account can't list topics | It needs `Describe` on the cluster. Ask whoever issued the credentials for that permission. |
 | Timeout, prod | Can't reach `payments-prod-1:9093` | Nothing changed on your machine — this is usually the VPN or a broker restart. |
-| Unknown profile | That connection isn't on this machine any more | It may have been deleted in another window. Pick another connection from the sidebar, or add it again. |
+| Unknown profile | That connection isn't on this machine any more | It may have been deleted in another window. Pick another connection from the cluster switcher, or add it again. |
 | *(unrecognised)* | *the raw broker string, verbatim* | Kavka doesn't recognise this one. The broker's full reply is under Show details — it usually names the host or the setting at fault. |
 | Read-only block *(toast, `role="alert"`, no auto-dismiss)* | Read-only connection — nothing was sent | This connection is marked read-only, so Kavka didn't produce the message. Turn read-only off in the connection's settings if you meant to write. |
 | Active group | `checkout-service` is running | Offsets can't be reset while 3 members are consuming. Stop the application, then try again — Kafka will reject the reset otherwise. |
@@ -1429,7 +2010,7 @@ keyboard-shaped rather than screen-shaped:
 
 `⌘K` every topic, group and action · `⌘P` go-to · `⌘1…9` clusters · `/` focus
 search · `j`/`k` walk rows · `⏎` inspect · `y` copy cell, `Y` copy row as JSON ·
-`gg`/`G` top/bottom · `⌘I` inspector · `⌘B` sidebar · `Esc` cancel the running
+`gg`/`G` top/bottom · `⌘I` inspector · `Esc` cancel the running
 search · `ƒx` turn search into CEL.
 
 `More options` and the column picker persist per profile. `Show details` yields
@@ -1464,7 +2045,7 @@ Anything not on that list — charts, config diff, topology, reassignment —
    (**both** its normal and its `[data-alert="danger"]` value), `--env-wire`
    and every lag-bar fill — against `--track-empty` as well as the surfaces —
    at ≥3:1 across all twelve dark/protected surfaces plus the three protected
-   sidebar row surfaces. `slate`'s rule is the one **documented exemption**:
+   switcher row surfaces. `slate`'s rule is the one **documented exemption**:
    1.14–1.38:1, decorative by design (§3.1).
    **Chip fills are excluded on purpose** — the chip contains the
    environment's name, so the fill is a container and not a signal; §3.1
@@ -1474,7 +2055,7 @@ Anything not on that list — charts, config diff, topology, reassignment —
    **Both themes are in scope, not just dark.** Light ships (§10.2), so
    every assertion above runs twice: six dark surfaces, six dark protected
    surfaces, six light surfaces, six light protected surfaces. The binding
-   figures are usually a selected row in dark and the sidebar in light.
+   figures are usually a selected row in dark and the rail in light.
    **Also asserted, new in Jackdaw:** all four accents' ink against every
    surface and their `--on-brass` against their own fill; `--perch-ink` and
    `--perch-title` on `--perch-bg`; and every semantic ink on `--perch-bg`,
@@ -1563,11 +2144,22 @@ them is ever the string `"system"`:
 > query wins on its own regardless, so a user who told the OS they get motion
 > sick never has to find a second switch.
 
+**A sixth axis has no attribute: `perch`** (`full` · `line` · `hidden`, §5.12).
+The five above are answered by the stylesheet alone, which is why they have to
+be on `<html>` before the first byte of CSS arrives. Perch visibility is
+answered in React, because it is not absolute: a hidden Perch still renders
+while a screen is **loading** and still renders when a read **failed**, and no
+`[data-perch="hidden"] .perch { display: none }` can tell which of those it is
+looking at. It is stored with the other five — one record, one key, one
+Settings screen — and read through `useAppearance()`.
+
 **Persistence:** one JSON record under `localStorage["kavka.appearance"]`,
 through the safe helpers in `src/storage.ts`. Storage can throw — disabled,
 full — and an appearance preference is never worth an exception in a render
 path. `readAppearance()` degrades **field by field**, so one bad value cannot
-cost the user the other four.
+cost the user the other five. A record written before an axis existed is
+missing that field, which reads as its default — the behaviour those users
+already have.
 
 **The store** (`src/appearance.ts`) is a module-level value plus a listener set
 with a `useSyncExternalStore` snapshot — the same shape `i18n/index.ts` uses,
@@ -1584,7 +2176,10 @@ stylesheet exists.
 > **It is a deliberate duplicate.** A module import cannot run before first
 > paint. Four things are shared and the two files must be changed together: the
 > storage key, the five attribute names, the defaults, and the two
-> `--bg-canvas` literals. Nothing else in either file needs to agree.
+> `--bg-canvas` literals. Nothing else in either file needs to agree — and
+> `perch` in particular is **not** in the inline script's `DEFAULTS`, because
+> it stamps nothing and a sixth field there would be a duplicate that does
+> nothing.
 
 The stylesheet then takes `html { background: var(--bg-canvas) !important }`, so
 there is one authority for the colour the moment there can be one.
@@ -1607,8 +2202,8 @@ production is as unmistakable as a screenshot of dark production.
 
 ### 10.3 Settings
 
-`SettingsView.tsx`, reachable from the sidebar footer **with no cluster
-connected**. That is the reason it is a view and not a dialog: the two
+`SettingsView.tsx`, a rail item in the **Application** group, reachable **with
+no cluster connected**. That is the reason it is a view and not a dialog: the two
 preferences people want on first launch are the theme and the font size, and on
 first launch there is nothing to connect to. It is also the first branch in
 `App.tsx`'s view selection, so it works even in the state where reading the
@@ -1670,6 +2265,29 @@ These are deliberate. Do not "fix" them without reading the reason.
 
 ### From the Jackdaw mockup
 
+- **There is a status bar; the mockup has none.** It carries live operational
+  state a static drawing never had to honour — progressive search progress
+  (Phase 2's "search never silently truncates" gate depends on it), tail rate,
+  connection latency, and §6 layer 3's always-visible bootstrap address,
+  because most production accidents are right-action-wrong-cluster. It spans
+  the whole window and carries **no version**: a build number is not
+  operational state, and it lives in the brand lockup (§5.1).
+- **The cluster-scoped rail group keeps its concept names.** The mockup titled
+  that group with the live cluster — a `state-dot` plus `local · DEV` — and
+  called it the biggest wayfinding change from the ten-tab strip. Kavka has ten
+  screens where the mockup had four, so the four concept words (Cluster ·
+  Observe · Safety · Integrations) are doing work the mockup's single group
+  never had to do: they are what teaches that ACLs live under Safety. The live
+  identity is not lost — it is in the cluster card directly above the groups,
+  with the address as well, which is more than the mockup's label said.
+- **Messages is a drill-down, not a top-level rail item.** The mockup reaches a
+  message browser directly; Kavka reaches it through Topics → a topic → its
+  messages, because a message browser is always *of* a topic and Kavka has a
+  Topics list the mockup never drew. The cost is that the rail says *Topics*
+  while you are reading messages, and the fix is `.stage-head`'s breadcrumb
+  (§5.13) rather than a flat item that would need a topic already chosen —
+  the component exists now, and the three full-height panes are the ones that
+  still have to adopt it.
 - **The rail carries ten screens, not four.** The mockup drew Cluster home,
   Messages, Monitoring and Alerts, and left ACLs, Connect, Masking and Streams
   with no home at all. Reproducing that would have deleted four working
@@ -1681,8 +2299,19 @@ These are deliberate. Do not "fix" them without reading the reason.
   Clay is close enough to `--danger` that a user could pick an accent the eye
   reads as the warning colour, and a decorative hue and a guardrail hue in the
   same family is the one composition §6 forbids.
-- **The Perch has no Hide button.** See §5.12: a verdict the user can switch off
-  is a verdict the app stops being accountable for.
+- **The Perch's Hide button is back, and there is a three-state visibility
+  preference beside it — BY OWNER RULING, overturning this document's own
+  earlier no-dismiss doctrine.** The app shipped without a dismiss, on the
+  grounds that a verdict the user can switch off is a verdict the app stops
+  being accountable for. That is true of a *verdict* and not of a *note*, and
+  this component is both — so §5.12 splits it. The mockup's HIDE control returns
+  as the per-screen pill, and **Settings → Appearance** carries the durable
+  preference `appearance.perch`: **Full** (default) · **One line** · **Hidden**.
+  The guardrail that makes the ruling safe is stated once and enforced in the
+  component rather than at each call site: **a screen that is still reading, or
+  that failed to read, forces the whole note back in every mode, including
+  Hidden.** Errors surface whatever the preference says. The mockup's restore
+  button comes with it.
 - **`data-motion` is `system | reduce`, not `full | reduced`.** The app-level
   preference is an *override*, and the OS media query wins on its own whatever
   it says — so the third state the mockup implied ("motion on, ignore the OS")
@@ -1694,6 +2323,23 @@ These are deliberate. Do not "fix" them without reading the reason.
 - **The mockup's `--f15` body type and `--row-h: 46px` became 15px and 44px.**
   15px is kept verbatim because it is the direction's central legibility bet.
   44px is a round number in the 4px space ladder; 46 was not.
+- **The mockup's spacing ladder is deleted, not adopted — BY OWNER RULING on
+  the audit's one open maintenance item.** `--s1`…`--s9` was declared and used
+  zero times while `--s-1`…`--s-12` carried all 504 spacing declarations. Two
+  live names for the same nine values is how the *next* component drifts, so
+  the unused set is gone and §3 records the exact mapping for anyone reading a
+  Jackdaw measurement. The type-token pair (`--t-*` over `--fN`) is **not** the
+  same case and stays: it is an alias layer with one source of truth, which is
+  §3's documented pattern rather than a second ladder.
+- **Every table's foot is translated; the table above it is not.** This is the
+  one seam that runs *through* a component rather than around it, and it is the
+  price of the panel-foot idiom (§5.15) landing before the deep views are
+  extracted. The rule that decides which side of the line a new caveat falls on
+  is stated once, in `docs/I18N.md` §1: a caveat is translated when it stands
+  alone as its own block, and stays inline English when it is one clause inside
+  a line that is already English end to end. **Do not add a translated string
+  inside a table without reading that rule** — an undocumented exception here is
+  exactly the drift the fidelity audit was called in to find.
 
 ### Carried over from Ledger
 
@@ -1708,7 +2354,7 @@ These are deliberate. Do not "fix" them without reading the reason.
 - **Env tokens are applied via attribute selectors, not `:root[…]`.**
   Identical specificity, but they also work on the `.app` wrapper, on a nested
   `<form>` and on an individual chip, which is what makes the live substrate
-  preview — and a sidebar of mixed environments under one app-level colour —
+  preview — and a switcher of mixed environments under one app-level colour —
   possible without lifting state.
 
 - **`data-env` became `data-env-color` + `data-env-protected`, and that split
@@ -1855,7 +2501,7 @@ These are deliberate. Do not "fix" them without reading the reason.
   `tabIndex` cannot focus what a clip has removed, so the last four views were
   unreachable by keyboard too (SC 1.4.10).
 
-- **Light-theme protected sidebar rows fail AA and ship anyway — because the light
+- **Light-theme protected switcher rows fail AA and ship anyway — because the light
   theme itself doesn't ship.** On `--bg-row-prod-selected` `#F2D8D4` and
   `--bg-row-prod-hover` `#F7E2DF` (light block), `--text-tertiary`,
   `--text-placeholder`, `--text-absent` and `--border-control` all measure
@@ -1885,7 +2531,7 @@ These are deliberate. Do not "fix" them without reading the reason.
   by reaching into the environment store from `errors.ts` — that module's
   purity is the reason its whole table is testable without a broker.
 
-- **Light-theme protected sidebar rows: the two `--bg-row-prod-*` token names
+- **Light-theme protected switcher rows: the two `--bg-row-prod-*` token names
   kept their `prod` spelling.** They are now applied by
   `.profile-row-protected`, so the names lie slightly. Renaming them touches
   four rules, two of them in the forced-colors block, for zero behaviour — and

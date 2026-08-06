@@ -641,7 +641,7 @@ export default function ResetOffsetsModal({
           </button>
           <button
             type="button"
-            className="btn btn-danger-confirm"
+            className="btn btn-danger-confirm btn-swap"
             disabled={busy || !typedOk || chosenPartitions.length === 0}
             aria-busy={busy || undefined}
             title={
@@ -657,10 +657,13 @@ export default function ResetOffsetsModal({
             }
             onClick={() => void submit()}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              Reset offsets
             </span>
-            Reset offsets
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              Reset offsets
+            </span>
           </button>
         </div>
       </div>

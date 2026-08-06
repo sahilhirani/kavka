@@ -534,6 +534,12 @@ export default function StreamsTab({
                 </table>
               </div>
             </details>
+
+            {/* The limitation the inference note above does NOT cover: what
+                Kavka was not allowed to see. A changelog topic this account
+                cannot describe is missing from the picture, and a missing box
+                looks exactly like an application that never had one. */}
+            <p className="panel-foot">{t("streams.topology.foot")}</p>
           </>
         )}
       </section>

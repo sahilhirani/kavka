@@ -481,7 +481,7 @@ export function ReassignModal({
               cluster has only accepted a plan when this resolves. */}
           <button
             type="button"
-            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"} btn-swap`}
             disabled={blocked !== undefined}
             aria-busy={busy || undefined}
             title={
@@ -492,10 +492,13 @@ export function ReassignModal({
             }
             onClick={() => void submit()}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              Start moving replicas
             </span>
-            Start moving replicas
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              Start moving replicas
+            </span>
           </button>
         </div>
       </div>

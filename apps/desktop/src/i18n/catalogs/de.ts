@@ -39,20 +39,37 @@ const de: Catalog = {
   "confirm.type.label": "Zum Bestätigen {name} eingeben",
   "confirm.type.reason": "Geben Sie genau {name} ein, um dies zu bestätigen",
 
-  "sidebar.navLabel": "Gespeicherte Verbindungen",
-  "sidebar.title": "Cluster",
-  "sidebar.loading": "Ihre Verbindungen werden gelesen…",
-  "sidebar.empty":
-    "Hier ist noch nichts. Fügen Sie unten Ihre erste Verbindung hinzu.",
-  "sidebar.profileMeta": "{address} · {status}",
-  "sidebar.status.disconnected": "nicht verbunden",
-  "sidebar.status.connecting": "wird verbunden…",
-  "sidebar.status.connected": "verbunden",
-  "sidebar.draftName": "Neue Verbindung",
-  "sidebar.draftMeta": "noch nicht gespeichert",
-  "sidebar.about": "Über",
-  "sidebar.settings": "Einstellungen",
 
+  // ── The cluster switcher and the rail's cluster card ──────────────────
+  // The sidebar is gone (DESIGN.md §5.1); its rows are this menu's rows and
+  // its identity block is the rail's cluster card. Law 2 (§1) survives the
+  // move: the status dot never carries the meaning alone, so `rowMeta` reads
+  // "address · state" in EVERY state. Keep both slots.
+  "switcher.trigger": "Cluster wechseln",
+  "switcher.menuLabel": "Ihre Verbindungen",
+  "switcher.empty": "Noch keine Verbindungen gespeichert.",
+  "switcher.noEnvironment": "Keine Umgebung",
+  "switcher.rowMeta": "{address} · {status}",
+  "switcher.status.disconnected": "nicht verbunden",
+  "switcher.status.connecting": "verbindet…",
+  "switcher.status.connected": "verbunden",
+  "switcher.connect": "Verbinden",
+  "switcher.connecting": "Verbindet…",
+  "switcher.disconnect": "Trennen",
+  "switcher.connectTitle": "Mit {name} verbinden",
+  "switcher.disconnectTitle": "Verbindung zu {name} trennen",
+  "switcher.draftName": "Neue Verbindung",
+  "switcher.draftMeta": "noch nicht gespeichert",
+  "switcher.protected": "Geschützt",
+  "brand.versionTitle": "Kavka Core-Version {version}",
+  "card.none": "Kein Cluster",
+  "card.state.none": "Noch nichts ausgewählt",
+  "card.state.connected":
+    "Verbunden · {count, plural, one {# Broker} other {# Broker}}",
+  "card.state.connecting": "Verbindet…",
+  "card.state.disconnected": "Nicht verbunden",
+
+  // ── App shell: status bar, empty states, global errors ─────────────────
   "app.status.disconnected": "Nicht verbunden",
   "app.status.connecting": "Wird verbunden…",
   "app.status.connected": "Verbunden",
@@ -70,14 +87,13 @@ const de: Catalog = {
     "Passwörter gehen in den Schlüsselbund Ihres Betriebssystems. Nichts über Ihre Cluster verlässt diesen Rechner.",
   "app.pick.title": "Wählen Sie eine Verbindung",
   "app.pick.hint":
-    "Wählen Sie links ein Cluster, um seine Broker und Topics zu sehen, oder fügen Sie eine weitere Verbindung hinzu.",
+    "Öffnen Sie oben links den Cluster-Umschalter, um einen auszuwählen, oder fügen Sie eine weitere Verbindung hinzu.",
   "app.readonlyChip": "schreibgeschützt",
   "app.readonlyTitle":
     "Diese Verbindung ist schreibgeschützt. Schalten Sie das in den Einstellungen der Verbindung aus, um zu schreiben oder zu bearbeiten.",
   "app.statusbar.draft": "Neue Verbindung — noch nicht gespeichert",
   "app.statusbar.none": "Keine Verbindung ausgewählt",
   "app.statusbar.commands": "Befehle",
-  "app.statusbar.coreVersion": "core v{version}",
   "app.cmd.search": "In {topic} suchen",
   "app.cmd.search.kw":
     "find filter cel scan query messages grep suchen filtern nachrichten",
@@ -111,7 +127,7 @@ const de: Catalog = {
   "palette.disconnect.kw": "close leave cluster session trennen beenden",
   "palette.disconnect.none": "Zurzeit ist nichts verbunden",
   "palette.disconnect.ambiguous":
-    "Wählen Sie zuerst in der Seitenleiste das Cluster, das getrennt werden soll",
+    "Wählen Sie zuerst im Cluster-Umschalter den Cluster aus, den Sie trennen möchten",
   "palette.refresh": "Topics neu laden",
   "palette.refresh.kw":
     "reload metadata list topics partitions cluster neu laden aktualisieren",
@@ -142,7 +158,7 @@ const de: Catalog = {
   "about.licenceValue": "Freie und quelloffene Software unter AGPL-3.0",
   "about.language": "Sprache",
   "about.language.hint":
-    "Kavkas Rahmen und das Urteil, mit dem jede Cluster-Ansicht beginnt — Seitenleiste, Befehlspalette, diese Dialoge, das Verbindungsformular und der Eröffnungssatz jeder Ansicht. Die Tabellen und Formulare darunter sind noch englisch.",
+    "Kavkas Rahmen und das Urteil, mit dem jeder Cluster-Bildschirm beginnt — die Leiste, die Befehlspalette, diese Dialoge, das Verbindungsformular und der Eröffnungssatz jedes Bildschirms. Die Tabellen und Formulare darunter sind weiterhin auf Englisch.",
   "about.language.machine":
     "{language} wurde maschinell übersetzt und von keinem Muttersprachler geprüft. Korrekturen sind willkommen — docs/I18N.md erklärt, wie.",
 
@@ -205,23 +221,17 @@ const de: Catalog = {
     "{bits}. Passwörter stehen nicht in einem Export — öffnen Sie jede neue Verbindung und tragen Sie ihr Passwort ein, bevor Sie sich verbinden.",
 
   "editor.new.title": "Verbindung hinzufügen",
-  "editor.new.subtitle":
-    "Ein Broker genügt für den Anfang — den Rest des Clusters findet Kavka von dort aus.",
-  "editor.saved.subtitle":
-    "Nicht verbunden. Prüfen Sie die Angaben unten und verbinden Sie sich dann.",
-  "editor.name.label": "Name der Verbindung",
   "editor.name.placeholder": "orders — local",
   "editor.name.hint":
-    "Was immer Sie in der Seitenleiste wiedererkennen. Nur Kavka sieht es.",
+    "Was auch immer Sie im Cluster-Umschalter wiedererkennen. Nur Kavka sieht es.",
   "editor.env.label": "Umgebung",
   "editor.env.hint.protected":
-    "Diese Umgebung ist als geschützt markiert: Die Ledger-Linie trägt ihre Farbe in jeder Tabelle, die Seitenleiste markiert dieses Cluster, ein Warnbalken liegt über dem oberen Fensterrand, und vor jeder zerstörenden Aktion müssen Sie den Namen eintippen. Schalten Sie unten den Schreibschutz ein, sofern Sie nicht wirklich schreiben müssen.",
+    "Diese Umgebung ist als geschützt markiert: Die Ledger-Linie trägt ihre Farbe in jeder Tabelle, der Cluster-Umschalter markiert diesen Cluster, ein Warnbalken liegt oben über dem Fenster, und jede zerstörerische Aktion verlangt vorher die Eingabe des Namens. Schalten Sie unten Nur-Lesen ein, sofern Sie nicht wirklich schreiben müssen.",
   "editor.env.hint.other":
     "Kavka färbt jede Ansicht nach Umgebung, damit Sie kein Cluster mit einem anderen verwechseln.",
   "editor.env.manage": "Umgebungen verwalten…",
   "editor.env.hint.unknown":
     "Auf diesem Rechner ist {name} nirgends definiert, deshalb zeigt Kavka die Umgebung neutral grau an und wendet keine Schutzmechanismen an. Legen Sie sie unter „Umgebungen verwalten“ an, um ihr eine Farbe zu geben und zu entscheiden, ob sie geschützt ist.",
-  "editor.bootstrap.label": "Bootstrap-Server",
   "editor.bootstrap.hint":
     "Ein beliebiger einzelner Broker in Ihrem Cluster — den Rest findet Kavka von dort aus. Einer pro Zeile, oder durch Komma getrennt. Sie betreiben das Dev-Cluster aus diesem Repository? Dann nehmen Sie {local}.",
 
@@ -357,7 +367,7 @@ const de: Catalog = {
   "editor.kbd.undo": "Änderungen verwerfen",
 
   "editor.err.name":
-    "Geben Sie dieser Verbindung einen Namen, damit Sie sie in der Seitenleiste wiederfinden.",
+    "Geben Sie dieser Verbindung einen Namen, damit Sie sie im Cluster-Umschalter wiederfinden.",
   "editor.err.bootstrap":
     "Fügen Sie mindestens einen Broker hinzu, als host:port — z. B. broker-1:9092",
   "editor.err.srUrl":
@@ -409,12 +419,49 @@ const de: Catalog = {
     "Auf diesem Rechner definiert nichts {name}, daher gelten für diese Verbindung keine Schutzmechanismen.",
   "editor.perch.caveat.readonly":
     "Nur-Lesen ist aktiv — Kavka durchsucht diesen Cluster, schreibt aber nie hinein.",
-  "editor.cluster.legend": "Der Cluster",
-  "editor.guardrails.legend": "Schutzmechanismen",
   "editor.fold.set": "Eingerichtet",
   "editor.fold.notSet": "Nicht eingerichtet",
   "editor.fold.connectCount":
     "{count, plural, one {# Cluster} other {# Cluster}}",
+
+  "editor.head.unsaved": "Noch nicht gespeichert",
+  "editor.step.name": "Wie sollen wir ihn nennen?",
+  "editor.step.env": "Um welche Umgebung handelt es sich?",
+  "editor.step.env.why":
+    "Die Umgebung bestimmt die Farbe, die Sie für diesen Cluster überall in der App sehen — und ob Kavka ihn als geschützt behandelt.",
+  "editor.step.bootstrap": "Wo ist er erreichbar?",
+  "editor.step.bootstrap.why":
+    "Ein {term} genügt. Kavka fragt ihn nach dem Rest des Clusters.",
+  "editor.bootstrap.term": "Bootstrap-Server",
+  "editor.step.sr": "Gibt es eine Schema Registry?",
+  "editor.step.optional": "(optional)",
+  "editor.step.readonly": "Soll Kavka hier etwas ändern dürfen?",
+  "editor.step.readonly.why":
+    "Nur-Lesen ist der sicherste Weg, sich den Cluster einer anderen Person anzusehen.",
+  "editor.saveConnection": "Verbindung speichern",
+  "editor.state.connecting": "Verbindung wird aufgebaut…",
+  "editor.state.connected": "Gerade verbunden.",
+  "editor.state.failed":
+    "Der letzte Versuch ist fehlgeschlagen — der Grund steht oben.",
+  "editor.state.draft":
+    "Noch nichts gespeichert, also wurde noch nichts versucht.",
+  "editor.state.idle":
+    "Nicht verbunden. Kavka führt kein Protokoll darüber, wann es das zuletzt war.",
+
+  // ── Der Verbindungen-Bildschirm — Kopf und Liste gespeicherter Cluster ───
+  "connections.list.title": "Gespeicherte Cluster",
+  "connections.list.empty":
+    "Noch keine Verbindungen gespeichert. Die, die Sie gerade schreiben, wird die erste sein.",
+  "connections.list.foot":
+    "{protected} bedeutet, dass Kavka Sie den Namen des Clusters eintippen lässt, bevor etwas Zerstörerisches passiert. Farbe ist Identität; geschützt ist die Schutzvorrichtung.",
+  "connections.list.footProtected": "Geschützt",
+  "connections.list.footSession":
+    "„Verbunden“ und „nicht verbunden“ beschreiben nur diese Sitzung — Kavka kontaktiert nie einen Cluster, mit dem es nicht verbunden ist, und kann daher nicht sagen, ob einer läuft.",
+  "connections.sub":
+    "{count, plural, =0 {Noch keine gespeicherten Cluster. Legen Sie den ersten an.} one {Ein gespeicherter Cluster. Wählen Sie ihn zum Bearbeiten oder legen Sie einen weiteren an.} other {# gespeicherte Cluster. Wählen Sie einen zum Bearbeiten oder legen Sie einen neuen an.}}",
+  "connections.sub.unknown":
+    "Wählen Sie einen Cluster zum Bearbeiten oder legen Sie einen neuen an.",
+  "connections.manageEnvironments": "Umgebungen verwalten",
 
 
   // ── Umgebungen ──────────────────────────────────────────────────────────
@@ -429,8 +476,13 @@ const de: Catalog = {
   "env.mgr.title": "Umgebungen",
   "env.mgr.intro":
     "Benennen Sie die Umgebungen, die Ihre Organisation tatsächlich betreibt. Die Farbe unterscheidet sie auf einen Blick; „geschützt“ ist der Schutzmechanismus.",
+  "env.mgr.hint.title": "Was „geschützt“ tatsächlich bewirkt",
+  "env.mgr.hint.detail":
+    "Kavka verlangt vor jeder zerstörerischen Aktion die Eingabe des Clusternamens, zeigt die Umgebung im Fenstertitel an und verweigert zerstörerische Befehle aus der CLI und dem MCP-Server ohne ausdrückliches Flag. Zwei davon geschehen in anderen Prozessen — deshalb stehen sie hier. Die Farbe dient nur der Wiedererkennung; jeder Chip nennt zusätzlich seinen Namen.",
   "env.mgr.failed": "Das hat nicht geklappt",
   "env.mgr.working": "Kavka arbeitet daran",
+  "env.mgr.namesAreYours":
+    "Die Namen gehören Ihnen. Legen Sie so viele an, wie Ihre Organisation tatsächlich hat — Kavka geht nicht davon aus, dass es nur drei gibt.",
   "env.mgr.add": "Umgebung hinzufügen",
   "env.mgr.edit": "Bearbeiten",
 
@@ -470,7 +522,22 @@ const de: Catalog = {
     "Das ist die einzige verbliebene Umgebung — legen Sie zuerst eine weitere an",
 
   // ── Cluster-Navigation (Jackdaw) ────────────────────────────────────────
-  "rail.label": "Cluster-Ansichten",
+  // The two app-level groups. They render with NOTHING connected, which is
+  // the whole reason Settings is a rail item: on first launch there is no
+  // cluster, and the theme and the font size are what a new user needs first.
+  // The read-only readout states its answer in BOTH directions — a guardrail
+  // that is silent in its dangerous state is not a guardrail.
+  "rail.navLabel": "Ansichten",
+  "rail.group.setup": "Einrichten",
+  "rail.group.application": "Anwendung",
+  "rail.item.connections": "Verbindungen",
+  "rail.item.settings": "Einstellungen",
+  "rail.readonly.label": "Nur-Lesen: {state}",
+  "rail.readonly.on": "ein",
+  "rail.readonly.off": "aus",
+  "rail.readonly.on.why": "Kavka wird hier nichts schreiben oder löschen.",
+  "rail.readonly.off.why": "Kavka kann hier schreiben und löschen.",
+
   "rail.group.cluster": "Cluster",
   "rail.group.observe": "Beobachten",
   "rail.group.safety": "Sicherheit",
@@ -488,7 +555,98 @@ const de: Catalog = {
   "rail.firing": "aktiv",
   "rail.firingTitle":
     "{count, plural, one {# Warnregel ist gerade aktiv} other {# Warnregeln sind gerade aktiv}}",
-  "rail.disconnect": "Trennen",
+
+  // ── Der Bildschirmkopf ──────────────────────────────────────────────────
+  "stage.overview.title": "Cluster-Übersicht",
+  "stage.overview.sub":
+    "Woraus dieser Cluster besteht — aus den Metadaten, mit denen er beim Verbinden geantwortet hat.",
+  "stage.overview.refresh": "Aktualisieren",
+  "stage.overview.refresh.title":
+    "Liest diesen Bildschirm erneut — die Gruppen, das Warnprotokoll, das Quorum und die Broker-Einstellungen. Die Kacheln und die Broker-Liste kamen mit der Verbindung und ändern sich erst beim erneuten Verbinden.",
+  "stage.topics.sub":
+    "Jedes Topic, das dieser Cluster gemeldet hat, samt dem, was Kavka darüber sagen kann und was nicht.",
+  "stage.groups.sub":
+    "Wer liest, wie weit zurück er ist und wann das gemessen wurde.",
+  "stage.brokers.sub":
+    "Die Maschinen in diesem Cluster und die Einstellungen, mit denen jede läuft.",
+  "stage.monitoring.sub":
+    "Gezeichnet nur aus Messungen, die Kavka bei geöffnetem Fenster genommen hat — für jede Stunde ohne Kavka bleibt eine Lücke.",
+  "stage.alerts.sub":
+    "Regeln, die Kavka für dich prüft, solange es läuft, und alles, was ausgelöst hat.",
+  "stage.streams.sub":
+    "Kafka-Streams-Anwendungen, gelesen aus den Consumer-Gruppen dahinter.",
+  "stage.acls.sub":
+    "Wer hier was darf — genau so, wie der Cluster es selbst meldet.",
+  "stage.masking.sub":
+    "Kavkas eigene Regeln zum Verbergen von Werten auf dem Bildschirm. Nichts davon ändert den Cluster oder das, was er speichert.",
+  "stage.connect.sub":
+    "Kafka-Connect-Worker, die diese Verbindung kennt, und die Connectors, die darauf laufen.",
+
+  // ── Cluster-Start (Jackdaw) — Kacheln, Triage-Liste, die beiden Tabellen ─
+  "home.clusterId": "Cluster-ID",
+  "home.clusterId.absent": "Dieser Cluster hat keine ID gemeldet.",
+  "home.tile.reading": "wird noch gelesen",
+  "home.tile.brokers.sub": "so wie der Cluster sie beim Verbinden genannt hat",
+  "home.tile.brokers.none":
+    "der Cluster hat keine gemeldet — die Verbindung steht, aber die Metadaten kamen leer zurück",
+  "home.tile.topics.sub":
+    "insgesamt {partitions, plural, one {# Partition} other {# Partitionen}}",
+  "home.tile.partitions": "Partitionen",
+  "home.tile.partitions.sub":
+    "über alle Topics hinweg — Kopien auf anderen Brokern werden nicht doppelt gezählt",
+  "home.tile.groups.allStable": "alle stabil",
+  "home.tile.groups.unsettled":
+    "{count, plural, one {# gerade nicht stabil} other {# gerade nicht stabil}}",
+  "home.tile.groups.idle":
+    "{count, plural, one {bei # ist niemand verbunden} other {bei # ist niemand verbunden}}",
+  "home.tile.groups.none": "derzeit liest nichts diesen Cluster",
+  "home.tile.groups.unread":
+    "Kavka konnte die Gruppenliste nicht lesen und kann es daher nicht sagen.",
+  "home.attention.title": "Sollte angesehen werden",
+  "home.attention.provenance":
+    "Kavka listet nur auf, was sich aus dieser Momentaufnahme belegen lässt.",
+  "home.attention.reading":
+    "Das Alarmprotokoll und die Gruppenliste dieser Verbindung werden gelesen…",
+  "home.attention.unread":
+    "Kavka konnte das Alarmprotokoll dieser Verbindung nicht lesen und kann daher nicht sagen, ob etwas ausgelöst hat. Eine leere Liste würde hier nicht bedeuten, dass alles in Ordnung ist.",
+  "home.attention.clear":
+    "In dieser Momentaufnahme muss nichts angesehen werden.",
+  "home.attention.clear.sub":
+    "Keine von Ihnen gesetzte Alarmregel löst aus, und jede von Kafka genannte Consumer-Gruppe ist stabil. Das ist keine Zusage zu allem, was Kavka nicht gemessen hat.",
+  "home.attention.partial":
+    "Keine von Ihnen gesetzte Alarmregel löst aus. Kavka konnte die Gruppenliste dieser Verbindung nicht lesen und kann daher nicht sagen, ob etwas liest — eine leere Liste ist hier keine Entwarnung.",
+  "home.attention.groupsUnread":
+    "Kavka konnte die Gruppenliste dieser Verbindung nicht lesen — nichts in dieser Liste betrifft daher, wer liest.",
+  "home.attention.alert.noDetail":
+    "Kavka hat dieses Auslösen ohne die zugehörigen Zahlen aufgezeichnet.",
+  "home.attention.group.title": "{group} liest derzeit nicht",
+  "home.attention.group.sub":
+    "Kafka meldet diese Gruppe als {state}, mit {members, plural, one {# Mitglied} other {# Mitgliedern}}. Eine Gruppe, die nicht stabil ist, konsumiert nicht weiter, bis das Rebalancing abgeschlossen ist.",
+  "home.attention.open.monitoring": "In Überwachung öffnen",
+  "home.attention.open.alerts": "Alarme öffnen",
+  "home.attention.open.groups": "Consumer-Gruppen öffnen",
+  "home.attention.where": "unter {screen}",
+  "home.attention.foot":
+    "Erstellt aus den neuesten {limit} Einträgen im Alarmprotokoll dieser Verbindung und der Gruppenliste, die dieser Bildschirm gelesen hat. Kavka wertet hier nichts anderes aus — ein Problem, das keine Regel beobachtet, erscheint in dieser Liste nicht.",
+  "home.brokers.caption": "Broker in diesem Cluster",
+  "home.brokers.none":
+    "Dieser Cluster hat keine Broker gemeldet. Das bedeutet normalerweise, dass die Verbindung steht, die Metadaten aber leer zurückkamen — versuchen Sie, neu zu verbinden.",
+  "home.brokers.foot":
+    "Das sind die Broker, die dieser Cluster in den Metadaten beim Verbinden genannt hat. Kavka hat sie seitdem nicht einzeln kontaktiert — ein Broker, der vor einer Minute ausgefallen ist, steht hier also noch.",
+  "home.brokers.details": "Details",
+  "home.brokers.details.note":
+    "Protokollversion, Log-Verzeichnisse, Replikation und Aufbewahrung, gelesen von Broker {id}",
+  "home.brokers.details.reading": "Konfiguration von Broker {id} wird gelesen…",
+  "home.brokers.details.unread":
+    "Kavka konnte die Konfiguration von Broker {id} nicht lesen. Der Broker-Bildschirm fragt dieselben Einstellungen ab und zeigt den Fehler dahinter.",
+  "home.brokers.details.caveat":
+    "Nur von Broker {id} gelesen. Ein anderer Broker in diesem Cluster kann anders konfiguriert sein, und ein Cluster mit uneinigen Brokern ist eine häufige und stille Fehlkonfiguration.",
+  "home.brokers.fact.protocol": "Protokollversion",
+  "home.brokers.fact.logDirs": "Log-Verzeichnisse",
+  "home.brokers.fact.replication": "Standard-Replikation",
+  "home.brokers.fact.autoCreate": "Topics automatisch anlegen",
+  "home.brokers.fact.retention": "Standard-Aufbewahrung (Stunden)",
+  "home.brokers.fact.absent": "auf diesem Broker nicht gesetzt",
 
   // ── Die Sitzstange (Jackdaw) ────────────────────────────────────────────
   "perch.label": "{screen} — was Kavka dazu sagen kann",
@@ -500,6 +658,9 @@ const de: Catalog = {
   "perch.state.checking": "Wird noch geprüft",
   "perch.checking":
     "Wird noch geprüft — Kavka sagt Bescheid, sobald der Cluster antwortet.",
+  "perch.hide": "Ausblenden",
+  "perch.more": "Ganzen Hinweis anzeigen",
+  "perch.show": "Hinweis für diesen Bildschirm anzeigen",
   "perch.overview.counts":
     "Verbunden mit {brokers, plural, one {# Broker} other {# Brokern}}, mit {topics, plural, one {# Topic} other {# Topics}} über {partitions, plural, one {# Partition} other {# Partitionen}}.",
   "perch.overview.firing":
@@ -778,6 +939,13 @@ const de: Catalog = {
   "alerts.history.stillFiring": "Weiterhin ausgelöst, bisher {duration}.",
   "alerts.history.gap":
     "Dieses Protokoll deckt nur die Zeit ab, in der Kavka geöffnet war. Eine Lücke darin ist eine Zeit, in der niemand hingesehen hat, und Kavka rät nicht, was darin geschah.",
+  "alerts.toast.viewGroup": "Gruppe {group} ansehen",
+  "alerts.toast.viewAlerts": "Warnung ansehen",
+  "alerts.preview.label": "Die Benachrichtigung für {rule}",
+  "alerts.preview.sent":
+    "Kavka hat Ihr Betriebssystem um {time} gebeten, dies anzuzeigen. Gebeten, nicht angezeigt — das Benachrichtigungscenter kann aus sein oder die Berechtigung entzogen, und Kavka erfährt davon nichts. Sie trägt diese Worte und nichts sonst: Schaltflächen gibt es darauf keine. Eine pro Auslösung, und eine weitere, wenn sie sich auflöst.",
+  "alerts.preview.off":
+    "Desktop-Benachrichtigungen sind für diese Verbindung aus, außerhalb dieses Fensters wurde also nichts angezeigt. So hätte es gelautet — der Name der Regel und die Zahlen, die sie ausgelöst haben, und sonst nichts.",
   "monitoring.tile.lagNow": "Rückstand bei der letzten Messung",
   "monitoring.tile.lagNowSub":
     "Nachrichten, die bei Kavkas letzter Messung auf das Gelesenwerden warteten",
@@ -789,25 +957,79 @@ const de: Catalog = {
   "monitoring.tile.partitionsSub":
     "mit mindestens einer Messung in diesem Zeitfenster",
 
+  // ── Panel-Fußnoten — was die Tabelle darüber nicht sagen kann ────────────
+  "topics.list.foot":
+    "Nur die Form. Das sind die Metadaten des Clusters selbst, gelesen beim Öffnen dieses Bildschirms: Sie sagen, wie jedes Topic aufgebaut ist, nicht wie viel darin steckt, ob etwas daraus liest oder ob es gesund ist. Öffnen Sie ein Topic für seine Partitionen, seine Zahlen und seine Consumer.",
+  "topic.partitions.foot":
+    "„Nachrichten“ ist der neueste Offset minus dem ältesten, den die Broker für diese Partition noch vorhalten. Was Retention oder Compaction entfernt hat, steckt nicht darin, und auf einem komprimierten Topic zählt es Offsets statt der Datensätze, die Sie zurücklesen würden — es ist also, was diese Partition Ihnen noch zeigen kann, nie, was sie je empfangen hat.",
+  "topic.config.foot":
+    "Einmal gelesen, beim Öffnen dieses Bildschirms. Eine Zeile ohne {plus} ist das, worauf die Broker in diesem Moment zurückgefallen sind, und kann sich unter diesem Topic ändern, ohne dass sich hier etwas ändert; einen Wert, den Kafka als vertraulich kennzeichnet, hält es vor jedem Client zurück — der Strich heißt also, dass der Broker es nicht sagt, nicht, dass nichts gesetzt ist.",
+  "schemas.versions.foot":
+    "Das sind die Versionen, die die Registry unter {subject} führt. Die Benennung von Subjects ist eine Konvention der Producer-Seite und nichts, was das Topic festhält — eine kurze Liste, oder gar keine, ist also kein Beleg dafür, dass nichts mit einem Schema nach {topic} schreibt.",
+  "alerts.rules.foot":
+    "„Ruhig“ heißt, dass nichts die Regel ausgelöst hat, nicht, dass Kavka nachgesehen und die Zahl in Ordnung gefunden hat — eine Regel, deren Messwert nicht verfügbar ist, ist ebenfalls ruhig. Der Zustand stammt aus dem Protokoll unten und ist damit nur so vollständig wie dieses Protokoll.",
+  "alerts.channels.foot":
+    "Kavka fragt jeden davon einmal pro Auslösung und versucht es nie erneut. Es erfährt nicht, ob Ihr Betriebssystem die Benachrichtigung tatsächlich angezeigt hat, und ein Webhook, der ablehnt, landet in Kavkas Protokoll statt hier — „ein“ heißt also, dass Kavka fragen wird, nicht, dass jemand erreicht wurde.",
+  "groups.list.foot":
+    "Mitgliederzahlen und Zustände stammen aus dem Moment, in dem Kavka gefragt hat. Eine Gruppe, die gerade rebalanciert, verteilt ihre Partitionen um, während Sie das lesen — ihre Zahl ist also bereits veraltet. Drücken Sie Aktualisieren für eine neue.",
+  "group.members.foot":
+    "Das sind die Mitglieder, die verbunden waren, als Kavka gefragt hat. Die Partitionszahlen sind die Zuordnung dieses Augenblicks, und ein Rebalance zeichnet sie neu, ohne dass sich auf diesem Bildschirm etwas ändert.",
+  "group.lag.foot":
+    "Lag ist die Spalte „Ende“ minus der Spalte „Committet“, und beide wurden im selben Aufruf gelesen, stimmen also miteinander überein. ∅ heißt, dass die Gruppe für diese Partition noch nie einen Offset committet hat, was nicht dasselbe ist wie ein Lag von null. Eine Gruppe, die selten committet, liest sich als im Rückstand bei Arbeit, die sie längst erledigt hat.",
+  "brokers.list.foot":
+    "Das ist die Broker-Liste, mit der Kafka geantwortet hat, als diese Verbindung hergestellt wurde. Ein Broker, der seither hinzugekommen oder gegangen ist, taucht hier erst nach einem erneuten Verbinden auf.",
+  "broker.config.foot":
+    "Das ist die Antwort EINES Brokers. Kafka hält die meisten Einstellungen pro Broker, ein anderer Broker in diesem Cluster kann also mit einem anderen Wert für denselben Namen laufen, und auf diesem Bildschirm wäre davon nichts zu sehen.",
+  "monitoring.foot.lag":
+    "Lag ist der neueste Offset der Partition minus dem committeten Offset der Gruppe, und beide stammen aus derselben Messung, stimmen also miteinander überein. Eine Gruppe, die selten committet, wird als im Rückstand bei bereits erledigter Arbeit gezeichnet, und nichts hier kann das von einer Gruppe unterscheiden, die wirklich hinterherhängt.",
+  "monitoring.foot.health":
+    "Beide Messwerte kommen vom Metrik-Endpunkt und nicht aus den eigenen Antworten der Broker an Kavka, sie sind also nur so frisch wie der Exporter. Es sind clusterweite Summen: keiner von beiden kann Ihnen sagen, welche Partition.",
+  "monitoring.foot.throughput":
+    "Das sind die Zähler des Exporters, nur für diese Verbindung im Speicher gehalten — sie beginnen bei jedem Öffnen wieder von vorn. Eine flache Linie und ein Exporter, der stillschweigend aufgehört hat zu antworten, sehen hier gleich aus; genau dafür ist die Sampler-Zeile darüber da.",
+  "monitoring.foot.noEndpoint":
+    "Das ist eine Tatsache über die Verbindung, die Kavka bekommen hat, nicht über den Cluster. Die Broker veröffentlichen womöglich sehr wohl JMX; Kavka wurde nur nicht gesagt, wo es das findet.",
+  "monitoring.foot.noSeries":
+    "Kavka ordnet die Metriknamen zu, die es kennt, und ignoriert den Rest — ein Messwert, der unter einem ihm unbekannten Namen veröffentlicht wird, fehlt hier also, statt falsch zu sein. Kavka erfindet nie einen Wert, um die Lücke zu füllen.",
+  "streams.topology.foot":
+    "Kavka kann nur Topics zeichnen, die diese Verbindung auflisten darf. Ein Repartition- oder Changelog-Topic, das das Konto nicht beschreiben kann, fehlt im Bild — und ein fehlendes Kästchen sieht genauso aus wie eine Anwendung, die nie eines hatte.",
+  "acls.foot.authorizer":
+    "Das ist die Liste, die der Authorizer des Clusters führt. Ein Cluster ohne Authorizer erlaubt alles und hat keine Regeln aufzulisten — was hier genauso aussieht wie ein Cluster, für den niemand welche geschrieben hat.",
+  "masking.rules.foot":
+    "Eine Regel greift auf den Text, den Kavka gleich auf den Bildschirm bringt. Ein Wert, der über Felder verteilt, kodiert oder anders geschrieben ist, greift schlicht nicht, und nichts hier meldet einen Beinahe-Treffer — der einzige Beweis, dass eine Regel wirkt, ist, sie wirken zu sehen.",
+  "connect.connectors.foot":
+    "Connect meldet den Zustand eines Konnektors getrennt von dem seiner Tasks, ein Konnektor kann also RUNNING sagen, während jede Task darunter fehlgeschlagen ist. Die Task-Zahlen in jeder Zeile sind der Messwert, dem zu trauen ist.",
+  "connect.tasks.foot":
+    "Neu starten bittet den Worker, die Task neu zu starten; wann, entscheidet der Worker. Diese Tabelle ändert sich nur, wenn Kavka die Worker erneut liest.",
+  "shareGroups.foot":
+    "Zustände und Mitgliederzahlen sind die Sicht des Koordinators in dem Moment, in dem Kavka gefragt hat. ∅ in der Spalte für den Start-Offset heißt, dass der Broker für diese Partition nichts gemeldet hat — eine Lücke in der Antwort, keine Null.",
+
   // ── Einstellungen (Jackdaw) ─────────────────────────────────────────────
   "settings.title": "Einstellungen",
   "settings.navLabel": "Bereiche der Einstellungen",
   "settings.perch":
     "Alles hier wirkt sofort und wird auf diesem Rechner gespeichert. Kavka zeigt gerade das Design {theme}.",
   "settings.section.appearance": "Darstellung",
+  "settings.section.appearance.sub":
+    "Wie Kavka auf diesem Rechner aussieht. Nichts davon verändert einen Cluster.",
   "settings.section.language": "Sprache",
+  "settings.section.language.sub":
+    "Kavkas eigene Texte — die Leiste, die Palette, die Formulare und der Einleitungssatz jedes Bildschirms. Die Tabellen darunter sind weiterhin auf Englisch.",
   "settings.section.about": "Über",
+  "settings.section.about.sub":
+    "Um welchen Build es sich handelt, unter welcher Lizenz er steht und welche zwei Dateien er über sich selbst schreiben kann.",
 
   "settings.theme.title": "Design",
   "settings.theme.help":
     "System folgt dem Betriebssystem und wechselt mit, während Kavka geöffnet ist.",
+  "settings.theme.contrast":
+    "Beide Themes werden gegen dieselbe Kontrast-Untergrenze geprüft: 4,5:1 für alles, was Sie lesen, 3:1 für die Kante von allem, was Sie anklicken können. Nichts wird abgedunkelt, damit es ruhiger wirkt.",
   "settings.theme.system": "System",
   "settings.theme.light": "Hell",
   "settings.theme.dark": "Dunkel",
 
   "settings.accent.title": "Akzentfarbe",
-  "settings.accent.help":
-    "Die Farbe auf Schaltflächen, Links und der aktuellen Ansicht. Sie trägt keine eigene Bedeutung, deshalb kann eine Änderung keine Warnung verdecken.",
+  "settings.accent.note":
+    "Akzent: {name}. Wird für das verwendet, was Sie gleich anklicken, und für die ausgewählte Zeile — nie für Status, sodass eine Änderung keine Warnung verbergen kann.",
   "settings.accent.brass": "Messing",
   "settings.accent.moss": "Moos",
   "settings.accent.sky": "Himmel",
@@ -832,9 +1054,35 @@ const de: Catalog = {
   "settings.motion.system": "System",
   "settings.motion.reduce": "Reduziert",
 
+  "settings.env.title": "Umgebungsfarben",
+  "settings.env.help":
+    "{count, plural, one {# Umgebung ist} other {# Umgebungen sind}} eingerichtet. Farbe ist Identität, geschützt ist die Schutzvorrichtung — hier entscheiden Sie also auch, bei welchen Kavka vorsichtig sein soll. Anders als alles andere auf diesem Bildschirm reisen diese mit einer exportierten Verbindung mit.",
+  "settings.env.manage": "Umgebungen verwalten",
+
+  "settings.perch.title": "Der Hinweis auf jedem Bildschirm",
+  "settings.perch.help":
+    "Der warme Hinweis oben auf jedem Bildschirm, der sagt, was Kavka dort mitteilen kann. „Eine Zeile“ behält das Urteil und lässt die Einschränkung weg; „Ausgeblendet“ schaltet ihn auf Bildschirmen ohne Befund ab. Ein Bildschirm, der noch lädt oder dessen Abfrage fehlgeschlagen ist, zeigt in jeder Einstellung den ganzen Hinweis.",
+  "settings.perch.full": "Vollständig",
+  "settings.perch.line": "Eine Zeile",
+  "settings.perch.hidden": "Ausgeblendet",
+
+  "settings.sample.title": "So sieht das aus",
+  "settings.sample.sub":
+    "eine lebende Probe der Teile, die Sie gerade geändert haben",
+  "settings.sample.note":
+    "Diese drei Zeilen sind erfunden, damit Sie sehen können, was Dichte und Textgröße bewirken, bevor Sie es herausfinden müssen. Nichts hiervon stammt aus einem Cluster.",
+  "settings.sample.caption":
+    "Eine Probe aus drei erfundenen Nachrichtenzeilen, damit Änderungen am Erscheinungsbild sofort sichtbar sind.",
+  "settings.sample.primary": "Eine primäre Schaltfläche",
+  "settings.sample.normal": "Eine normale",
+  "settings.sample.chip.ok": "Gesund",
+  "settings.sample.chip.warn": "Fällt zurück",
+  "settings.sample.focus":
+    "Drücken Sie {key} durch diese hindurch, um den Fokusrahmen in diesem Theme zu sehen.",
+
   "settings.language.title": "Sprache",
   "settings.language.help":
-    "Umfasst Kavkas Rahmen und das Urteil, mit dem jede Cluster-Ansicht beginnt — Seitenleiste, Befehlspalette, dieses Panel, das Verbindungsformular und den Eröffnungssatz jeder Ansicht. Die Tabellen und Formulare darunter sind noch englisch.",
+    "Umfasst Kavkas Rahmen und das Urteil, mit dem jeder Cluster-Bildschirm beginnt — die Leiste, die Palette, dieses Panel, das Verbindungsformular und den Eröffnungssatz jedes Bildschirms. Die Tabellen und Formulare unter diesen Sätzen sind weiterhin auf Englisch.",
   "settings.language.machine":
     "Dieser Katalog stammt aus einer Maschine und wurde von keinem Muttersprachler geprüft. Korrekturen sind willkommen.",
 
@@ -843,8 +1091,15 @@ const de: Catalog = {
     "Das Über-Panel enthält Kavkas Version und Lizenz, die MCP-Servereinstellungen und den Schalter für Absturzdiagnose.",
   "settings.about.open": "Über öffnen",
 
+  // About and Support Kavka came here when the sidebar footer was deleted.
+  "settings.support.title": "Kavka unterstützen",
+  "settings.support.help":
+    "Kavka ist kostenlos, quelloffen und wird von Menschen finanziert, die freiwillig etwas beitragen. Wer nichts beiträgt, dem wird nichts vorenthalten.",
+
   // ── Updates ─────────────────────────────────────────────────────────────
   "settings.section.updates": "Updates",
+  "settings.section.updates.sub":
+    "Ob Kavka GitHub nach neuen Releases fragt und was diese Anfrage enthält und was nicht. Es installiert sich nichts von selbst.",
 
   "settings.updates.auto.title": "Nach Updates suchen",
   "settings.updates.auto.label": "Kavka nach neuen Releases sehen lassen",

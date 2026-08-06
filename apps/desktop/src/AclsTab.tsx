@@ -666,11 +666,17 @@ export default function AclsTab({ profile, onDanger }: AclsTabProps) {
           </div>
         )}
 
+        {/* THE PANEL'S CAVEAT, IN THE PANEL'S OWN SLOT. This sentence was
+            always the right words in the wrong container — a `.table-note`
+            reads as commentary between elements, and this qualifies every row
+            above it. The second half is the limitation it never stated: this
+            is the authorizer's list, and a cluster running without one lists
+            nothing while allowing everything. */}
         {acls !== null && acls.length > 0 && (
-          <p className="table-note">
+          <p className="panel-foot">
             A deny rule beats every allow rule that matches the same request, so
             removing one can widen access rather than narrow it. Kavka says so
-            again before it removes one.
+            again before it removes one. {t("acls.foot.authorizer")}
           </p>
         )}
       </section>
@@ -1354,15 +1360,18 @@ function AclCreateModal({
           </button>
           <button
             type="submit"
-            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"} btn-swap`}
             disabled={busy}
             aria-busy={busy || undefined}
             title={busy ? "Kavka is writing the rule" : undefined}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              Add rule
             </span>
-            Add rule
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              Add rule
+            </span>
           </button>
         </div>
       </form>

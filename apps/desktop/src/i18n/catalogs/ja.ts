@@ -46,19 +46,36 @@ const ja: Catalog = {
   "confirm.type.label": "確認のため {name} と入力してください",
   "confirm.type.reason": "確認するには {name} を正確に入力してください",
 
-  "sidebar.navLabel": "保存された接続",
-  "sidebar.title": "クラスター",
-  "sidebar.loading": "接続を読み込んでいます…",
-  "sidebar.empty": "まだ何もありません。下から最初の接続を追加してください。",
-  "sidebar.profileMeta": "{address} · {status}",
-  "sidebar.status.disconnected": "未接続",
-  "sidebar.status.connecting": "接続中…",
-  "sidebar.status.connected": "接続済み",
-  "sidebar.draftName": "新しい接続",
-  "sidebar.draftMeta": "未保存",
-  "sidebar.about": "情報",
-  "sidebar.settings": "設定",
 
+  // ── The cluster switcher and the rail's cluster card ──────────────────
+  // The sidebar is gone (DESIGN.md §5.1); its rows are this menu's rows and
+  // its identity block is the rail's cluster card. Law 2 (§1) survives the
+  // move: the status dot never carries the meaning alone, so `rowMeta` reads
+  // "address · state" in EVERY state. Keep both slots.
+  "switcher.trigger": "クラスターを切り替える",
+  "switcher.menuLabel": "保存した接続",
+  "switcher.empty": "保存された接続はまだありません。",
+  "switcher.noEnvironment": "環境なし",
+  "switcher.rowMeta": "{address} · {status}",
+  "switcher.status.disconnected": "未接続",
+  "switcher.status.connecting": "接続中…",
+  "switcher.status.connected": "接続済み",
+  "switcher.connect": "接続",
+  "switcher.connecting": "接続中…",
+  "switcher.disconnect": "切断",
+  "switcher.connectTitle": "{name} に接続します",
+  "switcher.disconnectTitle": "{name} との接続を切ります",
+  "switcher.draftName": "新しい接続",
+  "switcher.draftMeta": "まだ保存されていません",
+  "switcher.protected": "保護あり",
+  "brand.versionTitle": "Kavka コアバージョン {version}",
+  "card.none": "クラスターなし",
+  "card.state.none": "まだ何も選択されていません",
+  "card.state.connected": "接続済み · {count, plural, other {ブローカー # 台}}",
+  "card.state.connecting": "接続中…",
+  "card.state.disconnected": "未接続",
+
+  // ── App shell: status bar, empty states, global errors ─────────────────
   "app.status.disconnected": "未接続",
   "app.status.connecting": "接続中…",
   "app.status.connected": "接続済み",
@@ -75,15 +92,13 @@ const ja: Catalog = {
   "app.firstRun.footnote":
     "パスワードはお使いの OS のキーチェーンに保存されます。クラスターに関する情報がこのマシンから出ることはありません。",
   "app.pick.title": "接続を選んでください",
-  "app.pick.hint":
-    "左でクラスターを選ぶとブローカーとトピックが表示されます。別の接続を追加することもできます。",
+  "app.pick.hint": "左上のクラスター切り替えメニューを開いて選ぶか、別の接続を追加してください。",
   "app.readonlyChip": "読み取り専用",
   "app.readonlyTitle":
     "この接続は読み取り専用です。書き込みや編集を行うには、接続の設定でオフにしてください。",
   "app.statusbar.draft": "新しい接続 — 未保存",
   "app.statusbar.none": "接続が選択されていません",
   "app.statusbar.commands": "コマンド",
-  "app.statusbar.coreVersion": "core v{version}",
   "app.cmd.search": "{topic} 内を検索",
   "app.cmd.search.kw":
     "find filter cel scan query messages grep 検索 フィルター メッセージ",
@@ -116,8 +131,7 @@ const ja: Catalog = {
   "palette.disconnect": "切断",
   "palette.disconnect.kw": "close leave cluster session 切断 終了 閉じる",
   "palette.disconnect.none": "現在、接続されているものはありません",
-  "palette.disconnect.ambiguous":
-    "先にサイドバーで切断したいクラスターを選んでください",
+  "palette.disconnect.ambiguous": "切断したいクラスターをクラスター切り替えメニューで先に選んでください",
   "palette.refresh": "トピックを再読み込み",
   "palette.refresh.kw":
     "reload metadata list topics partitions cluster 再読み込み 更新",
@@ -146,7 +160,7 @@ const ja: Catalog = {
   "about.licenceValue": "AGPL-3.0 のもとで自由に使えるオープンソース",
   "about.language": "言語",
   "about.language.hint":
-    "Kavka の外枠と、各クラスター画面が最初に示す判断 — サイドバー、コマンドパレット、これらのダイアログ、接続フォーム、そして各画面の冒頭の一文です。その下にある表やフォームはまだ英語です。",
+    "Kavka の外枠と各クラスター画面が最初に示す判定 — ナビゲーションバー、コマンドパレット、これらのダイアログ、接続フォーム、そして各画面の冒頭の一文です。その下にある表やフォームはまだ英語のままです。",
   "about.language.machine":
     "{language} は機械翻訳であり、ネイティブスピーカーによる確認を受けていません。修正を歓迎します — 方法は docs/I18N.md にあります。",
 
@@ -207,22 +221,16 @@ const ja: Catalog = {
     "{bits}。パスワードはエクスポートに含まれていません — 新しい接続をそれぞれ開き、接続する前にパスワードを入力してください。",
 
   "editor.new.title": "接続を追加",
-  "editor.new.subtitle":
-    "始めるにはブローカー 1 つで十分です — クラスターの残りは Kavka がそこから見つけます。",
-  "editor.saved.subtitle": "未接続です。下の内容を確認してから接続してください。",
-  "editor.name.label": "接続の名前",
   "editor.name.placeholder": "orders — local",
-  "editor.name.hint":
-    "サイドバーで見分けられる名前なら何でも構いません。見えるのは Kavka だけです。",
+  "editor.name.hint": "クラスター切り替えメニューで見分けがつく名前を。Kavka だけが使います。",
   "editor.env.label": "環境",
   "editor.env.hint.protected":
-    "この環境は保護対象として設定されています。すべての表で台帳の罫線がこの色になり、サイドバーでこのクラスターが目印付きになり、ウィンドウ上部に警告バーが表示され、破壊的な操作のたびに名前の入力を求められます。実際に書き込む必要がなければ、下の読み取り専用をオンにしてください。",
+    "この環境は保護対象です。すべての表で台帳の罫線がこの色になり、クラスター切り替えメニューでこのクラスターに印が付き、ウィンドウ上部に警告バーが表示され、破壊的な操作のたびに名前の入力を求められます。実際に書き込む必要がなければ、下の読み取り専用をオンにしてください。",
   "editor.env.hint.other":
     "Kavka はすべての画面を環境ごとに色分けするので、クラスターを取り違えることがありません。",
   "editor.env.manage": "環境を管理…",
   "editor.env.hint.unknown":
     "このマシンには {name} の定義がないため、Kavka は中立的なグレーで表示し、ガードレールを適用しません。「環境を管理」で追加すると、色を割り当て、保護するかどうかを決められます。",
-  "editor.bootstrap.label": "ブートストラップサーバー",
   "editor.bootstrap.hint":
     "クラスター内のどれか 1 つのブローカー — 残りは Kavka がそこから見つけます。1 行に 1 つ、またはカンマ区切りで。このリポジトリの開発用クラスターを動かしていますか？ その場合は {local} を使ってください。",
 
@@ -354,8 +362,7 @@ const ja: Catalog = {
   "editor.kbd.cancel": "キャンセル",
   "editor.kbd.undo": "編集を元に戻す",
 
-  "editor.err.name":
-    "サイドバーで見つけられるように、この接続に名前を付けてください。",
+  "editor.err.name": "クラスター切り替えメニューで見つけられるように、この接続に名前を付けてください。",
   "editor.err.bootstrap":
     "ブローカーを少なくとも 1 つ、host:port の形式で追加してください — 例: broker-1:9092",
   "editor.err.srUrl":
@@ -407,11 +414,42 @@ const ja: Catalog = {
     "このマシンには {name} の定義がないため、この接続にはガードレールが適用されません。",
   "editor.perch.caveat.readonly":
     "読み取り専用が有効です。Kavka はこのクラスターを閲覧しますが、書き込みは行いません。",
-  "editor.cluster.legend": "クラスター",
-  "editor.guardrails.legend": "ガードレール",
   "editor.fold.set": "設定済み",
   "editor.fold.notSet": "未設定",
   "editor.fold.connectCount": "{count, plural, other {#個のクラスター}}",
+
+  "editor.head.unsaved": "未保存",
+  "editor.step.name": "この接続の名前は？",
+  "editor.step.env": "これはどの環境ですか？",
+  "editor.step.env.why":
+    "環境は、アプリ全体でこのクラスターに表示される色を決めます。そして Kavka がこれを保護対象として扱うかどうかも決めます。",
+  "editor.step.bootstrap": "どこにありますか？",
+  "editor.step.bootstrap.why":
+    "{term} が 1 つあれば十分です。Kavka がそこにクラスターの残りを問い合わせます。",
+  "editor.bootstrap.term": "ブートストラップサーバー",
+  "editor.step.sr": "Schema Registry はありますか？",
+  "editor.step.optional": "（任意）",
+  "editor.step.readonly": "Kavka がここで何かを変更してよいですか？",
+  "editor.step.readonly.why": "他の人のクラスターを見るときは、読み取り専用がいちばん安全です。",
+  "editor.saveConnection": "接続を保存",
+  "editor.state.connecting": "接続中です…",
+  "editor.state.connected": "現在接続しています。",
+  "editor.state.failed": "前回の試行は失敗しました。理由は上に表示しています。",
+  "editor.state.draft": "まだ何も保存していないため、まだ何も試していません。",
+  "editor.state.idle": "接続していません。前回いつ接続したかの記録は Kavka には残っていません。",
+
+  // ── 接続画面 — その画面ヘッダーと保存済みクラスターのパネル ────────────────────────────────────────
+  "connections.list.title": "保存済みクラスター",
+  "connections.list.empty": "保存された接続はまだありません。いま入力しているものが最初の 1 つになります。",
+  "connections.list.foot":
+    "{protected} は、破壊的な操作の前に Kavka がクラスター名の入力を求めるという意味です。色は識別、保護はガードレールです。",
+  "connections.list.footProtected": "保護",
+  "connections.list.footSession":
+    "「接続済み」と「未接続」はこのセッションについてだけの説明です。Kavka は接続していないクラスターに問い合わせないため、そのクラスターが稼働しているかどうかは分かりません。",
+  "connections.sub":
+    "{count, plural, other {保存済みクラスターは # 件です。編集するものを選ぶか、新しく作成してください。} =0 {保存済みクラスターはまだありません。最初の 1 つを作成してください。}}",
+  "connections.sub.unknown": "編集するクラスターを選ぶか、新しく作成してください。",
+  "connections.manageEnvironments": "環境を管理",
 
 
   // ── 環境 ────────────────────────────────────────────────────────────────
@@ -425,8 +463,13 @@ const ja: Catalog = {
 
   "env.mgr.title": "環境",
   "env.mgr.intro": "組織が実際に運用している環境に名前を付けてください。色はひと目で見分けるためのもので、保護がガードレールです。",
+  "env.mgr.hint.title": "「保護」が実際に行うこと",
+  "env.mgr.hint.detail":
+    "Kavka は破壊的な操作の前にクラスター名の入力を求め、環境をウィンドウタイトルに表示し、CLI と MCP サーバーからの破壊的コマンドを明示的なフラグなしでは拒否します。このうち 2 つは別プロセスで起きるため、ここに明記しています。色は見分けるためだけのもので、各チップは名前も表示します。",
   "env.mgr.failed": "処理できませんでした",
   "env.mgr.working": "Kavka が処理中です",
+  "env.mgr.namesAreYours":
+    "名前は自由です。組織で実際に使っている数だけ追加してください。Kavka は 3 つしかないとは想定していません。",
   "env.mgr.add": "環境を追加",
   "env.mgr.edit": "編集",
 
@@ -462,7 +505,22 @@ const ja: Catalog = {
   "env.mgr.delete.last": "残っている環境はこれだけです — 先に別の環境を追加してください",
 
   // ── クラスターのナビゲーション (Jackdaw) ────────────────────────────────
-  "rail.label": "クラスターの画面",
+  // The two app-level groups. They render with NOTHING connected, which is
+  // the whole reason Settings is a rail item: on first launch there is no
+  // cluster, and the theme and the font size are what a new user needs first.
+  // The read-only readout states its answer in BOTH directions — a guardrail
+  // that is silent in its dangerous state is not a guardrail.
+  "rail.navLabel": "画面",
+  "rail.group.setup": "セットアップ",
+  "rail.group.application": "アプリケーション",
+  "rail.item.connections": "接続",
+  "rail.item.settings": "設定",
+  "rail.readonly.label": "読み取り専用: {state}",
+  "rail.readonly.on": "オン",
+  "rail.readonly.off": "オフ",
+  "rail.readonly.on.why": "Kavka はここに書き込みも削除も行いません。",
+  "rail.readonly.off.why": "Kavka はここで書き込みと削除ができます。",
+
   "rail.group.cluster": "クラスター",
   "rail.group.observe": "観測",
   "rail.group.safety": "安全",
@@ -479,7 +537,88 @@ const ja: Catalog = {
   "rail.item.connect": "Connect",
   "rail.firing": "発報中",
   "rail.firingTitle": "{count, plural, other {アラートルール#件が現在発報中です}}",
-  "rail.disconnect": "切断",
+
+  // ── 画面ヘッダー ────────────────────────────────────────────────────────
+  "stage.overview.title": "クラスターのホーム",
+  "stage.overview.sub":
+    "接続時にクラスターが返したメタデータから見た、このクラスターの構成です。",
+  "stage.overview.refresh": "更新",
+  "stage.overview.refresh.title":
+    "この画面をもう一度読み取ります — グループ、アラートのログ、クォーラム、ブローカーの設定です。タイルとブローカー一覧は接続時に受け取ったもので、再接続するまで変わりません。",
+  "stage.topics.sub":
+    "このクラスターが報告したすべてのトピックと、Kavka が各トピックについて言えること・言えないことです。",
+  "stage.groups.sub":
+    "誰が読んでいて、どれだけ遅れていて、それをいつ測ったかです。",
+  "stage.brokers.sub":
+    "このクラスターを構成するマシンと、それぞれが動いている設定です。",
+  "stage.monitoring.sub":
+    "Kavka が開いていた間に取った測定値だけで描いています。閉じていた時間は空白になります。",
+  "stage.alerts.sub":
+    "Kavka が起動中に代わりに確認するルールと、これまでに発報したすべてです。",
+  "stage.streams.sub":
+    "背後のコンシューマーグループから読み取った Kafka Streams アプリケーションです。",
+  "stage.acls.sub":
+    "ここで誰が何をできるかを、クラスター自身の報告そのままに示します。",
+  "stage.masking.sub":
+    "画面上で値を隠すための Kavka 独自のルールです。クラスターやその保存内容は一切変更しません。",
+  "stage.connect.sub":
+    "この接続が把握している Kafka Connect ワーカーと、その上で動いているコネクターです。",
+
+  // ── クラスターのホーム (Jackdaw) — タイル、要対応リスト、2 つの表 ───────────────────────────────
+  "home.clusterId": "クラスター ID",
+  "home.clusterId.absent": "このクラスターは ID を返しませんでした。",
+  "home.tile.reading": "読み取り中",
+  "home.tile.brokers.sub": "接続時にクラスターが挙げたとおり",
+  "home.tile.brokers.none": "クラスターは 1 台も返しませんでした。接続は成立していますが、メタデータが空でした",
+  "home.tile.topics.sub": "合計 {partitions} パーティション",
+  "home.tile.partitions": "パーティション",
+  "home.tile.partitions.sub": "全トピック合計。他のブローカー上の複製は二重に数えません",
+  "home.tile.groups.allStable": "すべて安定しています",
+  "home.tile.groups.unsettled": "{count} 件が現在は安定していません",
+  "home.tile.groups.idle": "{count} 件は誰も接続していません",
+  "home.tile.groups.none": "現在このクラスターを読んでいるものはありません",
+  "home.tile.groups.unread": "Kavka はグループ一覧を読み取れなかったため、答えられません。",
+  "home.attention.title": "確認が必要なもの",
+  "home.attention.provenance": "Kavka はこのスナップショットから確認できたものだけを挙げます。",
+  "home.attention.reading": "この接続のアラート履歴とグループ一覧を読み取っています…",
+  "home.attention.unread":
+    "Kavka はこの接続のアラート履歴を読み取れなかったため、何かが発報しているかどうかを答えられません。ここが空でも、問題がないという意味にはなりません。",
+  "home.attention.clear": "このスナップショットで確認が必要なものはありません。",
+  "home.attention.clear.sub":
+    "設定したアラートルールは発報しておらず、Kafka が挙げたコンシューマーグループはすべて安定しています。ただしこれは、Kavka が測定していない事柄についての保証ではありません。",
+  "home.attention.partial":
+    "設定したアラートルールは発報していません。ただし Kavka はこの接続のグループ一覧を読み取れなかったため、何かが読み取っているかどうかは判断できません。ここが空でも問題なしという意味にはなりません。",
+  "home.attention.groupsUnread":
+    "Kavka はこの接続のグループ一覧を読み取れなかったため、この一覧には「誰が読んでいるか」に関する項目は含まれていません。",
+  "home.attention.alert.noDetail": "Kavka はこの発報を、根拠となる数値なしで記録しました。",
+  "home.attention.group.title": "{group} は現在読み取っていません",
+  "home.attention.group.sub":
+    "Kafka はこのグループを {state}、メンバー {members} 件として報告しています。安定していないグループは、リバランスが終わるまで消費を止めています。",
+  "home.attention.open.monitoring": "モニタリングで開く",
+  "home.attention.open.alerts": "アラートを開く",
+  "home.attention.open.groups": "コンシューマーグループを開く",
+  "home.attention.where": "{screen} にあります",
+  "home.attention.foot":
+    "この接続のアラート履歴の最新 {limit} 件と、この画面が読み取ったグループ一覧から作成しています。Kavka はここでそれ以外を評価しません。どのルールも監視していない問題は、この一覧には現れません。",
+  "home.brokers.caption": "このクラスターのブローカー",
+  "home.brokers.none":
+    "このクラスターはブローカーを 1 台も返しませんでした。通常これは、接続は成立しているがメタデータが空だったことを意味します。再接続してみてください。",
+  "home.brokers.foot":
+    "接続時にこのクラスターがメタデータで挙げたブローカーです。それ以降、Kavka は 1 台ずつ問い合わせていないため、1 分前に停止したブローカーもここには残ります。",
+  "home.brokers.details": "詳細",
+  "home.brokers.details.note":
+    "プロトコルバージョン、ログディレクトリ、レプリケーション、保持期間（ブローカー {id} から取得）",
+  "home.brokers.details.reading": "ブローカー {id} の設定を読み取っています…",
+  "home.brokers.details.unread":
+    "Kavka はブローカー {id} の設定を読み取れませんでした。ブローカー画面は同じ設定を取得し、その背後のエラーを表示します。",
+  "home.brokers.details.caveat":
+    "ブローカー {id} からのみ読み取っています。このクラスターの他のブローカーは別の設定である可能性があり、ブローカー間で設定が食い違うのはよくある、気づきにくい設定ミスです。",
+  "home.brokers.fact.protocol": "プロトコルバージョン",
+  "home.brokers.fact.logDirs": "ログディレクトリ",
+  "home.brokers.fact.replication": "既定のレプリケーション",
+  "home.brokers.fact.autoCreate": "トピックの自動作成",
+  "home.brokers.fact.retention": "既定の保持期間（時間）",
+  "home.brokers.fact.absent": "このブローカーでは設定されていません",
 
   // ── パーチ (Jackdaw) ────────────────────────────────────────────────────
   "perch.label": "{screen} — Kavka が言えること",
@@ -491,6 +630,9 @@ const ja: Catalog = {
   "perch.state.checking": "確認中",
   "perch.checking":
     "まだ確認中です。クラスターから応答があり次第、分かったことをお伝えします。",
+  "perch.hide": "隠す",
+  "perch.more": "メモ全体を表示",
+  "perch.show": "この画面のメモを表示",
   "perch.overview.counts":
     "{brokers, plural, other {ブローカー#台}}に接続しています。{topics, plural, other {トピック#件}}、{partitions, plural, other {パーティション#個}}です。",
   "perch.overview.firing":
@@ -772,6 +914,13 @@ const ja: Catalog = {
   "alerts.history.stillFiring": "まだ発報中です。これまで {duration}。",
   "alerts.history.gap":
     "この記録は Kavka が開いていた時間だけを扱います。記録の空白は誰も見ていなかった時間であり、Kavka はその間に何が起きたかを推測しません。",
+  "alerts.toast.viewGroup": "グループ {group} を開く",
+  "alerts.toast.viewAlerts": "アラートを開く",
+  "alerts.preview.label": "{rule} の通知",
+  "alerts.preview.sent":
+    "Kavka は {time} に、これを表示するよう OS へ依頼しました。表示したのではなく依頼しただけです — 通知センターが無効になっていたり権限が取り消されていたりしても、Kavka には伝わりません。内容はこの文言だけで、ボタンはありません。発報ごとに 1 通、解消時にもう 1 通です。",
+  "alerts.preview.off":
+    "この接続ではデスクトップ通知が無効なため、このウィンドウの外には何も表示されていません。表示されていれば、この内容 — ルール名と、それを引き起こした数値だけ — が出ていました。",
   "monitoring.tile.lagNow": "最後の計測時点のラグ",
   "monitoring.tile.lagNowSub":
     "Kavka が最後にサンプリングした時点で読み取り待ちだったメッセージ数",
@@ -782,25 +931,79 @@ const ja: Catalog = {
   "monitoring.tile.trendSub": "この期間の開始時点との比較",
   "monitoring.tile.partitionsSub": "この期間に少なくとも 1 回の計測があるもの",
 
+  // ── パネルの脚注 — その上の表では分からないこと ──────────────────────────────────────────────
+  "topics.list.foot":
+    "形だけです。これはこの画面を開いたときに読み取ったクラスター自身のメタデータで、各トピックがどう構成されているかを示します。中身の量も、読み取っているものがあるかどうかも、健全かどうかも含まれていません。パーティション、件数、コンシューマーはトピックを開いてご覧ください。",
+  "topic.partitions.foot":
+    "「メッセージ」は、そのパーティションについてブローカーがまだ保持している最も古いオフセットを、最新のオフセットから引いた値です。保持期間やコンパクションで削除されたものは含まれず、コンパクト化されたトピックでは読み戻せるレコード数ではなくオフセットを数えます。つまりこのパーティションがまだ見せられる量であって、これまでに受け取った量ではありません。",
+  "topic.config.foot":
+    "この画面を開いたときに一度だけ読み取った値です。{plus} が付いていない行は、その時点でブローカー側の既定値だったもので、ここが変わらないままトピック側で変わることがあります。Kafka が機微と印を付けた値はどのクライアントにも返されないため、ダッシュは「設定がない」ではなく「ブローカーが答えない」という意味です。",
+  "schemas.versions.foot":
+    "これはレジストリが {subject} の下に保持しているバージョンです。サブジェクトの命名はプロデューサー側の慣習であり、トピックが記録するものではありません。したがって一覧が短い、あるいは空であることは、スキーマを使って {topic} に書き込んでいるものが無い証拠にはなりません。",
+  "alerts.rules.foot":
+    "「静か」は、そのルールに何も引っかかっていないという意味であり、Kavka が値を確認して問題なしと判断したという意味ではありません。値を取得できないルールも同じく静かになります。この状態は下のログから来ているため、ログが欠けていればその分だけ不完全です。",
+  "alerts.channels.foot":
+    "Kavka は発報のたびにこれらへ一度ずつ依頼し、再試行はしません。OS が実際に通知を表示したかどうかは Kavka には伝えられず、拒否した Webhook はここではなく Kavka のログに記録されます。つまり「オン」は Kavka が依頼するという意味であり、誰かに届いたという意味ではありません。",
+  "groups.list.foot":
+    "メンバー数と状態は、Kavka が問い合わせた時点のものです。リバランス中のグループはこれを読んでいる間もパーティションを引き渡しているため、その数はすでに古くなっています。新しい値は「更新」で取得してください。",
+  "group.members.foot":
+    "これは Kavka が問い合わせた時点で接続していたメンバーです。パーティション数はその瞬間の割り当てであり、リバランスが起きればこの画面が何も変わらないまま割り当ては描き直されます。",
+  "group.lag.foot":
+    "ラグは「終端」列から「コミット済み」列を引いた値で、どちらも同じ呼び出しで読み取っているため互いに整合します。∅ はそのパーティションについてグループが一度もオフセットをコミットしていないという意味であり、ラグ 0 とは異なります。コミット頻度の低いグループは、すでに終えた仕事について遅れているように見えます。",
+  "brokers.list.foot":
+    "これはこの接続を確立したときに Kafka が返したブローカーの一覧です。その後に参加または離脱したブローカーは、再接続して初めてここに反映されます。",
+  "broker.config.foot":
+    "これは 1 台のブローカーの回答です。Kafka はほとんどの設定をブローカーごとに保持するため、このクラスターの別のブローカーが同じ名前で別の値を使っていることがあり、この画面にはその違いは現れません。",
+  "monitoring.foot.lag":
+    "ラグはパーティションの最新オフセットからグループのコミット済みオフセットを引いた値で、どちらも同じ読み取りから来ているため互いに整合します。コミット頻度の低いグループは、すでに終えた仕事について遅れているように描かれ、本当に遅れているグループとの区別はここではつきません。",
+  "monitoring.foot.health":
+    "どちらの値もブローカーが Kavka に返した回答ではなくメトリクスのエンドポイントから来ているため、エクスポーターの鮮度がそのまま反映されます。いずれもクラスター全体の合計であり、どのパーティションかまでは分かりません。",
+  "monitoring.foot.throughput":
+    "これはエクスポーターのカウンターで、この接続の間だけメモリに保持され、開くたびにゼロから数え直します。横ばいの線と、黙って応答しなくなったエクスポーターは、ここでは同じに見えます。上のサンプラー行はまさにそのためにあります。",
+  "monitoring.foot.noEndpoint":
+    "これはクラスターではなく、Kavka に渡された接続についての事実です。ブローカーが JMX を公開している可能性は十分にありますが、その場所が Kavka に伝えられていないだけです。",
+  "monitoring.foot.noSeries":
+    "Kavka は認識できるメトリクス名だけを対応付け、それ以外は無視します。したがって未知の名前で公開されている値は、誤って表示されるのではなく、ここに現れません。空白を埋めるために値を作り出すことはありません。",
+  "streams.topology.foot":
+    "Kavka が描けるのは、この接続に一覧表示の権限があるトピックだけです。アカウントが記述できないリパーティションや changelog のトピックは図から欠落し、欠けた箱は「もともと存在しないアプリケーション」とまったく同じに見えます。",
+  "acls.foot.authorizer":
+    "これはクラスターのオーソライザーが保持している一覧です。オーソライザーなしで動いているクラスターはすべてを許可し、一覧に出す規則を持ちません。それは、誰も規則を書いていないクラスターとここでは同じに見えます。",
+  "masking.rules.foot":
+    "ルールは、Kavka がこれから画面に表示しようとしているテキストに対して照合されます。複数のフィールドに分かれている値、エンコードされた値、綴りの異なる値は単に一致せず、惜しい不一致がここに報告されることもありません。ルールが効いていることの唯一の証拠は、効いているのを目で見ることです。",
+  "connect.connectors.foot":
+    "Connect はコネクターの状態をタスクの状態とは別に報告するため、配下のタスクがすべて失敗していてもコネクターは RUNNING と表示され得ます。信頼すべき値は各行のタスク数です。",
+  "connect.tasks.foot":
+    "「再起動」はワーカーにタスクの再起動を依頼するもので、いつ行うかはワーカーが決めます。この表は Kavka がワーカーを読み直したときにだけ変わります。",
+  "shareGroups.foot":
+    "状態とメンバー数は、Kavka が問い合わせた時点でのコーディネーターの見え方です。開始オフセット列の ∅ は、そのパーティションについてブローカーが何も報告しなかったという意味で、ゼロではなく回答の欠落です。",
+
   // ── 設定 (Jackdaw) ──────────────────────────────────────────────────────
   "settings.title": "設定",
   "settings.navLabel": "設定のセクション",
   "settings.perch":
     "ここでの変更はすぐに反映され、このマシンに保存されます。現在は{theme}テーマを表示しています。",
   "settings.section.appearance": "外観",
+  "settings.section.appearance.sub":
+    "このマシンでの Kavka の見た目です。ここでの設定はクラスターを変更しません。",
   "settings.section.language": "言語",
+  "settings.section.language.sub":
+    "Kavka 自身の文言（レール、パレット、フォーム、各画面の冒頭の一文）です。その下のテーブルは英語のままです。",
   "settings.section.about": "情報",
+  "settings.section.about.sub":
+    "このビルドが何か、どのライセンスか、そして自身について書き出せる 2 つのファイルについてです。",
 
   "settings.theme.title": "テーマ",
   "settings.theme.help":
     "「システム」は OS の設定に従い、Kavka を開いたままでも切り替わります。",
+  "settings.theme.contrast":
+    "どちらのテーマも同じコントラスト下限で検証しています。読む要素は 4.5:1、クリックできる要素の輪郭は 3:1 です。落ち着いて見せるために何かを薄くすることはありません。",
   "settings.theme.system": "システム",
   "settings.theme.light": "ライト",
   "settings.theme.dark": "ダーク",
 
   "settings.accent.title": "アクセント",
-  "settings.accent.help":
-    "ボタン・リンク・現在の画面に使う色です。それ自体は意味を持たないので、変更しても警告が隠れることはありません。",
+  "settings.accent.note":
+    "アクセント: {name}。これからクリックする対象と選択中の行に使われます。ステータスには決して使われないため、変更しても警告が隠れることはありません。",
   "settings.accent.brass": "真鍮",
   "settings.accent.moss": "苔",
   "settings.accent.sky": "空",
@@ -825,9 +1028,32 @@ const ja: Catalog = {
   "settings.motion.system": "システム",
   "settings.motion.reduce": "減らす",
 
+  "settings.env.title": "環境の色",
+  "settings.env.help":
+    "{count} 件の環境が設定されています。色は識別、保護はガードレールです。つまりここは、Kavka がどの環境で慎重に振る舞うかを決める場所でもあります。この画面の他の設定と違い、これらはエクスポートした接続に付いて移動します。",
+  "settings.env.manage": "環境を管理",
+
+  "settings.perch.title": "各画面のメモ",
+  "settings.perch.help":
+    "各画面の先頭にある温かみのあるメモで、その画面で Kavka に何が言えるかを示します。「1 行」は判定だけを残して但し書きを省き、「非表示」は報告することがない画面でメモを消します。読み込み中の画面や読み取りに失敗した画面は、どの設定でもメモ全体を表示します。",
+  "settings.perch.full": "全文",
+  "settings.perch.line": "1 行",
+  "settings.perch.hidden": "非表示",
+
+  "settings.sample.title": "実際の見え方",
+  "settings.sample.sub": "いま変更した部分の実サンプル",
+  "settings.sample.note":
+    "この 3 行は、密度と文字サイズの効果を先に確かめられるように作った架空のデータです。クラスターから取得したものは含まれていません。",
+  "settings.sample.caption": "外観の変更がすぐ分かるように示した、架空のメッセージ 3 行のサンプルです。",
+  "settings.sample.primary": "主ボタン",
+  "settings.sample.normal": "通常のボタン",
+  "settings.sample.chip.ok": "正常",
+  "settings.sample.chip.warn": "遅れています",
+  "settings.sample.focus": "{key} でこれらを移動すると、このテーマでのフォーカスリングを確認できます。",
+
   "settings.language.title": "言語",
   "settings.language.help":
-    "Kavka の外枠と、各クラスター画面が最初に示す判断を対象とします。サイドバー、コマンドパレット、このパネル、接続フォーム、そして各画面の冒頭の一文です。その下にある表やフォームはまだ英語です。",
+    "Kavka の外枠と各クラスター画面が最初に示す判定を対象とします — ナビゲーションバー、パレット、このパネル、接続フォーム、そして各画面の冒頭の一文です。その文の下にある表やフォームはまだ英語のままです。",
   "settings.language.machine":
     "このカタログは機械翻訳で、ネイティブによる確認は済んでいません。修正を歓迎します。",
 
@@ -836,8 +1062,15 @@ const ja: Catalog = {
     "「情報」パネルに Kavka のバージョンとライセンス、MCP サーバー設定、クラッシュ診断のスイッチがあります。",
   "settings.about.open": "情報を開く",
 
+  // About and Support Kavka came here when the sidebar footer was deleted.
+  "settings.support.title": "Kavka を支援する",
+  "settings.support.help":
+    "Kavka は無料でオープンソースであり、支援を選んだ人たちによって支えられています。支援しない人に機能が出し惜しみされることはありません。",
+
   // ── Updates ─────────────────────────────────────────────────────────────
   "settings.section.updates": "アップデート",
+  "settings.section.updates.sub":
+    "Kavka が GitHub に新しいリリースを問い合わせるかどうか、そしてそのリクエストが何を含み何を含まないかです。自動でインストールされることはありません。",
 
   "settings.updates.auto.title": "アップデートを確認する",
   "settings.updates.auto.label": "Kavka に新しいリリースを探させる",

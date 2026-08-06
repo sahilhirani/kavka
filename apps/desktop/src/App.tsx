@@ -21,15 +21,22 @@ import {
 } from "./updates";
 import UpdateBanner from "./UpdateBanner";
 import {
+  EnvChip,
   envAttrs,
   envWireLabel,
   loadEnvironments,
   useEnvironment,
 } from "./environments";
 import { maskingChipLabel, maskingChipTitle, useMasking } from "./masking";
-import Sidebar from "./Sidebar";
+import ClusterSwitcher from "./ClusterSwitcher";
 import ProfileEditor, { ErrorBanner } from "./ProfileEditor";
-import ClusterView, { stageTopic } from "./ClusterView";
+import ClusterView, {
+  CLUSTER_RAIL,
+  initialTab,
+  railIcon,
+  stageTopic,
+  type TabKey,
+} from "./ClusterView";
 import Palette, {
   paletteKeyLabel,
   type PaletteAction,
@@ -39,6 +46,8 @@ import AboutDialog from "./AboutDialog";
 import ImportExportDialog, { type TransferTab } from "./ImportExportDialog";
 import Playground from "./Playground";
 import SettingsView from "./SettingsView";
+import { registerStage, useStageTop } from "./stage";
+import { useWindowTitle } from "./windowTitle";
 import { useI18n, type MessageKey } from "./i18n";
 import type { TopicActions } from "./TopicsTab";
 
@@ -74,6 +83,347 @@ const STATUS_KEY: Record<ConnStatus, MessageKey> = {
   connected: "app.status.connected",
 };
 
+/**
+ * WHICH SURFACE THE STAGE IS SHOWING.
+ *
+ * Three, and only three. They are the rail's own vocabulary: "Connections" is
+ * the Set up group, the ten cluster screens are the cluster groups, and
+ * "Settings" is the Application group. Anything the app can put on screen is
+ * one of these three plus a state the surface is in — a first run with no
+ * connections is `connections` with nothing saved, not a fourth screen.
+ */
+type Screen = "connections" | "cluster" | "settings";
+
+/**
+ * THE BRAND LOCKUP'S BIRD.
+ *
+ * The same path `Perch` draws, at 26px in brass, as the rail's first child.
+ * Duplicated rather than shared because the two carry different `fill` for
+ * the eye — the Perch's sits on the warm perch ground, this one on the rail —
+ * and a component whose only prop is which background it is standing on is
+ * a component that has to be read twice to be understood.
+ */
+function BrandBird() {
+  return (
+    <svg
+      className="brand-bird"
+      viewBox="0 0 32 32"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M20.5 5.4a4.6 4.6 0 0 0-4.6 4.6c0 1.3-.6 2.5-1.7 3.2L5.5 19h8.7c4.9 0 9-3.8 9.4-8.7l.1-1.2 3.8-1.7-3.6-1.1-.8-2.4-2.6 1.5z"
+        fill="currentColor"
+      />
+      <circle cx="22.6" cy="8.3" r="1" fill="var(--bg-rail)" />
+      <path
+        d="M17.6 19v3.6M13.9 19v3.6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+      />
+      <path
+        d="M4 23.6h24"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        opacity=".45"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** The link glyph the Connections item carries — the same one Connect uses. */
+const CONNECTIONS_ICON = railIcon(
+  <>
+    <path d="M9 15l-3 3a3.5 3.5 0 0 1-5-5l3-3" />
+    <path d="M15 9l3-3a3.5 3.5 0 0 1 5 5l-3 3" />
+    <path d="M9.5 14.5l5-5" />
+  </>,
+);
+
+const SETTINGS_ICON = railIcon(
+  <>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6" />
+  </>,
+);
+
+/** The 15px shield the rail foot states read-only through. */
+function ShieldIcon() {
+  return (
+    <svg
+      className="rf-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M12 3l7 3v6c0 4.2-2.9 7.7-7 9-4.1-1.3-7-4.8-7-9V6z" />
+    </svg>
+  );
+}
+
+function RailItem({
+  icon,
+  label,
+  current,
+  badge,
+  badgeTitle,
+  badgeWord,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  current: boolean;
+  badge?: number;
+  badgeTitle?: string;
+  badgeWord?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="crail-item"
+      // Not aria-selected: this is navigation between screens, not a tab in a
+      // tablist — a tablist may not contain the group headings, and the
+      // headings are the entire point (DESIGN.md §5.1).
+      aria-current={current ? "page" : undefined}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+      {/* The alert counter. A number in the badge, the word in its title AND
+          in an sr-only span — never a bare coloured dot. */}
+      {badge !== undefined && badge > 0 && (
+        <span className="crail-badge" title={badgeTitle}>
+          {badge}
+          <span className="sr-only"> {badgeWord}</span>
+        </span>
+      )}
+    </button>
+  );
+}
+
+interface RailProps {
+  version: string;
+  profiles: ConnectionProfile[] | null;
+  selectedId: string | null;
+  connections: Record<string, ConnState>;
+  selected: ConnectionProfile | null;
+  conn: ConnState;
+  /** True while an unsaved connection is being written. */
+  creating: boolean;
+  screen: Screen;
+  tab: TabKey;
+  /** How many alert rules are firing on the connected cluster, or 0. */
+  firing: number;
+  onScreen: (screen: Screen) => void;
+  onTab: (tab: TabKey) => void;
+  onSelect: (id: string) => void;
+  onConnect: (profile: ConnectionProfile) => void;
+  onDisconnect: (profileId: string) => void;
+  onNew: () => void;
+}
+
+/**
+ * THE RAIL — one navigator, 254px, for the whole window.
+ *
+ * The app used to draw two: a permanent 248px "Clusters" sidebar plus a 224px
+ * cluster rail inside the workspace, so a connected user spent 472px on chrome
+ * before any content. The Jackdaw mockup draws ONE rail and the fidelity audit
+ * called the second one inherited-structure drift. This is the correction, and
+ * DESIGN.md §5.1 now describes it rather than the thing it replaced.
+ *
+ * IT RENDERS IN TWO MODES and the difference is one block:
+ *
+ *   ALWAYS  brand lockup (bird · Kavka · version)
+ *           cluster card (name · env · address · state · Switch cluster)
+ *           Set up      → Connections
+ *           Application → Settings
+ *           rail foot   → the read-only readout, when a cluster is selected
+ *
+ *   PLUS, WHEN CONNECTED   the four cluster groups from `CLUSTER_RAIL`,
+ *           inserted between Set up and Application.
+ *
+ * Everything in the ALWAYS half has to work with NOTHING connected — that is
+ * the whole reason Settings is a rail item rather than a cluster screen. The
+ * two preferences people want on first launch are the theme and the font size,
+ * and on first launch there is no cluster.
+ */
+function Rail({
+  version,
+  profiles,
+  selectedId,
+  connections,
+  selected,
+  conn,
+  creating,
+  screen,
+  tab,
+  firing,
+  onScreen,
+  onTab,
+  onSelect,
+  onConnect,
+  onDisconnect,
+  onNew,
+}: RailProps) {
+  const { t, tx } = useI18n();
+  const connected = conn.status === "connected";
+  const address = selected?.bootstrap_servers.join(", ") ?? "";
+
+  // Law 2 in the cluster card: the dot never carries the meaning alone. Every
+  // status produces a sentence, and the connected one carries the broker count
+  // because "Connected" with no number is a claim nobody can check.
+  let stateLine: string;
+  if (selected === null) {
+    stateLine = creating ? t("switcher.draftMeta") : t("card.state.none");
+  } else if (conn.status === "connected") {
+    stateLine = t("card.state.connected", {
+      count: conn.overview?.brokers.length ?? 0,
+    });
+  } else if (conn.status === "connecting") {
+    stateLine = t("card.state.connecting");
+  } else {
+    stateLine = t("card.state.disconnected");
+  }
+
+  return (
+    <nav className="rail" aria-label={t("rail.navLabel")}>
+      {/* The identity, top-left, above everything — and the ONLY place the
+          version is rendered outside the About dialog. It used to sit in the
+          far corner of the status bar, which is for live operational state; a
+          build number is an annotation on the name, so it reads once and
+          recedes. */}
+      <div className="brand">
+        <BrandBird />
+        <span className="brand-name">Kavka</span>
+        <span
+          className="brand-ver"
+          title={t("brand.versionTitle", { version: version || "…" })}
+        >
+          {version || "…"}
+        </span>
+      </div>
+
+      {/* Prod guardrail layer 3 lives here: the name, the environment chip and
+          the bootstrap address are pinned beside every screen rather than above
+          one of them. Most prod accidents are right-action-wrong-cluster. */}
+      <div className="cluster-card">
+        <div className="cc-top">
+          <h1 className="cc-name">
+            {selected?.name ??
+              (creating ? t("switcher.draftName") : t("card.none"))}
+          </h1>
+          {selected !== null && <EnvChip env={selected.environment} />}
+        </div>
+        {address !== "" && (
+          <div className="cc-addr" title={address}>
+            {address}
+          </div>
+        )}
+        <div className={`cc-state cc-state-${conn.status}`}>
+          <span
+            className={`status-dot status-${conn.status}`}
+            aria-hidden="true"
+          />
+          {stateLine}
+        </div>
+        <ClusterSwitcher
+          profiles={profiles}
+          selectedId={selectedId}
+          connections={connections}
+          onSelect={onSelect}
+          onConnect={onConnect}
+          onDisconnect={onDisconnect}
+          onNew={onNew}
+        />
+      </div>
+
+      <div className="crail-group">
+        <h2 className="crail-label">{t("rail.group.setup")}</h2>
+        <RailItem
+          icon={CONNECTIONS_ICON}
+          label={t("rail.item.connections")}
+          current={screen === "connections"}
+          onClick={() => onScreen("connections")}
+        />
+      </div>
+
+      {connected &&
+        CLUSTER_RAIL.map((group) => (
+          <div className="crail-group" key={group.id}>
+            <h2 className="crail-label">{t(group.labelKey)}</h2>
+            {group.items.map((item) => (
+              <RailItem
+                key={item.key}
+                icon={item.icon}
+                label={t(item.labelKey)}
+                current={screen === "cluster" && tab === item.key}
+                badge={item.key === "alerts" ? firing : undefined}
+                badgeTitle={t("rail.firingTitle", { count: firing })}
+                badgeWord={t("rail.firing")}
+                onClick={() => onTab(item.key)}
+              />
+            ))}
+          </div>
+        ))}
+
+      <div className="crail-group">
+        <h2 className="crail-label">{t("rail.group.application")}</h2>
+        <RailItem
+          icon={SETTINGS_ICON}
+          label={t("rail.item.settings")}
+          current={screen === "settings"}
+          onClick={() => onScreen("settings")}
+        />
+      </div>
+
+      {/* THE RAIL FOOT — the app's only always-visible safety state.
+          It states read-only in BOTH directions, with the consequence
+          attached. The app used to speak only in the safe direction: a chip
+          when read-only was ON and nothing at all when it was off, so a user
+          who wanted to confirm that Kavka *cannot* delete here had nothing to
+          read. A guardrail that is silent in its dangerous state is not a
+          guardrail. Disconnect is not here — it is the trailing action on the
+          cluster's own row in the switcher menu. */}
+      {selected !== null && (
+        <div className="crail-foot">
+          <div className="rf-row">
+            <ShieldIcon />
+            <span>
+              {tx("rail.readonly.label", {
+                state: (
+                  <strong className="rf-state">
+                    {t(
+                      selected.read_only
+                        ? "rail.readonly.on"
+                        : "rail.readonly.off",
+                    )}
+                  </strong>
+                ),
+              })}
+            </span>
+          </div>
+          <p className="rf-why">
+            {t(
+              selected.read_only
+                ? "rail.readonly.on.why"
+                : "rail.readonly.off.why",
+            )}
+          </p>
+        </div>
+      )}
+    </nav>
+  );
+}
+
 export default function App() {
   const { t, tx } = useI18n();
   // null = still loading
@@ -93,12 +443,19 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [transfer, setTransfer] = useState<TransferTab | null>(null);
-  // Settings is a VIEW, not an overlay, and deliberately not a dialog: it has
-  // to be reachable with nothing connected, it is where somebody goes to make
-  // the app readable before they can read anything, and a modal over an empty
-  // workspace is a modal over nothing. It does not clear the selection —
-  // closing it puts you back on the cluster you were already on.
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * Which of the rail's three destinations the stage is showing.
+   *
+   * Settings is one of them rather than an overlay, and deliberately not a
+   * dialog: it has to be reachable with nothing connected, it is where somebody
+   * goes to make the app readable before they can read anything, and a modal
+   * over an empty workspace is a modal over nothing. It does not clear the
+   * selection — leaving it puts you back on the cluster you were already on.
+   */
+  const [screen, setScreen] = useState<Screen>("connections");
+  // How many alert rules are firing on the connected cluster. Reported up by
+  // ClusterView, because the rail that badges it is the shell's now.
+  const [firing, setFiring] = useState(0);
   // A danger banner inside the transfer dialog is still danger on screen, and
   // §5.8's prod damper reads one attribute on the app root — so the dialog
   // reports its banner up here rather than the guardrail missing it.
@@ -238,14 +595,29 @@ export default function App() {
     }
   }, [profiles, selectedId, loadFailed]);
 
+  /**
+   * Pick a cluster.
+   *
+   * It NEVER connects and it never detonates the workspace: choosing a cold
+   * cluster used to swap the whole stage for a connection form, which is the
+   * sharpest thing the fidelity audit found. Selection lands you on the cluster
+   * if it is already up and on its Connections entry if it is not — and the
+   * switcher menu's trailing Connect button is what actually dials.
+   */
   const select = useCallback((id: string) => {
     setCreating(false);
     setSelectedId(id);
     lsSet(SELECTED_KEY, id);
+    setScreen(
+      connectionsRef.current[id]?.status === "connected"
+        ? "cluster"
+        : "connections",
+    );
   }, []);
 
   const startCreating = useCallback(() => {
     setCreating(true);
+    setScreen("connections");
   }, []);
 
   const stopCreating = useCallback(() => {
@@ -267,6 +639,10 @@ export default function App() {
         // resurrect a connection entry for it.
         if (!profilesRef.current?.some((p) => p.id === profile.id)) return;
         setConn(profile.id, { status: "connected", overview });
+        // A cluster that just came up is what the user asked to look at — but
+        // only if it is the one on screen. Connecting a second cluster from the
+        // switcher while reading a first must not yank the stage away.
+        if (selectedIdRef.current === profile.id) setScreen("cluster");
       } catch (err) {
         const msg = errorMessage(err);
         if (profilesRef.current?.some((p) => p.id === profile.id)) {
@@ -291,6 +667,10 @@ export default function App() {
         setError(errorMessage(err));
       }
       setConn(profileId, { status: "disconnected" });
+      // The ten cluster screens leave the rail with the connection, so the
+      // stage cannot stay on one of them. Connections is where you land — the
+      // screen that can dial it again.
+      if (selectedIdRef.current === profileId) setScreen("connections");
     },
     [setConn],
   );
@@ -314,6 +694,7 @@ export default function App() {
       });
       setSelectedId(null);
       lsRemove(SELECTED_KEY);
+      setScreen("connections");
       await reloadProfiles();
     },
     [reloadProfiles],
@@ -361,7 +742,11 @@ export default function App() {
       setCreating(false);
       setSelectedId(profileId);
       lsSet(SELECTED_KEY, profileId);
-      if (!already) void connect(target);
+      // Straight onto the cluster when it is already up; `connect` moves the
+      // stage there itself when it is not, so a failed dial leaves the user on
+      // the form that has to change rather than on an empty cluster screen.
+      if (already) setScreen("cluster");
+      else void connect(target);
     },
     [connect, t],
   );
@@ -431,12 +816,82 @@ export default function App() {
   // than on the next connect.
   const masking = useMasking(selected?.id ?? null);
 
+  /**
+   * WHICH CLUSTER SCREEN IS ON — the rail's business, so the shell holds it.
+   *
+   * Keyed to the cluster SESSION (`id:nonce`) rather than to the id alone, so
+   * switching clusters and the remount "Refresh topics" performs both re-read
+   * the stored placement instead of carrying dev's screen onto prod. Adjusting
+   * state during render is the documented React pattern for exactly this, and
+   * it is why the tab is right on the first paint rather than one frame later
+   * — a frame of the wrong screen is a frame of the wrong cluster's data.
+   */
+  const sessionKey = selected !== null ? `${selected.id}:${topicsNonce}` : "";
+  const [session, setSession] = useState<{
+    key: string;
+    tab: TabKey;
+    /**
+     * How many times a rail item has been PRESSED in this session. Not a
+     * counter for its own sake: pressing the item you are already on has to
+     * count as a navigation — it is the plainest way a user can say "take me
+     * back to the top of this section" — and `tab` cannot express it.
+     */
+    nav: number;
+  }>({
+    key: "",
+    tab: "overview",
+    nav: 0,
+  });
+  if (session.key !== sessionKey) {
+    setSession({
+      key: sessionKey,
+      tab: selected === null ? "overview" : initialTab(selected.id),
+      // A new cluster session starts from the stored placement, which is the
+      // reconnect promise — so it must NOT look like a press.
+      nav: 0,
+    });
+  }
+
+  /**
+   * A rail item always opens its section's ROOT — see ClusterView's `lastNav`
+   * effect for the other half. Restoring a placement is a promise about coming
+   * back tomorrow, not about pressing "Topics".
+   */
+  const goTab = useCallback((next: TabKey) => {
+    setSession((prev) => ({ ...prev, tab: next, nav: prev.nav + 1 }));
+    setScreen("cluster");
+  }, []);
+
+  /**
+   * THE STAGE SCROLLS BACK TO THE TOP ON EVERY NAVIGATION.
+   *
+   * Screen, rail item, cluster and the draft state are what "somewhere else"
+   * means at the SHELL's level; `nav` is in the token so pressing the current
+   * rail item counts too. Everything below the rail — which topic, which pane,
+   * which broker — is `ClusterView`'s half of the same mechanism, because that
+   * is where those values live. Neither of them touches a scrollport directly:
+   * see stage.ts.
+   */
+  useStageTop(
+    `${screen}:${session.tab}:${session.nav}:${selectedId ?? ""}:${creating}`,
+  );
+
   let main: React.ReactNode;
-  if (settingsOpen) {
+  if (screen === "settings") {
     // First branch on purpose: Settings answers "I cannot read this app", and
     // that has to work in every other state the workspace can be in —
     // including the one where reading the connection file failed.
-    main = <SettingsView onOpenAbout={openAbout} onUpdateFound={setUpdate} />;
+    // `onProfilesChanged` matters here for one case: deleting an environment
+    // from Settings reassigns every profile that used it. Without this the
+    // reassignment lands on disk and in the file, and the switcher menu keeps
+    // showing the old environment until the next reload.
+    main = (
+      <SettingsView
+        onOpenAbout={openAbout}
+        onUpdateFound={setUpdate}
+        onProfilesChanged={() => void reloadProfiles()}
+      />
+    );
   } else if (profiles === null) {
     // Never a full-screen spinner. A sentence says what we are waiting for.
     main = (
@@ -445,6 +900,37 @@ export default function App() {
           <p className="empty-hint">{t("common.readingConnections")}</p>
         </div>
       </div>
+    );
+  } else if (
+    screen === "cluster" &&
+    selected &&
+    conn.status === "connected" &&
+    conn.overview
+  ) {
+    // Guarded on the screen as well as the connection: "Connections" is a
+    // destination you can stand on with a cluster up, and it shows that
+    // cluster's settings rather than pretending nothing is connected.
+    main = (
+      <ClusterView
+        // The nonce is "Refresh topics" from the palette — see the state above.
+        key={sessionKey}
+        profile={selected}
+        overview={conn.overview}
+        tab={session.tab}
+        navNonce={session.nav}
+        onFiringChange={setFiring}
+        // The same handler the rail's own buttons press. Home's attention rows
+        // and the alert toast's "View …" button land in the state a rail press
+        // produces, because they ARE a rail press.
+        onTab={goTab}
+        // Cluster home's Refresh (audit item 15). Same nonce as the palette's
+        // "Refresh topics": a remount, which is the whole of the behaviour.
+        onRefresh={() => setTopicsNonce((n) => n + 1)}
+        onDisconnect={disconnect}
+        onDangerChange={setViewDanger}
+        onTopicActions={setTopicActions}
+        onOpenCluster={openCluster}
+      />
     );
   } else if (creating) {
     main = (
@@ -459,19 +945,15 @@ export default function App() {
         onCancelNew={stopCreating}
         onError={showError}
         onProfilesChanged={() => void reloadProfiles()}
-      />
-    );
-  } else if (selected && conn.status === "connected" && conn.overview) {
-    main = (
-      <ClusterView
-        // The nonce is "Refresh topics" from the palette — see the state above.
-        key={`${selected.id}:${topicsNonce}`}
-        profile={selected}
-        overview={conn.overview}
-        onDisconnect={disconnect}
-        onDangerChange={setViewDanger}
-        onTopicActions={setTopicActions}
-        onOpenCluster={openCluster}
+        // The mockup's Connections screen is a list BESIDE an editor, and the
+        // list is this component's state. `select` is deliberately the SAME
+        // handler the switcher menu presses, so picking a cluster means the
+        // same thing in both surfaces.
+        profiles={profiles ?? undefined}
+        connections={connections}
+        selectedId={selectedId}
+        onSelect={select}
+        onCreate={startCreating}
       />
     );
   } else if (selected) {
@@ -487,6 +969,11 @@ export default function App() {
         onCancelNew={stopCreating}
         onError={showError}
         onProfilesChanged={() => void reloadProfiles()}
+        profiles={profiles ?? undefined}
+        connections={connections}
+        selectedId={selectedId}
+        onSelect={select}
+        onCreate={startCreating}
       />
     );
   } else if (loadFailed && profiles.length === 0) {
@@ -578,6 +1065,20 @@ export default function App() {
   const envDef = useEnvironment(selected?.environment ?? "");
   const bootstrap = selected?.bootstrap_servers.join(", ") ?? "";
 
+  /**
+   * The window title carries the cluster and its environment (§6). It is the
+   * one piece of chrome that survives the window being minimised, alt-tabbed
+   * past or cropped into a bug report, and it used to read "Kavka" on every
+   * cluster in the world.
+   *
+   * `envDef.name` and not `selected.environment`: the registry's spelling is
+   * what the chip beside it renders, so a renamed environment renames both or
+   * the guardrail says two different words in two places. Nothing selected
+   * gives the empty string, which `windowTitleFor` drops — the bar goes back
+   * to "Kavka".
+   */
+  useWindowTitle(selected?.name ?? null, selected === null ? null : envDef.name);
+
   // The two contextual rows. Bilingual keywords like every other action
   // (§5.9): `cel`, `filter` and `scan` all find "Search in orders.v2".
   const contextualCommands = useMemo<PaletteAction[]>(() => {
@@ -652,25 +1153,29 @@ export default function App() {
       />
 
       <div className="app-shell">
-        <Sidebar
+        {/* ONE rail for the whole window (DESIGN.md §5.1). `select` and
+            `startCreating` already move the stage to Connections, so nothing
+            here has to remember to close Settings. */}
+        <Rail
+          version={version}
           profiles={profiles}
           selectedId={creating ? null : selectedId}
           connections={connections}
+          selected={selected}
+          conn={conn}
           creating={creating}
-          settingsOpen={settingsOpen}
-          // Picking a cluster or starting a new one is a request to look at
-          // that, so both close Settings on the way. Toggling Settings does
-          // NOT clear the selection — closing it returns you where you were.
-          onSelect={(id) => {
-            setSettingsOpen(false);
-            select(id);
+          screen={screen}
+          tab={session.tab}
+          firing={firing}
+          onScreen={setScreen}
+          onTab={goTab}
+          onSelect={select}
+          onConnect={(profile) => {
+            select(profile.id);
+            void connect(profile);
           }}
-          onNew={() => {
-            setSettingsOpen(false);
-            startCreating();
-          }}
-          onAbout={openAbout}
-          onSettings={() => setSettingsOpen((open) => !open)}
+          onDisconnect={(id) => void disconnect(id)}
+          onNew={startCreating}
         />
 
         <main className="workspace">
@@ -692,85 +1197,82 @@ export default function App() {
             <UpdateBanner offer={update} onDismiss={dismissUpdate} />
           )}
 
-          <div className="workspace-body">{main}</div>
+          {/* THE STAGE. It is the scrollport, which is why it registers
+              itself: every navigation puts it back at the top, and the two
+              components that know the user has moved reach it through
+              stage.ts rather than through a ref neither of them can hold. */}
+          <div className="workspace-body" ref={registerStage}>
+            {main}
+          </div>
+        </main>
+      </div>
 
-          <footer className="statusbar">
-            <div className="statusbar-left">
-              {selected ? (
-                <>
-                  <span
-                    className={`status-dot status-${conn.status}`}
-                    aria-hidden="true"
-                  />
-                  {/* Law 2: the dot never carries the meaning on its own. */}
-                  <span className="statusbar-item">
-                    {t(STATUS_KEY[conn.status])}
-                  </span>
-                  <span className="statusbar-sep" aria-hidden="true">
-                    ·
-                  </span>
-                  <span className="statusbar-item">{selected.name}</span>
-                  <span className="statusbar-sep" aria-hidden="true">
-                    ·
-                  </span>
-                  {/* Prod guardrail layer 3: the address is always on screen.
-                      Most prod accidents are right-action-wrong-cluster. */}
-                  <span
-                    className="statusbar-item statusbar-mono"
-                    title={bootstrap}
-                  >
-                    {bootstrap}
-                  </span>
-                  {selected.read_only && (
-                    <span
-                      className="readonly-chip"
-                      title={t("app.readonlyTitle")}
-                    >
-                      {t("app.readonlyChip")}
-                    </span>
-                  )}
-                  {/* Masking, said out loud wherever data is. A payload that
-                      has been rewritten on its way here must never look like
-                      what the producer sent, and the number is part of the
-                      claim — "on" with nothing to say how much is not a
-                      statement anyone can act on. */}
-                  {masking.enabled > 0 && (
-                    <span
-                      className="mask-chip"
-                      title={maskingChipTitle(masking)}
-                    >
-                      {maskingChipLabel(masking)}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <span className="statusbar-item">
-                  {creating ? t("app.statusbar.draft") : t("app.statusbar.none")}
-                </span>
-              )}
-            </div>
-            <div className="statusbar-right">
-              {/* The one shortcut worth advertising, and clickable for
-                  whoever finds it here before they find the key. */}
-              <button
-                type="button"
-                className="statusbar-hint"
-                title={t("palette.searchLabel")}
-                onClick={() => setPaletteOpen(true)}
-              >
-                <span className="kbd">{paletteKeyLabel()}</span>
-                {t("app.statusbar.commands")}
-              </button>
+      {/* THE STATUS BAR — a documented deviation from the mockup, which has
+          none (DESIGN.md §11). It stays because it carries LIVE OPERATIONAL
+          STATE that a drawing never had to honour: search progress, tail rate,
+          the always-visible bootstrap address §6 requires. It now spans the
+          whole window rather than stopping at a column edge that no longer
+          exists, and the version has left it for the brand lockup — a build
+          number is not operational state. */}
+      <footer className="statusbar">
+        <div className="statusbar-left">
+          {selected ? (
+            <>
+              <span
+                className={`status-dot status-${conn.status}`}
+                aria-hidden="true"
+              />
+              {/* Law 2: the dot never carries the meaning on its own. */}
+              <span className="statusbar-item">{t(STATUS_KEY[conn.status])}</span>
               <span className="statusbar-sep" aria-hidden="true">
                 ·
               </span>
-              <span className="statusbar-item statusbar-mono">
-                {t("app.statusbar.coreVersion", { version: version || "…" })}
+              <span className="statusbar-item">{selected.name}</span>
+              <span className="statusbar-sep" aria-hidden="true">
+                ·
               </span>
-            </div>
-          </footer>
-        </main>
-      </div>
+              {/* Prod guardrail layer 3: the address is always on screen.
+                  Most prod accidents are right-action-wrong-cluster. */}
+              <span className="statusbar-item statusbar-mono" title={bootstrap}>
+                {bootstrap}
+              </span>
+              {selected.read_only && (
+                <span className="readonly-chip" title={t("app.readonlyTitle")}>
+                  {t("app.readonlyChip")}
+                </span>
+              )}
+              {/* Masking, said out loud wherever data is. A payload that has
+                  been rewritten on its way here must never look like what the
+                  producer sent, and the number is part of the claim — "on"
+                  with nothing to say how much is not a statement anyone can
+                  act on. */}
+              {masking.enabled > 0 && (
+                <span className="mask-chip" title={maskingChipTitle(masking)}>
+                  {maskingChipLabel(masking)}
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="statusbar-item">
+              {creating ? t("app.statusbar.draft") : t("app.statusbar.none")}
+            </span>
+          )}
+        </div>
+        <div className="statusbar-right">
+          {/* The one shortcut worth advertising, and clickable for whoever
+              finds it here before they find the key. The version used to sit
+              after it; it is in the brand lockup now. */}
+          <button
+            type="button"
+            className="statusbar-hint"
+            title={t("palette.searchLabel")}
+            onClick={() => setPaletteOpen(true)}
+          >
+            <span className="kbd">{paletteKeyLabel()}</span>
+            {t("app.statusbar.commands")}
+          </button>
+        </div>
+      </footer>
 
       {paletteOpen && (
         <Palette

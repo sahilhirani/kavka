@@ -14,6 +14,7 @@ import ConfirmModal from "./ConfirmModal";
 import {
   envAttrs,
   loadEnvironments,
+  PadLock,
   sameEnvironmentName,
   useEnvironments,
 } from "./environments";
@@ -396,6 +397,24 @@ export default function EnvironmentsManager({
           <p className="modal-body">{t("env.mgr.intro")}</p>
           {banner}
 
+          {/* WHAT PROTECTED ACTUALLY DOES, before the switches that set it.
+              This dialog is where a user decides what protection means for
+              their organisation, and until now it asked for that decision
+              without stating the consequences — two of which happen in other
+              processes (the CLI and the MCP server) and are therefore
+              invisible from here no matter how carefully you read the list.
+              A guardrail nobody can see the shape of is a guardrail people
+              turn off. */}
+          <div className="banner banner-info">
+            <span className="banner-glyph" aria-hidden="true">
+              i
+            </span>
+            <div className="banner-body">
+              <p className="banner-title">{t("env.mgr.hint.title")}</p>
+              <p className="banner-detail">{t("env.mgr.hint.detail")}</p>
+            </div>
+          </div>
+
           <ul className="env-list">
             {defs.map((def) => {
               const users = usersOf(def.name);
@@ -416,6 +435,14 @@ export default function EnvironmentsManager({
                 <li key={def.name} className="env-list-row" {...envAttrs(def)}>
                   <span className="env-chip" {...envAttrs(def)}>
                     {def.name}
+                    {/* THE THIRD SIGNAL. §6 and the mockup both insist a
+                        protected environment is spelled three ways — the warm
+                        ground under the row, the padlock, and the WORD in the
+                        meta line beside it. The app carried two. The glyph is
+                        `aria-hidden` precisely because the word is already
+                        there and doubling it would make a screen reader say
+                        "protected" twice on one row. */}
+                    {def.protected && <PadLock />}
                   </span>
                   {/* Law 2: the colour never carries the meaning alone. The
                       row says in words whether it is protected and how many
@@ -449,6 +476,12 @@ export default function EnvironmentsManager({
               );
             })}
           </ul>
+
+          {/* The list is not a menu of three. Kavka ships dev/staging/prod
+              because most people start there, and a user whose organisation
+              has five is being told, here, that the app is not going to argue
+              about it. */}
+          <p className="dialog-note">{t("env.mgr.namesAreYours")}</p>
 
           <div className="modal-actions">
             <button type="button" className="btn" onClick={startAdd}>
@@ -614,7 +647,7 @@ export default function EnvironmentsManager({
             </button>
             <button
               type="button"
-              className={`btn ${unprotecting ? "btn-danger-confirm" : "btn-primary"}`}
+              className={`btn ${unprotecting ? "btn-danger-confirm" : "btn-primary"} btn-swap`}
               disabled={!draftValid || !unprotectOk || busy}
               aria-busy={busy || undefined}
               title={
@@ -630,10 +663,13 @@ export default function EnvironmentsManager({
               }
               onClick={() => void saveDraft()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {busy ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                {t("common.save")}
               </span>
-              {t("common.save")}
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                {t("common.save")}
+              </span>
             </button>
           </div>
         </>

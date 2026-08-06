@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   alertsChannelsGet,
   alertsChannelsSet,
@@ -17,6 +24,12 @@ import {
   type AlertRule,
   type ConnectionProfile,
 } from "./api";
+import {
+  alertTarget,
+  rememberAlertRules,
+  useAlertNav,
+  type AlertTarget,
+} from "./alertNav";
 import ConfirmModal from "./ConfirmModal";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { classifyError } from "./errors";
@@ -66,12 +79,114 @@ function nameOr(value: string, fallback: string): string {
 }
 
 /**
- * The dwell clause. `for_ms: 0` is a real, useful setting — "the moment it
- * happens" — and it must not read as "for 0 seconds", which is both wrong and
- * unreadable.
+ * The dwell clause, as parts. `for_ms: 0` is a real, useful setting — "the
+ * moment it happens" — and it must not read as "for 0 seconds", which is both
+ * wrong and unreadable, so a zero dwell contributes no words at all rather
+ * than an empty slot the sentence would have to step around.
  */
-function dwellClause(forMs: number): string {
-  return forMs <= 0 ? "" : ` for ${formatSpan(forMs)}`;
+function dwellParts(forMs: number): SentencePart[] {
+  return forMs <= 0
+    ? []
+    : [{ text: " for " }, { text: formatSpan(forMs), slot: true }];
+}
+
+/**
+ * ONE SENTENCE, WITH ITS VARIABLES MARKED.
+ *
+ * The sentence has always been the feature. What it did not show was which of
+ * its words came out of the form — "Alert me when group demo-checkout is more
+ * than 10 000 messages behind on payments for 1 minute" reads as one opaque
+ * claim, when four of those words are fields somebody chose. Marking them
+ * (`slot: true` → `.v`, brass with a dashed underline) turns the sentence into
+ * a picture of the rule: the parts that change are the parts that are lit.
+ *
+ * IT IS THE SAME SENTENCE, SPLIT — never a second wording. `alertSentence`
+ * below is literally the concatenation of these parts, so the parity table
+ * that guards the plain string guards the marked one too, and there is no way
+ * for the two to drift apart. Any new kind adds parts here and gets both.
+ *
+ * The `slot` flag is about PROVENANCE, not emphasis: a value the user typed or
+ * picked. "on any topic it reads" is not marked, because there is no field
+ * behind it — it is what an empty topic MEANS, and lighting it up would invite
+ * someone to click a word that does not exist in the form.
+ */
+export interface SentencePart {
+  text: string;
+  /** True when this word came out of a field on the rule form. */
+  slot?: true;
+}
+
+export function alertSentenceParts(rule: AlertRule): SentencePart[] {
+  switch (rule.kind) {
+    case "lag_threshold": {
+      const group = nameOr(rule.group_id, "a group");
+      const topic =
+        rule.topic === null || rule.topic.trim().length === 0
+          ? null
+          : rule.topic.trim();
+      // A topic Kavka was given is a slot; "any topic it reads" is what the
+      // absence of one means, and means nothing on its own.
+      const where: SentencePart[] =
+        topic === null
+          ? [{ text: "on any topic it reads" }]
+          : [{ text: "on " }, { text: topic, slot: true }];
+      const opening: SentencePart[] =
+        rule.for_ms <= 0
+          ? [
+              { text: "Alert me the moment group " },
+              { text: group, slot: true },
+              { text: " goes more than " },
+            ]
+          : [
+              { text: "Alert me when group " },
+              { text: group, slot: true },
+              { text: " is more than " },
+            ];
+      return [
+        ...opening,
+        { text: groupDigits(rule.threshold), slot: true },
+        { text: " messages behind " },
+        ...where,
+        ...dwellParts(rule.for_ms),
+        { text: "." },
+      ];
+    }
+    case "under_replicated":
+      return rule.for_ms <= 0
+        ? [
+            {
+              text: "Alert me the moment any partition on this cluster is missing a copy.",
+            },
+          ]
+        : [
+            {
+              text: "Alert me when any partition on this cluster has been missing a copy",
+            },
+            ...dwellParts(rule.for_ms),
+            { text: "." },
+          ];
+    case "offline_partitions":
+      return [
+        {
+          text: "Alert me the moment any partition on this cluster has no leader at all.",
+        },
+      ];
+    case "throughput_floor": {
+      const what = seriesLabel(rule.series);
+      const first = what.charAt(0).toLowerCase() + what.slice(1);
+      return [
+        {
+          text:
+            rule.for_ms <= 0 ? "Alert me the moment " : "Alert me when ",
+        },
+        { text: first, slot: true },
+        { text: rule.for_ms <= 0 ? " drops below " : " stays below " },
+        { text: formatSeriesValue(rule.series, rule.below), slot: true },
+        ...dwellParts(rule.for_ms),
+        { text: "." },
+      ];
+    }
+  }
 }
 
 /**
@@ -79,48 +194,42 @@ function dwellClause(forMs: number): string {
  *
  * No hedging, no "may". Every rule renders through this: the builder writes it
  * live, the list carries it under the rule's name, and the delete confirmation
- * leads with it.
+ * leads with it. Where the sentence is being READ rather than quoted into a
+ * title or a toast, `<RuleSentence>` draws the same words with their slots
+ * marked.
  */
 export function alertSentence(rule: AlertRule): string {
-  switch (rule.kind) {
-    case "lag_threshold": {
-      const group = nameOr(rule.group_id, "a group");
-      const where =
-        rule.topic === null || rule.topic.trim().length === 0
-          ? "on any topic it reads"
-          : `on ${rule.topic.trim()}`;
-      const dwell = dwellClause(rule.for_ms);
-      return dwell.length === 0
-        ? `Alert me the moment group ${group} goes more than ${groupDigits(
-            rule.threshold,
-          )} messages behind ${where}.`
-        : `Alert me when group ${group} is more than ${groupDigits(
-            rule.threshold,
-          )} messages behind ${where}${dwell}.`;
-    }
-    case "under_replicated": {
-      const dwell = dwellClause(rule.for_ms);
-      return dwell.length === 0
-        ? "Alert me the moment any partition on this cluster is missing a copy."
-        : `Alert me when any partition on this cluster has been missing a copy${dwell}.`;
-    }
-    case "offline_partitions":
-      return "Alert me the moment any partition on this cluster has no leader at all.";
-    case "throughput_floor": {
-      const what = seriesLabel(rule.series);
-      const first = what.charAt(0).toLowerCase() + what.slice(1);
-      const dwell = dwellClause(rule.for_ms);
-      return dwell.length === 0
-        ? `Alert me the moment ${first} drops below ${formatSeriesValue(
-            rule.series,
-            rule.below,
-          )}.`
-        : `Alert me when ${first} stays below ${formatSeriesValue(
-            rule.series,
-            rule.below,
-          )}${dwell}.`;
-    }
-  }
+  return alertSentenceParts(rule)
+    .map((part) => part.text)
+    .join("");
+}
+
+/**
+ * The sentence as nodes, for the two places it is read rather than quoted.
+ *
+ * A fragment and not an element: the rule list wants it inside a `<td>` and
+ * the firing panel wants it inside a `<p>`, and the caller owning the element
+ * is what keeps one component out of the business of both.
+ *
+ * The marks are `<span>`s with no role and no label. They are provenance, and
+ * a screen reader reading "demo-checkout" as part of the sentence is exactly
+ * right — announcing "highlighted, demo-checkout" four times would turn one
+ * sentence into a form report.
+ */
+export function RuleSentence({ rule }: { rule: AlertRule }) {
+  return (
+    <>
+      {alertSentenceParts(rule).map((part, i) =>
+        part.slot === true ? (
+          <span className="v" key={i}>
+            {part.text}
+          </span>
+        ) : (
+          <Fragment key={i}>{part.text}</Fragment>
+        ),
+      )}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +415,10 @@ export default function AlertsTab({
         if (rulesSeq.current !== mine) return;
         setRules(list);
         setListFailed(false);
+        // The toast that arrives on the NEXT firing has to be able to name
+        // what the rule watches, and this is the read that knows. See
+        // alertNav.ts: an event carries a rule id and a name, never a group.
+        rememberAlertRules(profile.id, list);
       })
       .catch((err: unknown) => {
         if (rulesSeq.current !== mine) return;
@@ -521,15 +634,26 @@ export default function AlertsTab({
 
       {/* Every firing rule gets a surface of its own, above the table. A row in
           a list is the right shape for a rule that is quiet and the wrong one
-          for a rule that is waking somebody up. */}
+          for a rule that is waking somebody up.
+
+          Beside it, in a 400px column, is what Kavka sent OUT about this
+          firing. The two belong together: the panel is what the app knows and
+          the card is what the person away from their desk was told, and the
+          only way to be sure those agree is to draw them next to each other. */}
       {firingRules.map((rule) => (
-        <FiringRulePanel
-          key={rule.id}
-          rule={rule}
-          event={firing.get(rule.id) ?? null}
-          onEdit={() => setEditing(rule)}
-          onDelete={() => setRemoving(rule)}
-        />
+        <div className="firing-row" key={rule.id}>
+          <FiringRulePanel
+            rule={rule}
+            event={firing.get(rule.id) ?? null}
+            onEdit={() => setEditing(rule)}
+            onDelete={() => setRemoving(rule)}
+          />
+          <NotificationPreview
+            rule={rule}
+            event={firing.get(rule.id) ?? null}
+            channels={channels}
+          />
+        </div>
       ))}
 
       <section className="panel">
@@ -609,7 +733,9 @@ export default function AlertsTab({
                       <span className="rule-name">{rule.name}</span>
                       <span className="rule-kind">{KIND_LABEL[rule.kind]}</span>
                     </td>
-                    <td className="rule-sentence">{alertSentence(rule)}</td>
+                    <td className="rule-sentence">
+                      <RuleSentence rule={rule} />
+                    </td>
                     <td>
                       {firing.has(rule.id) ? (
                         <span
@@ -654,6 +780,13 @@ export default function AlertsTab({
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* WHAT THE STATE COLUMN CANNOT TELL YOU. "Quiet" is the absence of a
+            firing, which is not the same as a healthy number — and on this
+            screen the difference matters, because both look identical. */}
+        {rules !== null && !listFailed && rules.length > 0 && (
+          <p className="panel-foot">{t("alerts.rules.foot")}</p>
         )}
       </section>
 
@@ -827,6 +960,15 @@ function FiringRulePanel({
 }) {
   const { t } = useI18n();
   const dwell = "for_ms" in rule ? rule.for_ms : 0;
+  /**
+   * THE WAY OUT OF THE ALERT AND INTO THE THING IT IS ABOUT.
+   *
+   * `null` while the shell has registered no navigator — a button that would
+   * do nothing is worse than one that is not there, and this component renders
+   * inside `ClusterView` in the app and inside nothing at all in a test.
+   */
+  const nav = useAlertNav();
+  const target: AlertTarget = alertTarget(rule);
 
   return (
     <section className="panel panel-firing">
@@ -848,7 +990,9 @@ function FiringRulePanel({
         )}
       </div>
 
-      <p className="rule-sentence rule-sentence-lead">{alertSentence(rule)}</p>
+      <p className="rule-sentence rule-sentence-lead">
+        <RuleSentence rule={rule} />
+      </p>
 
       {event !== null && (
         <p className="rule-tripped">
@@ -860,6 +1004,19 @@ function FiringRulePanel({
       )}
 
       <div className="panel-tools">
+        {/* First, and on the accent: at 3am the question is not "what does
+            this rule say", it is "show me the thing". A lag rule opens the
+            group it names; everything else has no single subject to open, so
+            it gets no button rather than a wrong one. */}
+        {nav !== null && target.screen === "groups" && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => nav(target)}
+          >
+            {t("alerts.toast.viewGroup", { group: target.group })}
+          </button>
+        )}
         <button
           type="button"
           className="btn"
@@ -915,6 +1072,91 @@ function FiringRulePanel({
 }
 
 // ---------------------------------------------------------------------------
+// What Kavka sent out about this firing
+// ---------------------------------------------------------------------------
+
+/**
+ * THE NOTIFICATION, DRAWN.
+ *
+ * The person this alert is for was probably not looking at Kavka when it
+ * fired — that is the whole reason the channel exists — so the words that
+ * actually reached them are the words that matter, and until now there was
+ * nowhere in the app to read them. This card is that place.
+ *
+ * IT IS GENERATED FROM THE SAME TWO FIELDS THE NOTIFICATION IS. The Tauri
+ * shell builds it as `title = rule name` and `body = event.detail`, with no
+ * buttons and no other content (`src-tauri/src/lib.rs`, `notify`). This draws
+ * exactly those two fields in that order. If it ever showed more, it would be
+ * a mock-up of a notification rather than a preview of one, and somebody would
+ * eventually go looking for a button that was never sent.
+ *
+ * THREE HONEST STATES, and the caption is what tells them apart:
+ *
+ *   channels unread   → nothing at all. Kavka does not know whether a
+ *                       notification was asked for, and a card captioned
+ *                       either way would be a guess.
+ *   notifications on  → "Kavka asked your operating system to show this."
+ *                       Asked, not showed: the OS is entitled to refuse — the
+ *                       notification centre is off, permission was withdrawn,
+ *                       the session is not interactive — and Kavka is not told
+ *                       when it does.
+ *   notifications off → what it WOULD have said, said as a conditional.
+ *
+ * `aside`, not a live region: it appears with the panel beside it, describing
+ * something that has already happened.
+ */
+function NotificationPreview({
+  rule,
+  event,
+  channels,
+}: {
+  rule: AlertRule;
+  event: AlertEvent | null;
+  channels: AlertChannels | null;
+}) {
+  const { t } = useI18n();
+  // Both are required. The card's whole claim is "this is what went out about
+  // THIS firing", and without the event there is no firing to have gone out.
+  if (event === null || channels === null) return null;
+  const sent = channels.os_notification;
+
+  return (
+    <aside
+      className="toast-preview"
+      aria-label={t("alerts.preview.label", { rule: rule.name })}
+    >
+      <div className="toast-demo">
+        <p className="td-head">
+          <svg
+            className="td-bird"
+            viewBox="0 0 32 32"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M20.5 5.4a4.6 4.6 0 0 0-4.6 4.6c0 1.3-.6 2.5-1.7 3.2L5.5 19h8.7c4.9 0 9-3.8 9.4-8.7l.1-1.2 3.8-1.7-3.6-1.1-.8-2.4-2.6 1.5z"
+              fill="currentColor"
+            />
+          </svg>
+          <span className="td-app">Kavka</span>
+          <span className="td-when">{readoutTime(event.fired_ms)}</span>
+        </p>
+        {/* Title then body, in the order and with the content the shell sends.
+            The rule's own name is the title because it is what the person
+            wrote and what they will recognise at 3am. */}
+        <p className="td-title">{rule.name}</p>
+        <p className="td-body">{event.detail}</p>
+      </div>
+      <p className="toast-caption">
+        {sent
+          ? t("alerts.preview.sent", { time: readoutTime(event.fired_ms) })
+          : t("alerts.preview.off")}
+      </p>
+    </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Channels
 // ---------------------------------------------------------------------------
 
@@ -931,6 +1173,7 @@ function ChannelsPanel({
   onError: (message: string) => void;
   onToast: ReturnType<typeof useToasts>["push"];
 }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -1118,7 +1361,7 @@ function ChannelsPanel({
       <div className="panel-tools">
         <button
           type="button"
-          className="btn"
+          className="btn btn-swap"
           disabled={busy || testing || nothingConfigured}
           aria-busy={testing || undefined}
           title={
@@ -1128,12 +1371,21 @@ function ChannelsPanel({
           }
           onClick={() => void runTest()}
         >
-          <span className="btn-busy-slot" aria-hidden="true">
-            {testing ? <span className="spinner" /> : null}
+          <span className="btn-swap-face">
+            Send a test alert
           </span>
-          Send a test alert
+          <span className="btn-swap-face btn-swap-busy">
+            <span className="spinner" aria-hidden="true" />
+            Send a test alert
+          </span>
         </button>
       </div>
+
+      {/* WHAT NEITHER SWITCH ABOVE CAN PROMISE. Both channels are asked once
+          per firing and never retried, and a refusal at either end is written
+          to Kavka's log rather than shown here — so "on" means "Kavka will
+          ask", which is a weaker claim than it looks. */}
+      <p className="panel-foot">{t("alerts.channels.foot")}</p>
     </section>
   );
 }
@@ -1630,15 +1882,18 @@ function AlertRuleModal({
           </button>
           <button
             type="submit"
-            className="btn btn-primary"
+            className="btn btn-primary btn-swap"
             disabled={busy}
             aria-busy={busy}
             title={busy ? "Kavka is saving this rule" : undefined}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              {rule === null ? "Add rule" : "Save rule"}
             </span>
-            {rule === null ? "Add rule" : "Save rule"}
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              {rule === null ? "Add rule" : "Save rule"}
+            </span>
           </button>
         </div>
       </form>

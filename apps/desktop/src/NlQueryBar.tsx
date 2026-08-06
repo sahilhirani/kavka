@@ -169,7 +169,7 @@ export default function NlQueryBar({
         />
         <button
           type="button"
-          className="btn"
+          className="btn btn-swap"
           disabled={busy || disabled}
           aria-busy={busy || undefined}
           title={
@@ -181,10 +181,13 @@ export default function NlQueryBar({
           }
           onClick={translate}
         >
-          <span className="btn-busy-slot" aria-hidden="true">
-            {busy ? <span className="spinner" /> : null}
+          <span className="btn-swap-face">
+            Translate
           </span>
-          Translate
+          <span className="btn-swap-face btn-swap-busy">
+            <span className="spinner" aria-hidden="true" />
+            Translate
+          </span>
         </button>
         <HelpPopover
           className="btn btn-ghost"

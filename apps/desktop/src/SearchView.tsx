@@ -36,12 +36,14 @@ import { ErrorBanner } from "./ProfileEditor";
 import SeekBar, {
   buildSeek,
   initialSeekState,
+  scanSeekNote,
   type SeekError,
   type SeekField,
   type SeekState,
 } from "./SeekBar";
 import { readFilters, writeFilters, type SavedFilter } from "./storage";
 import type { ToastSpec } from "./Toast";
+import ViewTrail from "./ViewTrail";
 
 /**
  * STREAMING SEARCH — Phase 2's crown jewel, from the UI side.
@@ -181,10 +183,14 @@ export default function SearchView({
     [partitions],
   );
 
-  const selected = useMemo(
-    () => rows.find((r) => rowKey(r) === selectedKey) ?? null,
+  const selectedIndex = useMemo(
+    () =>
+      selectedKey === null
+        ? -1
+        : rows.findIndex((r) => rowKey(r) === selectedKey),
     [rows, selectedKey],
   );
+  const selected = selectedIndex >= 0 ? rows[selectedIndex] : null;
 
   // ── Start / stop ───────────────────────────────────────────────────────
 
@@ -446,6 +452,10 @@ export default function SearchView({
 
       <section className="messages-view">
       <div className="messages-head">
+        {/* The rail still says "Topics" while this pane is open. See
+            ViewTrail — the wayfinding half of a stage head, without the band
+            a full-height pane cannot spare. */}
+        <ViewTrail crumbs={["Topics", topic, "Search"]} />
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
             <button
@@ -767,6 +777,11 @@ export default function SearchView({
           showCount={seek.mode === "latest"}
           countLabel="Newest per partition"
           disabled={running || stopping}
+          // A scan walks FORWARDS to the end of every partition; the browser
+          // reads one window backwards. Same control, different promise, so
+          // the sentence under it is search's own rather than approximately
+          // true twice.
+          noteFor={scanSeekNote}
         >
           <div className="seekbar-field seekbar-actions">
             <span className="seekbar-label" aria-hidden="true">
@@ -778,7 +793,7 @@ export default function SearchView({
               // the word "Stopping" is in the status line below.
               <button
                 type="button"
-                className="btn btn-latched"
+                className="btn btn-latched btn-swap"
                 onClick={stop}
                 disabled={stopping}
                 aria-busy={stopping || undefined}
@@ -788,10 +803,13 @@ export default function SearchView({
                     : "Stop scanning and keep what has matched so far"
                 }
               >
-                <span className="btn-busy-slot" aria-hidden="true">
-                  {stopping ? <span className="spinner" /> : null}
+                <span className="btn-swap-face">
+                  Stop
                 </span>
-                Stop
+                <span className="btn-swap-face btn-swap-busy">
+                  <span className="spinner" aria-hidden="true" />
+                  Stop
+                </span>
               </button>
             ) : (
               <button
@@ -800,7 +818,13 @@ export default function SearchView({
                 title={searchDisabledWhy}
                 onClick={start}
               >
-                <span className="btn-busy-slot" aria-hidden="true" />
+                {/* No busy face: this button is replaced by Stop the instant
+                    a search starts, so it can never be the one spinning. It
+                    used to carry an empty 16px slot for symmetry with Stop —
+                    a permanently blank box that read as a missing icon and
+                    pushed the label off centre, which is the glitch the field
+                    report named. The two labels are different widths anyway;
+                    the slot was never equalising anything. */}
                 Search
               </button>
             )}
@@ -976,6 +1000,10 @@ export default function SearchView({
             record={selected}
             topic={topic}
             onClose={() => setSelectedKey(null)}
+            // Same walk as the browser's, through the grid's own `step`.
+            onStep={(delta) => gridRef.current?.step(delta)}
+            canPrev={selectedIndex > 0}
+            canNext={selectedIndex >= 0 && selectedIndex < rows.length - 1}
             onBrowseOriginal={onBrowseOriginal}
             onReproduce={onReproduce}
             // The same two answers the browser gives, from the same function:
@@ -1054,6 +1082,19 @@ export default function SearchView({
             </span>
           </>
         )}
+        {/* The panel's caveat, in the mockup's slot — the counts and the one
+            thing the counts cannot tell you, on the same foot. This is the
+            limitation nobody thinks to state: the list is a reading order, not
+            a ranking, and no amount of scrolling makes it one. Everything
+            about COMPLETENESS (capped, stopped, unjudged) is the Perch's job
+            above, and is deliberately not repeated here. */}
+        <span className="statusbar-sep" aria-hidden="true">
+          ·
+        </span>
+        <span className="statusbar-item statusline-caveat">
+          Matches are listed in the order Kafka stored them, partition by
+          partition. Nothing here is ranked by how well it matched.
+        </span>
         <span className="statusbar-right">
           <span className="statusbar-item">
             <span className="kbd">⏎</span> search

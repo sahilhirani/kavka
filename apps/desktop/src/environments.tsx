@@ -31,6 +31,7 @@ import {
   ENV_COLORS,
   environmentsList,
   type EnvColor,
+  type Environment,
   type EnvironmentDef,
 } from "./api";
 
@@ -225,4 +226,66 @@ export function envAttrs(def: EnvironmentDef): EnvAttrs {
  */
 export function envWireLabel(def: EnvironmentDef): string | undefined {
   return def.protected ? def.name.toUpperCase() : undefined;
+}
+
+/**
+ * THE ENVIRONMENT CHIP — identity, in one pill.
+ *
+ * It lived in `Sidebar.tsx` until the sidebar was deleted (DESIGN.md §5.1).
+ * This is where it belongs: the module that already owns `resolveEnvironment`,
+ * `envAttrs` and the protection predicate now also owns the one component that
+ * renders them, so a chip can never disagree with the guardrail beside it.
+ * That is also why this file is `.tsx` — no import specifier changed.
+ *
+ * The NAME IS NEVER TRANSLATED and never sentence-cased in the DOM: it is user
+ * data now, and it is the same string as the `data-env-color` sibling, the
+ * forced-colors wire label, the CLI's refusal and the window title (§6, §10).
+ * The chip uppercases in CSS so the word stays readable to anyone reading the
+ * DOM or copying it into a bug report.
+ *
+ * Colour is identity; the FILLED form is the guardrail. An unprotected
+ * environment is a tint-on-tag, a protected one a solid badge — the treatment
+ * prod had, re-keyed onto the flag rather than onto the name, so a company
+ * whose production environment is called `PRD` gets the badge too.
+ */
+export function EnvChip({ env }: { env: Environment }) {
+  const def = useEnvironment(env);
+  return (
+    <span className="env-chip" {...envAttrs(def)}>
+      {def.name}
+    </span>
+  );
+}
+
+/**
+ * THE PADLOCK — the GLYPH channel of the protected signal.
+ *
+ * §6 spells production three ways or it has spelled it twice: the warm ground,
+ * this glyph, and the WORD beside it. It lives here rather than in
+ * `EnvironmentsManager` (where it was first drawn) because three surfaces need
+ * it now — the environments list, the switcher menu's rows and the Connections
+ * screen's saved-cluster rows — and a guardrail drawn twice is a guardrail that
+ * can come to disagree with itself.
+ *
+ * It inherits `currentColor` and sizes to the text it sits beside, so it is
+ * legible on the filled protected badge and on a warm row in both themes
+ * without a literal that would only be right in one of them. It is always
+ * `aria-hidden`: every caller pairs it with the word, and a screen reader that
+ * says "protected" twice per row is a screen reader being shouted at.
+ */
+export function PadLock() {
+  return (
+    <svg
+      className="env-lock"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
 }

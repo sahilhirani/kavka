@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ConnectionProfile, ConnState, Environment } from "./api";
-import { resolveEnvironment, useEnvironments } from "./environments";
-import { EnvChip } from "./Sidebar";
+import { EnvChip, resolveEnvironment, useEnvironments } from "./environments";
 import { SUPPORT_URL } from "./AboutDialog";
 import Overlay from "./Overlay";
 import { useI18n } from "./i18n";

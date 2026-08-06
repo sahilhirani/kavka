@@ -410,6 +410,12 @@ export default function GroupsTab({
                 </table>
               </div>
             )}
+
+            {/* A membership list is a photograph. Saying so is cheaper than
+                explaining why the count changed between two screenshots. */}
+            {detail.members.length > 0 && (
+              <p className="panel-foot">{t("group.members.foot")}</p>
+            )}
           </section>
         )}
 
@@ -467,6 +473,13 @@ export default function GroupsTab({
                 </tbody>
               </table>
             </div>
+
+            {/* THE MOCKUP'S OWN FOOT, in this app's numbers: what lag is made
+                of, that both halves came from one reading so they agree with
+                each other, and the one way the figure overstates — a group
+                that commits rarely is charted as behind on work it has
+                already done. */}
+            <p className="panel-foot">{t("group.lag.foot")}</p>
           </section>
         )}
 
@@ -640,6 +653,13 @@ export default function GroupsTab({
               </tbody>
             </table>
           </div>
+        )}
+
+        {/* WHAT A LIST OF GROUPS CANNOT SAY. Both facts bite in the same
+            moment: during a rebalance the member count is a number that is
+            already out of date, and the state word beside it is the reason. */}
+        {groups !== null && !listFailed && groups.length > 0 && (
+          <p className="panel-foot">{t("groups.list.foot")}</p>
         )}
       </section>
 

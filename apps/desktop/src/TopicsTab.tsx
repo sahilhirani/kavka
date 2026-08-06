@@ -204,7 +204,7 @@ export default function TopicsTab({
 
   const listSeq = useRef(0);
   const detailSeq = useRef(0);
-  const { t } = useI18n();
+  const { t, tx } = useI18n();
 
   useDangerSignal(error !== null, onDanger);
 
@@ -902,7 +902,7 @@ export default function TopicsTab({
                       it is routine (§6 layer 7). */}
                   <button
                     type="button"
-                    className={`btn ${isProtected ? "btn-danger" : ""}`}
+                    className={`btn ${isProtected ? "btn-danger" : ""} btn-swap`}
                     disabled={readOnly || electBusy || unpreferred === 0}
                     aria-busy={electBusy || undefined}
                     title={
@@ -916,10 +916,13 @@ export default function TopicsTab({
                     }
                     onClick={() => askElection(null)}
                   >
-                    <span className="btn-busy-slot" aria-hidden="true">
-                      {electBusy ? <span className="spinner" /> : null}
+                    <span className="btn-swap-face">
+                      Elect preferred leaders
                     </span>
-                    Elect preferred leaders
+                    <span className="btn-swap-face btn-swap-busy">
+                      <span className="spinner" aria-hidden="true" />
+                      Elect preferred leaders
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -1013,6 +1016,20 @@ export default function TopicsTab({
                   onDismiss={() => setOpResult(null)}
                 />
               )}
+
+              {/* THE PANEL'S FOOT — the mockup's honesty idiom, and the one
+                  arithmetic on this screen that people quote as a fact. The
+                  Messages column is `latest_offset - earliest_offset`, which
+                  counts what is READABLE, not what was written: every deleted
+                  record still spent its offset, and a compacted topic keeps
+                  one record per key while its offsets keep climbing. Both make
+                  the figure an upper bound rather than a total.
+
+                  LAST CHILD ON PURPOSE. `.panel-foot` full-bleeds itself with
+                  a negative bottom margin (styles/jackdaw-ops.css), so
+                  anything rendered after it would be pulled up over the
+                  panel's own edge. */}
+              <p className="panel-foot">{t("topic.partitions.foot")}</p>
             </section>
           )}
 
@@ -1134,6 +1151,16 @@ export default function TopicsTab({
                   </tbody>
                 </table>
               </div>
+
+              {/* The foot. Two limitations, both invisible in the rows: a
+                  broker default is a MOVING value that this table reads once,
+                  and a sensitive setting is withheld by Kafka itself rather
+                  than unset — so the dash in that column is the broker
+                  refusing to answer, which is a different fact from nothing
+                  being configured. */}
+              <p className="panel-foot">
+                {tx("topic.config.foot", { plus: <code>+</code> })}
+              </p>
             </section>
           )}
 
@@ -1434,6 +1461,15 @@ export default function TopicsTab({
                 </tbody>
               </table>
             </div>
+          )}
+
+          {/* The foot. What this table is NOT: it is cluster metadata, so it
+              knows how a topic is shaped and nothing about what is in it or
+              who is reading it. Saying so here stops "3 partitions" being read
+              as a health check — and names the one screen that does answer the
+              other question. */}
+          {topics !== null && !listFailed && (
+            <p className="panel-foot">{t("topics.list.foot")}</p>
           )}
         </section>
 

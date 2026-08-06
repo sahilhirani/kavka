@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import AclsTab from "./AclsTab";
 import AlertsTab from "./AlertsTab";
+import { alertToastAction, registerAlertNav } from "./alertNav";
 import {
+  alertsHistory,
   alertsSubscribe,
   type AlertEvent,
   type ClusterOverview,
@@ -11,14 +13,15 @@ import BrokersTab from "./BrokersTab";
 import ConnectTab from "./ConnectTab";
 import type { DangerReport } from "./danger";
 import GroupsTab from "./GroupsTab";
-import { Term } from "./Glossary";
+import HomeSections from "./HomeSections";
+import { useEnvironment } from "./environments";
 import { ensureMaskRules } from "./masking";
 import MaskingTab from "./MaskingTab";
 import MonitoringTab from "./MonitoringTab";
 import { formatDuration } from "./monitoring";
 import Perch from "./Perch";
-import QuorumPanel from "./QuorumPanel";
-import { EnvChip } from "./Sidebar";
+import StageHead, { CLUSTER_HEADS } from "./StageHead";
+import { useStageTop } from "./stage";
 import StreamsTab from "./StreamsTab";
 import { lsGet, lsSet } from "./storage";
 import { useI18n, type MessageKey } from "./i18n";
@@ -28,10 +31,10 @@ import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
 /**
  * THE CLUSTER WORKSPACE.
  *
- * One connected cluster, ten screens behind a GROUPED RAIL. Ledger showed the
- * ten as an undifferentiated strip of equal tabs, which is most of why the app
- * read as hard to follow: ten peers in a row tell you nothing about which one
- * answers the question you arrived with.
+ * One connected cluster, ten screens. Ledger showed the ten as an
+ * undifferentiated strip of equal tabs, which is most of why the app read as
+ * hard to follow: ten peers in a row tell you nothing about which one answers
+ * the question you arrived with.
  *
  * Jackdaw names the groups after what their screens are ABOUT, so a user who
  * does not yet know what an ACL is can still find it under Safety:
@@ -46,12 +49,21 @@ import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
  * Connect, Masking and Streams with no home at all — that was an execution gap
  * in a static drawing, not the bet the direction is making.
  *
+ * THE RAIL ITSELF NO LONGER LIVES HERE. `CLUSTER_RAIL` below is the data; the
+ * markup is rendered by the app shell (`App.tsx`), because the shell is now one
+ * 254px rail carrying brand, cluster card, Connections, these ten screens and
+ * Settings — not a sidebar plus a second rail (DESIGN.md §5.1). So this
+ * component is CONTROLLED: `tab` arrives as a prop from the shell, which reads
+ * its first value out of `initialTab`.
+ * It still owns everything BELOW the tab — which topic, which pane, which
+ * broker — and it still owns the persistence of all of it.
+ *
  * TabKey VALUES ARE PERSISTED and must not change. They are written into every
  * user's `kavka.cluster.<id>.view` record; renaming one silently moves people
  * off the screen they were last on. Only the presentation moved.
  *
  * NOT A TABLIST. A `role="tablist"` may not contain group headings, and the
- * headings are the entire point — so this is a `<nav>` whose current item
+ * headings are the entire point — so the rail is a `<nav>` whose current item
  * carries `aria-current="page"`. Arrow-key roving is a tablist affordance and
  * goes with it; Tab walks the rail, as it does in every other sidebar.
  *
@@ -59,9 +71,17 @@ import TopicsTab, { type TopicActions, type TopicPane } from "./TopicsTab";
  * prod cluster must never drop you into the view you had open on dev. The
  * selection also survives the remount App performs for "Refresh topics", which
  * is why it lives in localStorage rather than only in state.
+ *
+ * BUT A RAIL CLICK ALWAYS OPENS THE SECTION'S ROOT. Restoring a placement is a
+ * promise about RECONNECTING — come back tomorrow and you are where you left
+ * off. It is not a promise about clicking "Topics", which means "show me the
+ * topics", not "show me the message browser I had open on one of them three
+ * screens ago". See the `lastNav` effect, and note that it counts PRESSES
+ * (`navNonce`) rather than tab changes: pressing the item you are already on
+ * is the clearest "take me back to the list" there is.
  */
 
-type TabKey =
+export type TabKey =
   | "overview"
   | "topics"
   | "groups"
@@ -73,13 +93,13 @@ type TabKey =
   | "masking"
   | "streams";
 
-interface TabDef {
+export interface TabDef {
   key: TabKey;
   labelKey: MessageKey;
   icon: ReactNode;
 }
 
-interface RailGroup {
+export interface RailGroup {
   id: string;
   labelKey: MessageKey;
   items: readonly TabDef[];
@@ -87,7 +107,7 @@ interface RailGroup {
 
 // One stroke weight, one 24-box, no fills — the rail is a list of words with
 // a glyph in front of each, never a list of glyphs.
-function icon(path: ReactNode): ReactNode {
+export function railIcon(path: ReactNode): ReactNode {
   return (
     <svg
       className="crail-icon"
@@ -105,7 +125,7 @@ function icon(path: ReactNode): ReactNode {
   );
 }
 
-const RAIL: readonly RailGroup[] = [
+export const CLUSTER_RAIL: readonly RailGroup[] = [
   {
     id: "cluster",
     labelKey: "rail.group.cluster",
@@ -113,7 +133,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "overview",
         labelKey: "rail.item.overview",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M4 11.2 12 4l8 7.2" />
             <path d="M6 10.4V20h12v-9.6" />
@@ -124,7 +144,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "topics",
         labelKey: "rail.item.topics",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M4 6h16M4 12h16M4 18h10" />
           </>,
@@ -133,7 +153,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "groups",
         labelKey: "rail.item.groups",
-        icon: icon(
+        icon: railIcon(
           <>
             <circle cx="9" cy="8.5" r="3" />
             <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
@@ -144,7 +164,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "brokers",
         labelKey: "rail.item.brokers",
-        icon: icon(
+        icon: railIcon(
           <>
             <rect x="3" y="4" width="18" height="6" rx="2" />
             <rect x="3" y="14" width="18" height="6" rx="2" />
@@ -161,12 +181,12 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "monitoring",
         labelKey: "rail.item.monitoring",
-        icon: icon(<path d="M3 18l5-6 4 3 5-8 4 5" />),
+        icon: railIcon(<path d="M3 18l5-6 4 3 5-8 4 5" />),
       },
       {
         key: "alerts",
         labelKey: "rail.item.alerts",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
             <path d="M10.5 20a2 2 0 0 0 3 0" />
@@ -176,7 +196,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "streams",
         labelKey: "rail.item.streams",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M3 7.5c3-2 6 2 9 0s6-2 9 0" />
             <path d="M3 12.5c3-2 6 2 9 0s6-2 9 0" />
@@ -193,7 +213,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "acls",
         labelKey: "rail.item.acls",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M12 3l7 3v6c0 4.2-2.9 7.7-7 9-4.1-1.3-7-4.8-7-9V6z" />
             <path d="M9.5 12l1.8 1.8L15 10" />
@@ -206,7 +226,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "masking",
         labelKey: "rail.item.masking",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
             <circle cx="12" cy="12" r="2.6" />
@@ -223,7 +243,7 @@ const RAIL: readonly RailGroup[] = [
       {
         key: "connect",
         labelKey: "rail.item.connect",
-        icon: icon(
+        icon: railIcon(
           <>
             <path d="M9 15l-3 3a3.5 3.5 0 0 1-5-5l3-3" />
             <path d="M15 9l3-3a3.5 3.5 0 0 1 5 5l-3 3" />
@@ -236,9 +256,30 @@ const RAIL: readonly RailGroup[] = [
 ];
 
 /** Every key the rail renders — the guard that keeps coverage a contract. */
-const TABS: ReadonlyArray<{ key: TabKey }> = RAIL.flatMap((group) =>
+const TABS: ReadonlyArray<{ key: TabKey }> = CLUSTER_RAIL.flatMap((group) =>
   group.items.map((item) => ({ key: item.key })),
 );
+
+/** The label for a screen, for the shell's `aria-label` and the Perch. */
+export function tabLabelKey(tab: TabKey): MessageKey {
+  return (
+    CLUSTER_RAIL.flatMap((g) => g.items).find((i) => i.key === tab)?.labelKey ??
+    "rail.item.overview"
+  );
+}
+
+/**
+ * Which rail group a screen sits in — the third crumb in the stage head's
+ * trail, and the one that teaches. "local · DEV · Safety · ACLs" says where
+ * ACLs live in this app's vocabulary every time somebody opens them, which is
+ * the whole argument for naming the groups after what they are ABOUT.
+ */
+export function tabGroupKey(tab: TabKey): MessageKey {
+  return (
+    CLUSTER_RAIL.find((g) => g.items.some((i) => i.key === tab))?.labelKey ??
+    "rail.group.cluster"
+  );
+}
 
 interface Placement {
   tab: TabKey;
@@ -339,6 +380,18 @@ function readPlacement(profileId: string): Placement {
  * that hand-rolled the JSON would be the second place that has to change when
  * the shape does, and it is the one nobody would remember.
  */
+/**
+ * Which screen this cluster was last on — read by the SHELL, which owns the
+ * rail now and therefore owns the current tab.
+ *
+ * Exported rather than duplicated because the storage key and the record's
+ * shape are this file's, and a second reader that hand-rolled the JSON would
+ * be the one nobody remembers to change.
+ */
+export function initialTab(profileId: string): TabKey {
+  return readPlacement(profileId).tab;
+}
+
 export function stageTopic(profileId: string, topic: string): void {
   const current = readPlacement(profileId);
   lsSet(
@@ -350,6 +403,45 @@ export function stageTopic(profileId: string, topic: string): void {
 interface ClusterViewProps {
   profile: ConnectionProfile;
   overview: ClusterOverview;
+  /**
+   * Which screen is on. Controlled by the shell, because the rail is shell —
+   * see the header. Its first value comes from `initialTab`, so a reconnect
+   * still lands where the user left off.
+   */
+  tab: TabKey;
+  /**
+   * BUMPED ON EVERY RAIL CLICK, including a click on the item already on.
+   *
+   * `tab` alone cannot express "the user asked for Topics again" — pressing
+   * Topics while the message browser is open changes nothing about the tab,
+   * and the drill-down would survive the one press that most plainly means
+   * "take me back to the list". The counter is what makes that press a
+   * navigation. It also feeds the stage's scroll-to-top, for the same reason.
+   */
+  navNonce: number;
+  /**
+   * How many alert rules are firing right now, reported UP so the shell's rail
+   * can badge the Alerts item. The subscription stays here (see below): an
+   * alert that only arrives while the Alerts tab is open is not an alert.
+   */
+  onFiringChange: (count: number) => void;
+  /**
+   * Open another rail item. The shell owns the rail, so this is the same
+   * `goTab` the rail's own buttons press — which is exactly the point: the
+   * attention rows on Home, and the alert toast's "View …" button, have to
+   * land in the state a rail press produces, not in a private one.
+   */
+  onTab: (tab: TabKey) => void;
+  /**
+   * "Refresh" in Cluster home's stage actions (audit item 15, and the mockup).
+   *
+   * It is the shell's `topicsNonce` and nothing more — App remounts this view,
+   * which re-reads everything this view reads live. It cannot re-read the
+   * connect-time metadata snapshot (the broker list, the topic and partition
+   * counts), and Home's own panel foot says so rather than this button
+   * pretending otherwise.
+   */
+  onRefresh: () => void;
   onDisconnect: (profileId: string) => void;
   /**
    * §5.8 prod de-collision: any danger banner inside this view has to reach
@@ -375,6 +467,11 @@ interface ClusterViewProps {
 export default function ClusterView({
   profile,
   overview,
+  tab,
+  navNonce,
+  onFiringChange,
+  onTab,
+  onRefresh,
   onDisconnect,
   onDangerChange,
   onTopicActions,
@@ -382,11 +479,85 @@ export default function ClusterView({
 }: ClusterViewProps) {
   const { t } = useI18n();
   const [place, setPlace] = useState<Placement>(() => readPlacement(profile.id));
-  const address = profile.bootstrap_servers.join(", ");
+
+  /**
+   * A RAIL CLICK ALWAYS OPENS THE SECTION'S ROOT.
+   *
+   * The first render adopts whatever the stored placement said, sub-selections
+   * and all — that is the reconnect promise, and it is the only promise
+   * restoring a placement makes. Every rail press after that means "show me
+   * this section", not "show me the message browser I had open on one of its
+   * topics three screens ago", so the drill-down is cleared. Clearing here
+   * rather than in the shell keeps the shell ignorant of what a placement
+   * contains.
+   *
+   * IT KEYS ON THE PRESS, NOT ON THE TAB. Watching `tab` alone missed the one
+   * case users hit most: pressing "Topics" while already on Topics, which is
+   * exactly the press that means "back to the list" and which changed no
+   * state at all. `navNonce` makes the press itself the event.
+   *
+   * `connect` GOES WITH THE REST. It is the Connect screen's root selection —
+   * which worker cluster — and the section's root is the list of them.
+   *
+   * ONE EXCEPTION, AND IT IS EXPLICIT. Something can ask for a specific thing
+   * INSIDE the section on the way — the alert toast's "View group
+   * demo-checkout" is the only caller today. It parks the selection in
+   * `pendingGroup` and then presses the rail; this effect adopts it instead of
+   * clearing, once, and forgets it. Without that hand-off the navigator would
+   * `setPlace` and this effect would wipe it one tick later, which is the
+   * failure that is not obvious from either side alone.
+   */
+  const pendingGroup = useRef<string | null>(null);
+  const lastNav = useRef<string>(`${tab}:${navNonce}`);
+  useEffect(() => {
+    const token = `${tab}:${navNonce}`;
+    if (lastNav.current === token) return;
+    lastNav.current = token;
+    // THE HAND-OFF IS READ HERE, NOT INSIDE THE UPDATER, AND THAT IS THE WHOLE
+    // OF IT. React does not promise to call a `setState` updater at the moment
+    // you hand it over — it is free to defer it to the render it schedules, and
+    // it does exactly that whenever this component already has an update in
+    // flight. The toast's button is precisely that case: it runs the navigation
+    // and dismisses itself in one click, and the dismiss is a `setToasts` on
+    // THIS component. So an updater that read `pendingGroup.current` would read
+    // it one render later — after the line below had already cleared it — and
+    // the group would arrive as null on the one path this hand-off exists for.
+    // A ref that is consumed and cleared in the same breath has to be read in
+    // the effect body, where the order is ours.
+    const adopted = pendingGroup.current;
+    pendingGroup.current = null;
+    setPlace((prev) => ({
+      ...prev,
+      topic: null,
+      pane: "detail",
+      group: adopted,
+      broker: null,
+      connect: null,
+      connector: null,
+      streamsGroup: null,
+    }));
+  }, [tab, navNonce]);
+
+  /**
+   * THE STAGE GOES BACK TO THE TOP WHENEVER THE PLACEMENT MOVES.
+   *
+   * The shell already does this for the screen, the rail item and the cluster;
+   * this half covers everything BELOW the rail — opening a topic, changing its
+   * pane, selecting a group, a broker or a connector. It is the same mechanism
+   * (see stage.ts), reached from the component that owns these values rather
+   * than from ten screens each remembering to do it.
+   */
+  useStageTop(
+    `${tab}:${navNonce}:${place.topic ?? ""}:${place.pane}:${place.group ?? ""}:${
+      place.broker ?? ""
+    }:${place.connect ?? ""}:${place.connector ?? ""}:${place.streamsGroup ?? ""}`,
+  );
 
   useEffect(() => {
-    lsSet(placementKey(profile.id), JSON.stringify(place));
-  }, [profile.id, place]);
+    // The tab is the shell's now, but the RECORD is still this file's: one
+    // writer, one shape, one migration path.
+    lsSet(placementKey(profile.id), JSON.stringify({ ...place, tab }));
+  }, [profile.id, place, tab]);
 
   // ── Alerts ──────────────────────────────────────────────────────────────
   //
@@ -421,6 +592,12 @@ export default function ClusterView({
           kind: "danger",
           title: event.rule_name,
           detail: event.detail,
+          // The second button, beside Dismiss: it opens the thing the rule is
+          // watching. `alertToastAction` returns undefined while no navigator
+          // is registered, so a toast never carries a button that cannot go
+          // anywhere. ONLY on the firing branch — a resolve is news, not a
+          // thing to go and look at.
+          action: alertToastAction(profile.id, event, t),
         });
       } else {
         pushAlert({
@@ -432,13 +609,69 @@ export default function ClusterView({
         });
       }
     },
-    [pushAlert],
+    // `t` is memoized per locale (see i18n/index.ts), so listing it here
+    // re-binds the subscription when the language changes and never otherwise.
+    [pushAlert, profile.id, t],
   );
 
   useEffect(
     () => alertsSubscribe(profile.id, onAlert),
     [profile.id, onAlert],
   );
+
+  // Seed `firing` from the log at connect. The subscription only carries
+  // TRANSITIONS, so a rule that started firing before this session — hours
+  // ago, under a different window — would show a firing panel on the Alerts
+  // screen while the badge, Home's attention list and the overview Perch all
+  // said quiet. One fact, one source: the newest event per rule decides.
+  // Union rather than replace: a fire that arrives while the read is in
+  // flight must not be dropped; the next resolve event corrects the set.
+  useEffect(() => {
+    let stale = false;
+    alertsHistory(profile.id, 100)
+      .then((events) => {
+        if (stale) return;
+        const newest = new Map<string, boolean>();
+        for (const e of events) {
+          if (!newest.has(e.rule_id)) newest.set(e.rule_id, e.resolved_ms === null);
+        }
+        const seeded = [...newest].filter(([, f]) => f).map(([id]) => id);
+        if (seeded.length === 0) return;
+        setFiring((prev) => new Set([...prev, ...seeded]));
+      })
+      // A log that cannot be read is AlertsTab's fact to report, with its
+      // unread sentence; the badge stays quiet rather than guessing.
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [profile.id]);
+
+  /**
+   * HOW AN ALERT GETS YOU TO WHAT IT IS ABOUT.
+   *
+   * The registry is a module (alertNav.ts) because the toast can be read from
+   * any of the ten screens while the destination is owned half by the shell
+   * and half by the placement record here. This effect is the one place both
+   * halves are in scope: `onTab` is the shell's rail press, `pendingGroup` is
+   * this file's "…and select this on the way".
+   */
+  useEffect(
+    () =>
+      registerAlertNav(profile.id, (target) => {
+        if (target.screen === "groups") pendingGroup.current = target.group;
+        onTab(target.screen);
+      }),
+    [profile.id, onTab],
+  );
+
+  // The rail's Alerts badge belongs to the shell now, so the count is reported
+  // up rather than read down. Cleared on unmount: a badge that survives a
+  // disconnect is a badge counting a cluster nobody is watching.
+  useEffect(() => {
+    onFiringChange(firing.size);
+  }, [firing, onFiringChange]);
+  useEffect(() => () => onFiringChange(0), [onFiringChange]);
 
   // ── Masking ─────────────────────────────────────────────────────────────
   //
@@ -473,10 +706,6 @@ export default function ClusterView({
   // Same shape, same reason: a palette that still offers "Produce to
   // orders.v2" after the cluster was disconnected is offering a dead command.
   useEffect(() => () => onTopicActions?.(null), [onTopicActions]);
-
-  const goTab = useCallback((tab: TabKey) => {
-    setPlace((prev) => ({ ...prev, tab }));
-  }, []);
 
   const selectTopic = useCallback((topic: string | null) => {
     setPlace((prev) => ({
@@ -529,94 +758,103 @@ export default function ClusterView({
   // whole. The schemas pane is a normal page of panels, so it is NOT in this
   // list — a diff that has to fit the viewport is a diff nobody can read.
   const full =
-    place.tab === "topics" &&
+    tab === "topics" &&
     place.topic !== null &&
     (place.pane === "messages" ||
       place.pane === "search" ||
       place.pane === "sql");
 
-  const currentLabel = t(
-    RAIL.flatMap((g) => g.items).find((i) => i.key === place.tab)?.labelKey ??
-      "rail.item.overview",
-  );
+  const currentLabel = t(tabLabelKey(tab));
+
+  /**
+   * THE STAGE HEAD — where you are, what this is, what you can do.
+   *
+   * Drawn here, from the registry in StageHead.tsx, so no screen can ship
+   * headless: `CLUSTER_HEADS` is a `Record<TabKey, …>`, so a new rail item
+   * without a title and a sentence is a compile error. A screen that has grown
+   * its own head — with the chips and actions only it can bind — sets
+   * `ownHead` in that table and takes over; until then this is the default and
+   * it is a real one, not a placeholder.
+   *
+   * NOT ON THE THREE FULL-HEIGHT PANES. The message browser, search and SQL
+   * own the whole stage: their scrollport, their status line, their docked
+   * inspector. A head above them would take that height from the table and
+   * duplicate the `← orders` breadcrumb those panes already draw. They are the
+   * first screens that should own their heads outright — the trail
+   * "local · DEV · Topics · orders · Messages" is exactly what repairs the
+   * rail-says-Topics-while-you-read-messages confusion — and that is a change
+   * inside those components, not a default the shell can guess.
+   */
+  const head = CLUSTER_HEADS[tab];
+  const env = useEnvironment(profile.environment);
+  // The trail mirrors the RAIL — cluster, then the group, then the item as the
+  // rail spells it — so it reads as a route back to where you pressed rather
+  // than as a restatement of the title under it. That is also why the last
+  // crumb is the rail's word and not the head's: "Cluster · Home" over
+  // "Cluster home" says something; "Cluster · Cluster home" says it twice.
+  const trail = [
+    profile.name,
+    // Uppercased, never translated — the same string as the chip beside it and
+    // the window title (§6, §10).
+    env.name.toUpperCase(),
+    t(tabGroupKey(tab)),
+    currentLabel,
+  ];
 
   return (
     <div className={`cluster-view${full ? " cluster-view-full" : ""}`}>
-      <nav className="crail" aria-label={t("rail.label")}>
-        {/* Prod guardrail layer 3 lives here now: the name, the environment
-            chip and the bootstrap address are pinned beside every screen
-            rather than above one of them. Most prod accidents are
-            right-action-wrong-cluster. */}
-        <div className="crail-id">
-          <div className="crail-id-line">
-            <h1 className="crail-name">{profile.name}</h1>
-            <EnvChip env={profile.environment} />
-          </div>
-          <span className="crail-address" title={address}>
-            {address}
-          </span>
-          {profile.read_only && (
-            <span className="readonly-chip" title={t("app.readonlyTitle")}>
-              {t("app.readonlyChip")}
-            </span>
-          )}
-        </div>
-
-        {RAIL.map((group) => (
-          <div className="crail-group" key={group.id}>
-            <h2 className="crail-label">{t(group.labelKey)}</h2>
-            {group.items.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className="crail-item"
-                // Not aria-selected: this is navigation between screens, not
-                // a tab in a tablist — see the header comment.
-                aria-current={place.tab === item.key ? "page" : undefined}
-                onClick={() => goTab(item.key)}
-              >
-                {item.icon}
-                {t(item.labelKey)}
-                {/* The alert counter. A number in the badge, the word in its
-                    title AND in an sr-only span — never a bare coloured dot.
-                    It is on the rail rather than the status bar because the
-                    status bar belongs to the app shell, not to one cluster. */}
-                {item.key === "alerts" && firing.size > 0 && (
-                  <span
-                    className="crail-badge"
-                    title={t("rail.firingTitle", { count: firing.size })}
-                  >
-                    {firing.size}
-                    <span className="sr-only"> {t("rail.firing")}</span>
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        ))}
-
-        <div className="crail-foot">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => onDisconnect(profile.id)}
-          >
-            {t("rail.disconnect")}
-          </button>
-        </div>
-      </nav>
+      {!full && head.ownHead !== true && (
+        <StageHead
+          trail={trail}
+          title={t(head.titleKey)}
+          sub={t(head.subKey)}
+          actions={
+            // Disconnect had exactly one home — the trailing action on this
+            // cluster's row in the switcher menu — which made it discoverable
+            // only by opening a menu about a different cluster. The mockup
+            // puts it in Cluster home's actions, beside Refresh, and so does
+            // this. Every other screen's actions arrive with the screen.
+            //
+            // REFRESH IS FIRST AND IT IS NOT PRIMARY. It re-reads what this
+            // screen reads live; the connect-time snapshot behind the tiles
+            // and the broker list is not among them, and Home's own panel
+            // feet say which is which. Its title says it too, so the promise
+            // is on the control rather than only under the table.
+            tab === "overview" ? (
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={onRefresh}
+                  title={t("stage.overview.refresh.title")}
+                >
+                  {t("stage.overview.refresh")}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => onDisconnect(profile.id)}
+                >
+                  {t("switcher.disconnect")}
+                </button>
+              </>
+            ) : undefined
+          }
+        />
+      )}
 
       <div className="tabpanel" role="region" aria-label={currentLabel}>
-        {place.tab === "overview" && (
+        {tab === "overview" && (
           <OverviewTab
             profile={profile}
             overview={overview}
             firing={firing.size}
             onDanger={reportDanger}
+            onOpenScreen={onTab}
           />
         )}
 
-        {place.tab === "topics" && (
+        {tab === "topics" && (
           <TopicsTab
             profile={profile}
             brokers={overview.brokers}
@@ -631,7 +869,7 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "groups" && (
+        {tab === "groups" && (
           <GroupsTab
             profile={profile}
             group={place.group}
@@ -640,11 +878,11 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "acls" && (
+        {tab === "acls" && (
           <AclsTab profile={profile} onDanger={reportDanger} />
         )}
 
-        {place.tab === "brokers" && (
+        {tab === "brokers" && (
           <BrokersTab
             profile={profile}
             brokers={overview.brokers}
@@ -654,7 +892,7 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "connect" && (
+        {tab === "connect" && (
           <ConnectTab
             profile={profile}
             cluster={place.connect}
@@ -666,7 +904,7 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "monitoring" && (
+        {tab === "monitoring" && (
           <MonitoringTab
             profile={profile}
             onDanger={reportDanger}
@@ -674,7 +912,7 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "alerts" && (
+        {tab === "alerts" && (
           <AlertsTab
             profile={profile}
             onDanger={reportDanger}
@@ -682,11 +920,11 @@ export default function ClusterView({
           />
         )}
 
-        {place.tab === "masking" && (
+        {tab === "masking" && (
           <MaskingTab profile={profile} onDanger={reportDanger} />
         )}
 
-        {place.tab === "streams" && (
+        {tab === "streams" && (
           <StreamsTab
             profile={profile}
             group={place.streamsGroup}
@@ -762,20 +1000,34 @@ function OverviewPerch({
   );
 }
 
+/**
+ * CLUSTER HOME.
+ *
+ * This function is now the Perch and the read-only note; everything below the
+ * verdict is `HomeSections`. That is the audit's item 15: Home used to be a
+ * floating row of four numbers, a broker table and a quorum panel — it
+ * REPORTED and never TRIAGED — where the mockup has tiles that say what their
+ * number is, a list of the specific things that are wrong with a deep link
+ * beside each one, and the two tables side by side. The old markup is not
+ * kept anywhere: two Homes is how the drift the audit found happened.
+ */
 function OverviewTab({
   profile,
   overview,
   firing,
   onDanger,
+  onOpenScreen,
 }: {
   profile: ConnectionProfile;
   overview: ClusterOverview;
   /** How many alert rules are firing right now — live, from the subscription
-      in the parent. The Perch says so. */
+      in the parent. The Perch says so, and the triage list re-reads on it. */
   firing: number;
   /** The quorum panel can raise a banner, and any danger has to reach the
       app root or a prod cluster paints a coral rule behind it (§5.8). */
   onDanger: DangerReport;
+  /** The rail press behind each attention row's button. */
+  onOpenScreen: (tab: TabKey) => void;
 }) {
   const { t } = useI18n();
   return (
@@ -793,90 +1045,13 @@ function OverviewTab({
         </span>
       )}
 
-      <section className="panel">
-        {/* Stat blocks: no border, no background, no radius. Quantities Kavka
-            computed are sans + tabular; the cluster id is a literal from
-            Kafka, so it is mono. */}
-        <div className="stat-grid">
-          <div className="stat">
-            <span className="stat-label">Cluster ID</span>
-            <span className="stat-value stat-value-mono">
-              {overview.cluster_id ?? <span className="absent">∅</span>}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Brokers</span>
-            <span className="stat-value">{overview.brokers.length}</span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Topics</span>
-            <span className="stat-value">{overview.topic_count}</span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Partitions</span>
-            <span className="stat-value">{overview.partition_count}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2 className="panel-title">
-            <Term name="broker">Brokers</Term>
-            <span className="panel-count">{overview.brokers.length}</span>
-          </h2>
-        </div>
-
-        {/* The ledger gutter carries the broker id — the row's address in
-            Kafka's own vocabulary — then the rule, then the payload.
-
-            NO role="grid" and NO aria-rowcount/aria-rowindex. This is a
-            static, fully-rendered table, so the implicit <table> semantics
-            are already complete and correct. The message browser's table IS
-            virtualized and carries all three — see MessagesView. */}
-        <div className="table-wrap">
-          <table className="data-table">
-            <caption className="sr-only">Brokers in this cluster</caption>
-            <thead>
-              <tr>
-                <th scope="col" className="ledger-gutter">
-                  ID
-                </th>
-                <th scope="col">Host</th>
-                <th scope="col" className="col-num">
-                  Port
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {overview.brokers.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="cell-empty">
-                    This cluster reported no brokers. That normally means the
-                    connection is up but metadata came back empty — try
-                    reconnecting.
-                  </td>
-                </tr>
-              ) : (
-                overview.brokers.map((b) => (
-                  <tr key={b.id}>
-                    <td className="ledger-gutter">{b.id}</td>
-                    <td className="cell-mono">{b.host}</td>
-                    <td className="col-num cell-num">{b.port}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* The quorum sits UNDER the broker list on purpose: a broker is the
-          thing a user came looking for, and the quorum is the thing they need
-          once the brokers all look fine and nothing works. It renders its own
-          explanation of what a quorum is, and says so plainly on a cluster
-          that has none. */}
-      <QuorumPanel profile={profile} onDanger={onDanger} />
+      <HomeSections
+        profile={profile}
+        overview={overview}
+        firing={firing}
+        onDanger={onDanger}
+        onOpenScreen={onOpenScreen}
+      />
     </>
   );
 }

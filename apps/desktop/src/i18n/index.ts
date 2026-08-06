@@ -12,7 +12,7 @@
  * THE SHAPE
  *
  *   const { t, tx, locale, setLocale } = useI18n();
- *   t("sidebar.title")                        → "Clusters"
+ *   t("rail.item.topics")                     → "Topics"
  *   t("palette.goTo", { name: p.name })       → "Go to orders — local"
  *   tx("app.firstRun.example", {              → a ReactNode with the <code>
  *     example: <code>kafka-1.internal:9092</code>,   elements spliced into

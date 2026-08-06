@@ -32,7 +32,18 @@ interface AboutDialogProps {
 
 export default function AboutDialog({ version, onClose }: AboutDialogProps) {
   const { t, tx, locale, setLocale } = useI18n();
-  const closeRef = useRef<HTMLButtonElement>(null);
+  /**
+   * IT OPENS AT THE TOP.
+   *
+   * `initialFocus` used to be the Close button, which is the LAST control in a
+   * dialog that scrolls — so opening About scrolled it straight to the bottom
+   * and the user met the licence footer instead of the title. Focus goes to
+   * the heading instead: it is the standard "move focus to the top of the
+   * dialog" pattern, a screen reader announces the dialog's own name, and Tab
+   * from there reaches the first real control. `tabIndex={-1}` makes it
+   * script-focusable without adding a Tab stop.
+   */
+  const titleRef = useRef<HTMLHeadingElement>(null);
   // A link that does nothing is a dead end, and `openUrl` can genuinely fail
   // (no browser registered, or the capability allowlist doesn't cover the
   // URL). When it does, the address is put on screen to copy instead.
@@ -96,10 +107,10 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
       // 440px dialog would make them wrong.
       surfaceClass="modal modal-wide"
       labelledBy="about-title"
-      initialFocus={closeRef}
+      initialFocus={titleRef}
       onClose={onClose}
     >
-      <h2 className="modal-title" id="about-title">
+      <h2 className="modal-title" id="about-title" ref={titleRef} tabIndex={-1}>
         {t("about.title")}
       </h2>
 
@@ -190,7 +201,7 @@ export default function AboutDialog({ version, onClose }: AboutDialogProps) {
       )}
 
       <div className="modal-actions">
-        <button ref={closeRef} type="button" className="btn" onClick={onClose}>
+        <button type="button" className="btn" onClick={onClose}>
           {t("common.close")}
         </button>
       </div>

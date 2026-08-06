@@ -147,6 +147,9 @@ export default function SchemasPanel({
   const toaster = useToasts();
   const push = toaster.push;
   const seq = useRef(0);
+  // Only the panel's foot is translated here — see the Perch below, and
+  // docs/I18N.md §1 for where the boundary runs through this screen.
+  const { tx } = useI18n();
 
   useDangerSignal(error !== null, onDanger);
 
@@ -569,6 +572,20 @@ export default function SchemasPanel({
             </table>
           </div>
         )}
+
+        {/* THE PANEL'S FOOT — the mockup's honesty idiom, and here it guards
+            against the most expensive wrong conclusion this screen can lead
+            someone to: an empty or short list looks like proof that nothing is
+            using a schema, and it is not. The subject name is a CONVENTION.
+            Kavka asks for the one the box above holds; a producer configured
+            with a record-name strategy registers somewhere else entirely, and
+            no API asks a topic which subjects its writers chose. */}
+        <p className="panel-foot">
+          {tx("schemas.versions.foot", {
+            subject: <code>{subject}</code>,
+            topic: <code>{topic}</code>,
+          })}
+        </p>
       </section>
 
       {/* ── Compatibility mode ──────────────────────────────────────────── */}
@@ -794,7 +811,7 @@ export default function SchemasPanel({
           <div className="panel-tools">
             <button
               type="button"
-              className="btn"
+              className="btn btn-swap"
               disabled={checking || draft.trim().length === 0}
               aria-busy={checking || undefined}
               title={
@@ -806,17 +823,24 @@ export default function SchemasPanel({
               }
               onClick={() => void runCheck()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {checking ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Check compatibility
               </span>
-              Check compatibility
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Check compatibility
+              </span>
             </button>
             <button
               type="button"
               className={`btn ${
                 isProtected || !compatible ? "btn-danger" : "btn-primary"
-              }`}
+              } btn-swap`}
               disabled={readOnly || draft.trim().length === 0 || registering}
+              // This button was the one in the sweep with no `aria-busy` at
+              // all: it spun without ever saying so to a screen reader, and
+              // `.btn-swap` keys its face swap on exactly this attribute.
+              aria-busy={registering || undefined}
               title={
                 readOnly
                   ? READ_ONLY_WHY
@@ -833,10 +857,11 @@ export default function SchemasPanel({
                 else setConfirming(true);
               }}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {registering ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">Register</span>
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Register
               </span>
-              Register
             </button>
           </div>
         </div>

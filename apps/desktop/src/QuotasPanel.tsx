@@ -1095,15 +1095,18 @@ function QuotaEditor({
           </button>
           <button
             type="submit"
-            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger-confirm" : "btn-primary"} btn-swap`}
             disabled={busy || !matches}
             aria-busy={busy || undefined}
             title={blocked}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              {editing === null ? "Add quota" : "Change quota"}
             </span>
-            {editing === null ? "Add quota" : "Change quota"}
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              {editing === null ? "Add quota" : "Change quota"}
+            </span>
           </button>
         </div>
       </form>
