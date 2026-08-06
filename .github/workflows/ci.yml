@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Declared rather than inherited. Without this block the token's scope is
+# whatever the repo-wide default happens to be, which is a setting no commit
+# pins; naming it here sets every unlisted scope to `none`. Neither job writes
+# anything back — no `gh`, no artifact upload, no secrets.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -19,7 +26,20 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
     steps:
-      - uses: actions/checkout@v4
+      # Every third-party `uses:` in this repo is pinned to a full commit SHA
+      # with the human-readable ref in the trailing comment. A tag is mutable —
+      # the upstream can re-point it at any commit, which is exactly how the
+      # tj-actions/changed-files compromise reached thousands of runners — and
+      # `dtolnay/rust-toolchain@stable` is not even a tag, it is a branch that
+      # moves. Dependabot's github-actions ecosystem (.github/dependabot.yml)
+      # bumps these SHAs and rewrites the comment, so the pins do not freeze.
+      #
+      # `persist-credentials: false` keeps GITHUB_TOKEN out of .git/config,
+      # where `npm ci`'s lifecycle scripts and every crate's build.rs could
+      # otherwise read it. Nothing here does an authenticated git operation.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # ubuntu-latest ships ~25 GB of toolchains this job never uses; the
       # workspace's target dir needs the room more than dotnet/android do.
@@ -28,11 +48,17 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The SHA below is a commit on the action's `stable` BRANCH, whose
+      # action.yml defaults `toolchain` to stable. `toolchain: stable` is
+      # spelled out anyway so the pin says what it installs and stays correct
+      # if it is ever re-pointed at a commit on master, where the input is
+      # required and has no default.
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       # keyring's secret-service backend links against libdbus on Linux;
       # librdkafka's cmake build enables its curl-based OAuth/HTTP helpers on
@@ -103,9 +129,14 @@ jobs:
         env:
           KAVKA_IT: "1"
 
-      - uses: actions/setup-node@v4
+      # v7, not v4: v4 runs on the node20 Actions runtime GitHub is retiring.
+      # v5 added automatic package-manager detection (keyed off a
+      # `packageManager` field this repo does not have) and v6 restricted
+      # automatic caching to npm; both sites here pass `cache: npm` explicitly,
+      # so neither change reaches this workflow.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
@@ -131,15 +162,19 @@ jobs:
     name: Check (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: 22
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 

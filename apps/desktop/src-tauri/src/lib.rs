@@ -2885,6 +2885,160 @@ fn diagnostics_write(kind: &str, message: &str) {
     append_log(dir, kind, message);
 }
 
+/// Keys whose VALUE is a credential. Matched case-insensitively, and tried
+/// longest-first so `ssl.key.password` wins over the `password` that is inside
+/// it.
+const REDACT_KEYS: &[&str] = &[
+    "ssl.truststore.password",
+    "ssl.keystore.password",
+    "ssl.key.password",
+    "sasl.password",
+    "authorization",
+    "password",
+    "passwd",
+    "secret",
+];
+
+/// What `redact` writes in place of a value.
+const REDACTED: &str = "<redacted>";
+
+/// Removes credential-shaped text from a diagnostics line.
+///
+/// WHY THIS EXISTS. The diagnostics panel tells the user, on the page where
+/// they decide whether to turn logging on, that the log holds "no message
+/// payloads, no credentials". That was true only because every call site
+/// happened to pass something clean — nothing in the writer enforced it, and
+/// nothing tested it. A guarantee the product makes in writing belongs in the
+/// code that has to keep it, not in the habits of whoever adds the next
+/// `diagnostics_record` call.
+///
+/// This is a backstop, not a proof. It catches the shapes credentials actually
+/// take here — `Authorization:` headers, the librdkafka `*.password=` config
+/// keys, and blobs that look like base64 — and it is deliberately blunt: over-
+/// redacting a benign value costs a debugging detail, while under-redacting
+/// costs a user their production password.
+///
+/// Two constraints shape the implementation. It runs inside the panic hook, so
+/// it must not panic: no indexing, no unwrap, no regex engine (which would also
+/// be a new dependency in the shipped binary). And it runs BEFORE the entry is
+/// truncated to `LOG_MAX_ENTRY`, so a credential cannot survive by being cut in
+/// half at the boundary.
+fn redact(message: &str) -> std::borrow::Cow<'_, str> {
+    // Patterns are all ASCII; working over chars keeps every slice on a
+    // boundary without any unsafe or panicking index arithmetic.
+    let chars: Vec<char> = message.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut changed = false;
+
+    // The value ends here. `authorization` deliberately keeps going past a
+    // space, because "Basic dXNlcjpwYXNz" and "Bearer eyJ…" put the secret
+    // AFTER one.
+    let ends_value = |c: char, allow_space: bool| {
+        matches!(c, '"' | '\'' | ',' | ';' | '}' | ']' | '&') || (!allow_space && c.is_whitespace())
+    };
+
+    while i < chars.len() {
+        let matched = REDACT_KEYS.iter().find(|key| {
+            key.chars()
+                .enumerate()
+                .all(|(n, k)| chars.get(i + n).is_some_and(|c| c.eq_ignore_ascii_case(&k)))
+        });
+
+        let Some(key) = matched else {
+            if let Some(c) = chars.get(i) {
+                out.push(*c);
+            }
+            i += 1;
+            continue;
+        };
+
+        let key_len = key.chars().count();
+        // A key only introduces a value if a separator follows it. Without
+        // this, the sentence "no password stored on this machine" would come
+        // out redacted and the log would lose an ordinary error.
+        let mut j = i + key_len;
+        while chars.get(j).is_some_and(|c| *c == ' ') {
+            j += 1;
+        }
+        if !chars.get(j).is_some_and(|c| *c == '=' || *c == ':') {
+            if let Some(c) = chars.get(i) {
+                out.push(*c);
+            }
+            i += 1;
+            continue;
+        }
+
+        // Copy the key and its separator verbatim — knowing WHICH credential
+        // appeared is useful, and is not itself a secret.
+        out.extend(chars.get(i..=j).unwrap_or_default());
+        let mut k = j + 1;
+        while chars
+            .get(k)
+            .is_some_and(|c| *c == ' ' || *c == '"' || *c == '\'')
+        {
+            out.push(' ');
+            k += 1;
+        }
+        let allow_space = key.eq_ignore_ascii_case("authorization");
+        while chars.get(k).is_some_and(|c| !ends_value(*c, allow_space)) {
+            k += 1;
+        }
+        out.push_str(REDACTED);
+        changed = true;
+        i = k;
+    }
+
+    let out = redact_base64_runs(&out, &mut changed);
+    if changed {
+        std::borrow::Cow::Owned(out)
+    } else {
+        std::borrow::Cow::Borrowed(message)
+    }
+}
+
+/// The backstop's backstop: a long, high-entropy run that looks like base64.
+///
+/// Scoped tightly on purpose. It fires only on a run of 40+ characters drawn
+/// from the base64 alphabet that mixes upper case, lower case and digits, which
+/// is what an encoded credential looks like and what ordinary log content does
+/// not: file paths break on `\` and `/`… `:`, URLs break on `:` and `.`, hex
+/// digests are single-case, and Rust symbol names in a backtrace break on `_`
+/// and `:` long before 40 characters. It is a heuristic and it is honest about
+/// that — it will not catch every encoding of every secret, and it is here to
+/// narrow the gap left by the key list above, not to close it.
+fn redact_base64_runs(text: &str, changed: &mut bool) -> String {
+    const MIN_RUN: usize = 40;
+    let is_b64 = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=');
+
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String, changed: &mut bool| {
+        let looks_encoded = run.chars().count() >= MIN_RUN
+            && run.chars().any(|c| c.is_ascii_uppercase())
+            && run.chars().any(|c| c.is_ascii_lowercase())
+            && run.chars().any(|c| c.is_ascii_digit());
+        if looks_encoded {
+            out.push_str(REDACTED);
+            *changed = true;
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+
+    for c in text.chars() {
+        if is_b64(c) {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out, changed);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out, changed);
+    out
+}
+
 fn append_log(dir: &Path, kind: &str, message: &str) {
     if std::fs::create_dir_all(dir).is_err() {
         return;
@@ -2900,6 +3054,10 @@ fn append_log(dir: &Path, kind: &str, message: &str) {
     else {
         return;
     };
+    // Redaction runs BEFORE the truncation below, not after: a credential cut
+    // in half at the 2000-character boundary would no longer match a pattern,
+    // and half a password is still most of a password.
+    let message = redact(message);
     // One entry is one line, whatever it contains: an embedded newline in a
     // stack trace would otherwise turn one entry into fifteen and make the file
     // impossible to skim.
@@ -5676,12 +5834,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // The Rust half of the notification plugin, for one job: an alert that
         // fires while Kavka is behind another window still has to reach the
-        // person. Granted `notification:default` in capabilities/default.json,
-        // and every toast is sent from Rust — the webview never asks for one.
+        // person. Registering the plugin is all this needs: `notify()` calls
+        // the Rust `NotificationExt` API, which does not traverse the webview
+        // ACL. It is deliberately NOT granted in capabilities/default.json —
+        // the webview cannot raise a notification, and nothing in the frontend
+        // asks to.
         .plugin(tauri_plugin_notification::init())
         // The updater. Driven entirely from Rust (src/update.rs) and not
-        // granted to the webview — see the note in capabilities/default.json,
-        // which is the same note the notification plugin already carries.
+        // granted to the webview either — see the note in
+        // capabilities/default.json.
         //
         // It is what verifies the minisign signature on a downloaded installer
         // against `plugins.updater.pubkey` in tauri.conf.json. That check is
@@ -7350,6 +7511,67 @@ mod tests {
         );
         assert!(text.contains(" error "), "{text}");
         assert!(text.contains("at f (a.js:1:1)"), "{text}");
+    }
+
+    /// The diagnostics panel promises the log holds "no credentials". This is
+    /// that promise, asserted against the writer rather than against the
+    /// habits of the current call sites.
+    #[test]
+    fn a_credential_cannot_reach_the_log_file() {
+        let scratch = Scratch::new();
+        // Every shape a credential takes on the paths that feed this writer:
+        // an RFC 7617 header, librdkafka's config keys, a bare assignment, and
+        // an encoded blob with no key in front of it at all.
+        let secret = "hunter2-DO-NOT-LOG";
+        for message in [
+            &format!("GET /metrics failed: Authorization: Basic {secret}"),
+            &format!("rdkafka config sasl.password={secret} applied"),
+            &format!("ssl.key.password={secret}"),
+            &format!("connect failed (password=\"{secret}\", url=http://h:8083)"),
+            &format!("client_secret: {secret}"),
+            &"aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlY3JldCB2YWx1ZTEyMw".to_string(),
+        ] {
+            append_log(&scratch.0, "error", message);
+        }
+        let text = std::fs::read_to_string(scratch.0.join(LOG_NAME)).expect("the log exists");
+        assert!(!text.contains(secret), "a secret reached the log: {text}");
+        assert!(
+            !text.contains("aGVsbG8gd29ybGQ"),
+            "an encoded blob reached the log: {text}"
+        );
+        // Six entries, each still saying what happened.
+        assert_eq!(text.lines().count(), 6, "{text}");
+        assert!(text.contains("GET /metrics failed"), "{text}");
+        assert!(text.contains("url=http://h:8083"), "{text}");
+    }
+
+    /// The other half: redaction that eats ordinary log lines is a regression
+    /// dressed as a fix. A panic backtrace is the content this file exists for.
+    #[test]
+    fn redaction_leaves_ordinary_diagnostics_alone() {
+        for benign in [
+            "no stored secret for this connection on this machine — edit the profile",
+            "TypeError: x is not a function  at f (index-a1b2c3.js:1:1)",
+            "core::fmt::Formatter::debug_struct  kavka_core::consume::poll",
+            "connect timed out after 10000 ms to broker-1.internal:9093",
+        ] {
+            assert_eq!(redact(benign), benign, "redaction damaged an ordinary line");
+        }
+    }
+
+    /// Truncation happens after redaction, so a credential sitting on the
+    /// 2000-character boundary cannot survive by being cut out of its pattern.
+    #[test]
+    fn a_credential_at_the_truncation_boundary_is_still_redacted() {
+        let scratch = Scratch::new();
+        let padding = "x".repeat(LOG_MAX_ENTRY - 20);
+        append_log(
+            &scratch.0,
+            "error",
+            &format!("{padding} sasl.password=hunter2-DO-NOT-LOG"),
+        );
+        let text = std::fs::read_to_string(scratch.0.join(LOG_NAME)).expect("the log exists");
+        assert!(!text.contains("hunter2"), "{text}");
     }
 
     #[test]

@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 
 # A crate of its own rather than a second `[[bin]]` in apps/desktop/src-tauri.
 # The reasons are in src/lib.rs's "WHY A CRATE" note; the short version is that

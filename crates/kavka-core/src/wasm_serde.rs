@@ -78,6 +78,11 @@
 //!   path and a UNC path are both refused, at save time and again here: the
 //!   sandbox bounds what a plugin can DO, and this bounds what gets to be the
 //!   plugin. See [`validate_plugin_path`].
+//! - **[`MAX_PLUGIN_BYTES`] of module.** The bounds above all govern a module
+//!   that is already loaded; this one governs the loading. Reading and
+//!   compiling happen before any of them apply — on the thread opening the
+//!   connection, since this build has no parallel compilation — so the file
+//!   size is checked from the directory entry before the file is read.
 //!
 //! # Errors are recorded once per session
 //!
@@ -112,6 +117,23 @@ pub const ABI_VERSION: i32 = 1;
 /// concurrent sandboxes (one per search worker) cannot become the reason the
 /// app is swapping.
 pub const MAX_MEMORY_BYTES: usize = 10 * 1024 * 1024;
+
+/// Ceiling on the plugin FILE, checked before it is read and again before it is
+/// compiled.
+///
+/// The rest of the sandbox bounds what a module DOES. Nothing bounded what
+/// LOADING one costs: `load` read the whole file into memory with no cap, and
+/// `Module::new` then ran cranelift over it on the calling thread — which, with
+/// `parallel-compilation` deliberately dropped from this build, is the thread
+/// opening the connection. A profile can arrive by import and its plugin path
+/// can point at any absolute path on the machine, so "a huge file" is not
+/// purely hypothetical: a multi-gigabyte read is an out-of-memory kill of the
+/// app before a single sandbox limit has had anything to enforce.
+///
+/// Thirty-two megabytes is far past any real decoder — the example in
+/// docs/examples/wasm-serde compiles to kilobytes — and the refusal names the
+/// limit so an honest large plugin gets an answer rather than a hang.
+pub const MAX_PLUGIN_BYTES: usize = 32 * 1024 * 1024;
 
 /// Fuel granted before each record.
 ///
@@ -375,6 +397,24 @@ impl WasmSerde {
     /// matters is the one standing in front of the loader.
     pub fn load(name: &str, path: &Path) -> Result<Self, WasmSerdeError> {
         validate_plugin_path(&path.display().to_string())?;
+        // Size first, from the directory entry — reading the file to find out
+        // how big it is defeats the purpose of asking.
+        let size = std::fs::metadata(path)
+            .map_err(|e| WasmSerdeError::Read {
+                path: path.display().to_string(),
+                cause: e.to_string(),
+            })?
+            .len();
+        if size > MAX_PLUGIN_BYTES as u64 {
+            return Err(WasmSerdeError::Read {
+                path: path.display().to_string(),
+                cause: format!(
+                    "the file is {} MB; a serde plugin may be at most {} MB",
+                    size / (1024 * 1024),
+                    MAX_PLUGIN_BYTES / (1024 * 1024)
+                ),
+            });
+        }
         let bytes = std::fs::read(path).map_err(|e| WasmSerdeError::Read {
             path: path.display().to_string(),
             cause: e.to_string(),
@@ -390,6 +430,18 @@ impl WasmSerde {
     /// the exports, their signatures and the ABI version. A plugin that loads
     /// is one that will not fail for any of those reasons on record 400,000.
     pub fn from_bytes(name: &str, bytes: &[u8]) -> Result<Self, WasmSerdeError> {
+        // The same ceiling as `load`, applied again here so the `.wat` test
+        // path and any future caller are covered too. Compilation is the
+        // expensive part and it happens below.
+        if bytes.len() > MAX_PLUGIN_BYTES {
+            return Err(WasmSerdeError::Compile {
+                cause: format!(
+                    "the module is {} MB; a serde plugin may be at most {} MB",
+                    bytes.len() / (1024 * 1024),
+                    MAX_PLUGIN_BYTES / (1024 * 1024)
+                ),
+            });
+        }
         let mut config = Config::new();
         config.consume_fuel(true);
         // A decoder is one memory and pure compute. Threads, the GC proposal
@@ -1017,6 +1069,63 @@ mod tests {
         let error = WasmSerde::load("acme", &missing).expect_err("refused");
         assert!(matches!(error, WasmSerdeError::Read { .. }), "{error:?}");
         assert!(error.to_string().contains("plugin.wasm"), "{error}");
+    }
+
+    /// [`MAX_PLUGIN_BYTES`] in front of the READ, which is the gate that has to
+    /// hold: the rest of the sandbox bounds what a module does, and none of it
+    /// applies until the file is in memory and compiled.
+    ///
+    /// The assertion on the error VARIANT is what pins the ordering. A file of
+    /// zeroes is not a module either, so a build that had only the `from_bytes`
+    /// ceiling would refuse this too — as a `Compile` error, after reading
+    /// every byte of it.
+    #[test]
+    fn a_plugin_file_past_the_ceiling_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("kavka-wasm-size-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge.wasm");
+        let sized = |bytes: u64| {
+            std::fs::File::create(&path)
+                .expect("a scratch file")
+                .set_len(bytes)
+                .expect("a length");
+        };
+
+        // `set_len` rather than a 32 MB write: the check reads the DIRECTORY
+        // ENTRY, so the bytes never have to exist — which is the point.
+        sized(MAX_PLUGIN_BYTES as u64 + 1);
+        let error = WasmSerde::load("acme", &path).expect_err("refused");
+        assert!(matches!(error, WasmSerdeError::Read { .. }), "{error:?}");
+        assert!(error.to_string().contains("at most 32 MB"), "{error}");
+
+        // At the limit the size gate lets it through and it fails for what it
+        // actually is — so the boundary is inclusive rather than the file
+        // simply being refused twice over.
+        sized(MAX_PLUGIN_BYTES as u64);
+        let error = WasmSerde::load("acme", &path).expect_err("zeroes are not a module");
+        assert!(matches!(error, WasmSerdeError::Compile { .. }), "{error:?}");
+        assert!(!error.to_string().contains("at most"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same ceiling in front of COMPILATION — the expensive half, on the
+    /// thread that is opening a connection — because the `.wat` path and every
+    /// future caller reach `from_bytes` without going through `load`.
+    #[test]
+    fn a_module_past_the_ceiling_is_refused_before_it_is_compiled() {
+        let mut bytes = vec![0u8; MAX_PLUGIN_BYTES + 1];
+        let error = WasmSerde::from_bytes("acme", &bytes).expect_err("refused");
+        assert!(matches!(error, WasmSerdeError::Compile { .. }), "{error:?}");
+        assert!(error.to_string().contains("at most 32 MB"), "{error}");
+
+        // The limit itself is not past the limit: it reaches the compiler.
+        bytes.truncate(MAX_PLUGIN_BYTES);
+        let error = WasmSerde::from_bytes("acme", &bytes).expect_err("zeroes are not a module");
+        assert!(
+            error.to_string().contains("isn't a WebAssembly module"),
+            "{error}"
+        );
     }
 
     // -----------------------------------------------------------------------

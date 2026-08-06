@@ -262,6 +262,11 @@ const ja: Catalog = {
   "editor.tls.hint":
     "マネージド Kafka ではほぼ常にオンが必要です。ブローカーは応答するのにハンドシェイクが失敗する場合、まず試すべきはここです。",
 
+  "editor.tls.hintPlainCleartext":
+    "これをオフにして SASL/PLAIN を選ぶと、パスワードは暗号化されずにブローカーへ送られます — 経路上のあらゆるものが読み取れます。マネージド Kafka ではほぼ常にオンが必要です。",
+  "editor.tls.hintScramCleartext":
+    "これをオフにすると、SCRAM はパスワードそのものは送りませんが、送信内容は記録されオフラインで解析され得ます — 他の通信も暗号化されません。マネージド Kafka ではほぼ常にオンが必要です。",
+
   "editor.mtls.hint":
     "Kavka は PEM ファイルをそのまま読み込みます — 事前に JKS や PKCS#12 のキーストアへ変換する必要はありません。",
   "editor.caPath.label": "CA 証明書",

@@ -31,7 +31,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned like every other action in this repo; see the comment in
+      # ci.yml. This job's token is contents:read and it holds no secrets, so
+      # the stakes are lower than release.yml's — the pins are here for
+      # consistency, so "is everything pinned?" has one answer.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Assemble the site
         run: |
@@ -40,9 +46,9 @@ jobs:
           rm -f _site/README.md
           cp docs/screenshots/*.png docs/screenshots/*.gif _site/screenshots/
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: _site
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

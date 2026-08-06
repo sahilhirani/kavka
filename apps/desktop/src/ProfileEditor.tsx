@@ -351,11 +351,31 @@ function orNull(value: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/** A token endpoint has to be a URL we can actually fetch. */
+/** A URL we can actually fetch. Used for the registry, Connect and metrics
+ * endpoints, where plain HTTP is a real deployment (a JMX exporter is
+ * http-only) rather than a mistake. */
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Stricter, and only for the OIDC token endpoint: Kavka posts this profile's
+ * client secret to that URL on every connect, so `http` would put a long-lived,
+ * replayable credential on the wire in the clear. `kavka-core` refuses it too
+ * (`auth/oidc.rs`) — a profile can arrive by import and never pass through this
+ * editor — but the refusal is more useful while someone is typing than on first
+ * connect. Deliberately separate from `isHttpUrl` rather than a tightening of
+ * it: the other three fields share that helper and plain HTTP is legitimate for
+ * them.
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
   } catch {
     return false;
   }
@@ -1061,7 +1081,7 @@ export default function ProfileEditor({
           message:
             t("editor.err.tokenEndpoint"),
         };
-      if (!isHttpUrl(form.tokenEndpoint.trim()))
+      if (!isHttpsUrl(form.tokenEndpoint.trim()))
         return {
           field: "tokenEndpoint",
           message:
@@ -2018,8 +2038,20 @@ export default function ProfileEditor({
                         <label className="check-label" htmlFor="pe-tls">
                           {t("editor.tls.label")}
                         </label>
+                        {/* Mechanism-aware, because with this box unticked the
+                            two SASL mechanisms differ in what actually goes on
+                            the wire: PLAIN sends the password itself, SCRAM
+                            sends a proof of it that an observer can still take
+                            away and attack offline. Selling TLS purely as a
+                            connectivity fix — which is all this hint used to do
+                            — left the app silent about the one consequence a
+                            user would want to know about. */}
                         <span className="field-hint" id="pe-tls-hint">
-                          {t("editor.tls.hint")}
+                          {form.tls
+                            ? t("editor.tls.hint")
+                            : form.authKind === "sasl_plain"
+                              ? t("editor.tls.hintPlainCleartext")
+                              : t("editor.tls.hintScramCleartext")}
                         </span>
                       </div>
                     </>

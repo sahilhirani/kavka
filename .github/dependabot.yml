@@ -1,0 +1,59 @@
+# Dependency update PRs.
+#
+# WHY THIS FILE EXISTS. release.yml publishes signed installers on every merge
+# to main, and existing installs pick them up through the in-app updater. That
+# makes detection latency the thing that matters: an advisory nobody hears about
+# is an advisory that keeps shipping to real machines. Without this file the
+# project's only notice of a compromised or vulnerable dependency was somebody
+# happening to read the news.
+#
+# WHAT THIS FILE DOES NOT DO. It opens version-update PRs. Dependabot ALERTS and
+# security updates are a repository setting (Settings -> Code security), not
+# something a committed file can switch on — see docs/SECURITY-AUDIT.md for the
+# owner actions this branch could not perform.
+#
+# Groups: minor and patch bumps arrive as one PR per ecosystem, because the
+# alternative is a queue of individually-uninteresting PRs that trains everyone
+# to merge without reading. Majors stay separate — they are the ones that change
+# behaviour and deserve their own gate.
+version: 2
+updates:
+  # The Rust workspace. All four members (crates/kavka-core, crates/kavka-mcp,
+  # crates/kavka-cli, apps/desktop/src-tauri) resolve through the single root
+  # Cargo.lock, so one entry at "/" covers the lot.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # The desktop frontend. Its lockfile is the one `npm ci` installs from on the
+  # release runner, in the same job as the updater signing key — a compromised
+  # release of any package in this tree runs code next to that key.
+  - package-ecosystem: npm
+    directory: "/apps/desktop"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # The workflows themselves. This is what keeps the SHA pins in ci.yml,
+  # release.yml, pages.yml and supply-chain.yml from rotting: Dependabot bumps
+  # the SHA and rewrites the trailing version comment, so pinning does not mean
+  # freezing.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]
+
+# Deliberately absent: docs/examples/wasm-serde. It declares its own
+# [workspace], is a documentation example rather than shipped code, and is never
+# built by CI — updates there would be noise about something no user runs.

@@ -19,6 +19,41 @@ const DEFAULT_EXPIRES_IN_SECS: u64 = 3600;
 /// Cap on how much of an IdP error body we quote back to the user.
 const ERROR_BODY_LIMIT: usize = 200;
 
+/// Dev-only escape hatch: allow a plain-`http` token endpoint. Named after
+/// `KAVKA_DEV_OAUTH_ALLOW_PLAINTEXT` in `connection.rs` and parsed the same
+/// way, because it is the same kind of local-IdP concession.
+const ALLOW_PLAINTEXT_ENV: &str = "KAVKA_DEV_OIDC_ALLOW_PLAINTEXT";
+
+/// Refuses a token endpoint that is not `https`.
+///
+/// The client secret is posted to this URL in a form body on every connect.
+/// Over `http` that is a long-lived, replayable credential — longer-lived than
+/// the bearer token it buys — readable by anything on the path. The product
+/// already refuses to put the SHORTER-lived half on a plaintext socket
+/// (`protocol/tls.rs` blocks a bearer token without TLS, and `connection.rs`
+/// gates OAUTHBEARER-over-plaintext behind a dev variable); this closes the
+/// asymmetry.
+///
+/// It is checked HERE rather than only in the profile editor because a profile
+/// can arrive by import and never pass through the editor at all.
+fn require_https(token_endpoint: &str) -> Result<()> {
+    let scheme_is_https = token_endpoint
+        .split_once("://")
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"));
+    if scheme_is_https {
+        return Ok(());
+    }
+    if matches!(std::env::var(ALLOW_PLAINTEXT_ENV).as_deref(), Ok("1")) {
+        return Ok(());
+    }
+    Err(Error::Other(format!(
+        "the OIDC token endpoint {token_endpoint} is not https — Kavka posts this connection's \
+         client secret to it, and on a plain connection anything on the network path can read \
+         and reuse that secret. Use an https endpoint, or set {ALLOW_PLAINTEXT_ENV}=1 if this \
+         is a local development IdP."
+    )))
+}
+
 /// RFC 6749 §5.1 success response. Deliberately no `Debug`: `access_token` is
 /// a live bearer credential.
 #[derive(Deserialize)]
@@ -57,6 +92,7 @@ fn post_client_credentials(
     client_id: &str,
     client_secret: &str,
 ) -> Result<String> {
+    require_https(token_endpoint)?;
     let mut response = ureq::post(token_endpoint)
         .config()
         // Verify the IdP against the OS trust store rather than ureq's bundled
@@ -192,6 +228,65 @@ mod tests {
             err.to_string().contains("unexpected OIDC token response"),
             "got {err}"
         );
+    }
+
+    /// The client secret is posted to this endpoint in a form body on every
+    /// connect, so its scheme is a security answer rather than a formatting
+    /// one — and it is checked HERE, not only in the profile editor, because a
+    /// profile can arrive by import and never pass through the editor.
+    ///
+    /// The dev escape hatch is deliberately not exercised: reaching it means
+    /// mutating this process's environment while other tests read it. Its
+    /// absence is asserted the other way round — every refusal below NAMES the
+    /// variable, so a user with a local IdP is told the way out.
+    #[test]
+    fn a_token_endpoint_that_is_not_https_is_refused() {
+        require_https("https://idp.example/oauth2/token").expect("https is the whole point");
+        // A scheme is case-insensitive, and a URL typed by hand sometimes says so.
+        require_https("HTTPS://idp.example/oauth2/token").expect("case is not a scheme");
+
+        for endpoint in [
+            "http://idp.example/oauth2/token",
+            "HTTP://idp.example/oauth2/token",
+            // `https` in the query string is not the scheme. The check reads
+            // the part before `://` and nothing else.
+            "http://idp.example/oauth2/token?next=https://idp.example",
+            // A scheme that merely starts with the right five letters.
+            "https-everywhere://idp.example/token",
+            "ftp://idp.example/token",
+            "file:///tmp/token",
+            // No scheme at all: ureq would guess, and a guess here is a
+            // long-lived credential on the wire.
+            "idp.example/oauth2/token",
+            "",
+        ] {
+            let Err(err) = require_https(endpoint) else {
+                panic!("{endpoint:?} was accepted");
+            };
+            let err = err.to_string();
+            assert!(err.contains(endpoint), "{err}");
+            assert!(err.contains("is not https"), "{err}");
+            // The sentence has to say WHY — the asymmetry with the bearer
+            // token is the reason this refusal is not fussiness — and it has
+            // to name the way out, or a local-IdP developer works around it by
+            // turning off something larger.
+            assert!(err.contains("client secret"), "{err}");
+            assert!(err.contains(ALLOW_PLAINTEXT_ENV), "{err}");
+        }
+    }
+
+    /// …and the guard is in front of the REQUEST, not merely available beside
+    /// it. `127.0.0.1:1` is a port nothing listens on: if the check were not
+    /// wired in, this would come back as a connection failure instead.
+    #[test]
+    fn the_token_request_refuses_before_it_reaches_the_network() {
+        let Err(err) = post_client_credentials("http://127.0.0.1:1/token", "kavka", "s3cret")
+        else {
+            panic!("a plaintext token endpoint must not be posted to");
+        };
+        let err = err.to_string();
+        assert!(err.contains("is not https"), "{err}");
+        assert!(!err.contains("s3cret"), "the secret is not in the message");
     }
 
     #[test]

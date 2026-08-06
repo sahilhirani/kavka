@@ -274,6 +274,11 @@ const en = {
   "editor.tls.hint":
     "Managed Kafka almost always needs this on. If the broker answers but the handshake fails, this is the first thing to try.",
 
+  "editor.tls.hintPlainCleartext":
+    "With this off and SASL/PLAIN selected, your password is sent to the broker unencrypted — anything on the network path can read it. Managed Kafka almost always needs this on.",
+  "editor.tls.hintScramCleartext":
+    "With this off, SCRAM does not send your password itself, but everything it does send can be captured and attacked offline — and no other traffic is encrypted either. Managed Kafka almost always needs this on.",
+
   "editor.mtls.hint":
     "Kavka reads PEM files exactly as they are — there is no JKS or PKCS#12 keystore to convert first.",
   "editor.caPath.label": "CA certificate",
