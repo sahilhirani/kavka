@@ -454,18 +454,23 @@ export default function ImportExportDialog({
         ) : (
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary btn-swap"
             disabled={pasted.trim() === "" || importing}
             aria-busy={importing}
             title={importReason}
             onClick={() => void runImport()}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {importing ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              {importing
+                ? t("transfer.import.running")
+                : t("transfer.import.run")}
             </span>
-            {importing
-              ? t("transfer.import.running")
-              : t("transfer.import.run")}
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              {importing
+                ? t("transfer.import.running")
+                : t("transfer.import.run")}
+            </span>
           </button>
         )}
       </div>

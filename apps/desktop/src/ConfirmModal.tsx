@@ -150,16 +150,19 @@ export default function ConfirmModal({
           type="button"
           className={`btn ${
             tone === "destructive" ? "btn-danger-confirm" : "btn-primary"
-          }`}
+          } btn-swap`}
           disabled={!matches || busy}
           aria-busy={busy || undefined}
           title={reason}
           onClick={confirm}
         >
-          <span className="btn-busy-slot" aria-hidden="true">
-            {busy ? <span className="spinner" /> : null}
+          <span className="btn-swap-face">
+            {confirmLabel}
           </span>
-          {confirmLabel}
+          <span className="btn-swap-face btn-swap-busy">
+            <span className="spinner" aria-hidden="true" />
+            {confirmLabel}
+          </span>
         </button>
       </div>
     </Overlay>

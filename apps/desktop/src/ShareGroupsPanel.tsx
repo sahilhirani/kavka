@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { groupDigits } from "./format";
+import { useI18n } from "./i18n";
 import { ErrorBanner } from "./ProfileEditor";
 
 /**
@@ -59,6 +60,7 @@ export default function ShareGroupsPanel({
   profile,
   onDanger,
 }: ShareGroupsPanelProps) {
+  const { t } = useI18n();
   const [groups, setGroups] = useState<ShareGroupInfo[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<ShareGroupDetail | null>(null);
@@ -283,6 +285,13 @@ export default function ShareGroupsPanel({
           error={detailError}
           onDismissError={() => setDetailError(null)}
         />
+      )}
+
+      {/* The one number on this panel that looks like a consumer group's and
+          is not. Said at the panel's edge, where it qualifies both tables
+          rather than only the one it sits under. */}
+      {groups !== null && groups.length > 0 && (
+        <p className="panel-foot">{t("shareGroups.foot")}</p>
       )}
     </section>
   );

@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { PartitionDetail, SeekSpec } from "./api";
 import { fromDatetimeLocal, toDatetimeLocal } from "./format";
 import { Term } from "./Glossary";
@@ -16,9 +17,73 @@ import { Term } from "./Glossary";
  * keystroke, editing a field clears its own message, and a failed submit
  * focuses nothing here — the caller owns focus because the caller owns the
  * button that failed.
+ *
+ * ALL FOUR START POSITIONS ARE VISIBLE AT ONCE. This was a `<select>` until
+ * the fidelity audit named it: a dropdown shows one of the four and gives a
+ * beginner no reason to discover that reading from a timestamp is even
+ * possible. The mockup draws a four-option segmented radiogroup for exactly
+ * that teaching reason, and the sentence under it (`.seekbar-note`) is the
+ * same idea again — it says what the chosen mode will actually do BEFORE the
+ * user spends a fetch finding out.
  */
 
 export type SeekMode = "earliest" | "latest" | "offset" | "timestamp";
+
+/**
+ * The order the segments are offered in, and the order the arrow keys walk.
+ * Newest first because it is the answer to "what is happening right now",
+ * which is why most people open this screen; the mockup orders it the same
+ * way (`jackdaw.html:1713-1718`).
+ */
+export const SEEK_MODES: readonly SeekMode[] = [
+  "latest",
+  "earliest",
+  "offset",
+  "timestamp",
+];
+
+/** The word on each segment. Short, because four of them share one row. */
+const MODE_LABEL: Record<SeekMode, string> = {
+  latest: "Newest",
+  earliest: "Oldest",
+  offset: "An offset",
+  timestamp: "A time",
+};
+
+/**
+ * What the chosen mode will do, said before it is done.
+ *
+ * The BROWSER's wording, which is the default. A scan is a different promise —
+ * it walks forward to the end of every partition rather than reading one
+ * window — so SearchView passes its own set through `noteFor` rather than
+ * letting this sentence be approximately true twice.
+ */
+export function browseSeekNote(mode: SeekMode): string {
+  switch (mode) {
+    case "latest":
+      return "Starts at the newest message in each partition and walks backwards. Nothing produced after the fetch is in it — that is what live tail is for.";
+    case "earliest":
+      return "Starts at the oldest message Kafka still holds. Retention and compaction have already removed anything older, so this is not necessarily the first message ever written.";
+    case "offset":
+      return "Starts at the offset you type, in the one partition you pick. Offsets are per partition — the same number means a different message in each one.";
+    case "timestamp":
+      return "Kafka finds the first message written at or after this time, in each partition. A partition holding nothing that new is skipped, and it will be missing from the results rather than empty in them.";
+  }
+}
+
+/** The same four answers for a scan, which reads forwards rather than back. */
+export function scanSeekNote(mode: SeekMode): string {
+  switch (mode) {
+    case "latest":
+      return "Scans the newest messages in each partition, the count below deciding how many. Anything older than that window is never read, so it can never match.";
+    case "earliest":
+      return "Scans from the oldest message Kafka still holds to the end of each partition — the widest scan this topic allows, and the slowest.";
+    case "offset":
+      return "Scans from the offset you type to the end of the one partition you pick. The other partitions are not read at all.";
+    case "timestamp":
+      return "Scans from the first message written at or after this time to the end of each partition. A partition holding nothing that new contributes nothing.";
+  }
+}
 
 export type SeekField = "count" | "offset" | "timestamp" | "filter";
 
@@ -160,8 +225,91 @@ interface SeekBarProps {
   countLabel?: string;
   countMax?: number;
   disabled?: boolean;
+  /**
+   * The sentence under the bar, per mode. Defaults to the browser's wording;
+   * search passes `scanSeekNote`, because "walks backwards from the newest"
+   * and "scans forwards to the end" are different promises.
+   */
+  noteFor?: (mode: SeekMode) => string;
   /** The bar's trailing actions: Fetch, Start, Stop. */
   children?: React.ReactNode;
+}
+
+/**
+ * THE FOUR START POSITIONS, as a radiogroup rather than a dropdown.
+ *
+ * The keyboard contract is the one Settings' segmented controls already make
+ * (`SettingsView.tsx`'s `useRovingRadio`): arrows and Home/End move selection
+ * AND focus together, and only the checked segment is in the tab order, so the
+ * group is one Tab stop rather than four. A `role="radiogroup"` announced as
+ * "1 of 4" whose arrow keys do nothing is a promise broken on the first press.
+ *
+ * Selection follows focus, which is correct here for the same reason it is in
+ * Settings: choosing a mode changes no data and reverses instantly — it only
+ * changes which fields the bar offers and what the sentence under it says.
+ */
+function SeekModeSeg({
+  value,
+  onChange,
+  disabled,
+  labelledBy,
+  describedBy,
+}: {
+  value: SeekMode;
+  onChange: (next: SeekMode) => void;
+  disabled: boolean;
+  labelledBy: string;
+  describedBy: string;
+}) {
+  const refs = useRef<Partial<Record<SeekMode, HTMLButtonElement | null>>>({});
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step =
+      e.key === "ArrowRight" || e.key === "ArrowDown"
+        ? 1
+        : e.key === "ArrowLeft" || e.key === "ArrowUp"
+          ? -1
+          : 0;
+    let next: SeekMode | undefined;
+    if (step !== 0) {
+      const from = SEEK_MODES.indexOf(value);
+      next = SEEK_MODES[(from + step + SEEK_MODES.length) % SEEK_MODES.length];
+    } else if (e.key === "Home") next = SEEK_MODES[0];
+    else if (e.key === "End") next = SEEK_MODES[SEEK_MODES.length - 1];
+    else return;
+    if (next === undefined || disabled) return;
+    e.preventDefault();
+    onChange(next);
+    refs.current[next]?.focus();
+  };
+
+  return (
+    <div
+      className="seg seekbar-seg"
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+      onKeyDown={onKeyDown}
+    >
+      {SEEK_MODES.map((mode) => (
+        <button
+          key={mode}
+          ref={(el) => {
+            refs.current[mode] = el;
+          }}
+          type="button"
+          role="radio"
+          aria-checked={value === mode}
+          tabIndex={value === mode ? 0 : -1}
+          className="seg-btn"
+          disabled={disabled}
+          onClick={() => onChange(mode)}
+        >
+          {MODE_LABEL[mode]}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function SeekBar({
@@ -176,8 +324,11 @@ export default function SeekBar({
   countLabel,
   countMax,
   disabled = false,
+  noteFor = browseSeekNote,
   children,
 }: SeekBarProps) {
+  const noteId = `${idPrefix}-seek-note`;
+  const labelId = `${idPrefix}-seek-label`;
   // `role="alert"`, because this is the one validation message in the app
   // that appears WITHOUT focus moving to the control it is about: the caller
   // owns the button that failed, and both callers leave the caret on it
@@ -202,21 +353,25 @@ export default function SeekBar({
   return (
     <>
       {/* Plain-language modes; the Kafka word is never hidden — it is in the
-          option text and in the hint under the control. */}
+          segment text and in the sentence under the control. All four are on
+          screen at once, which is the whole point (see the file header). */}
       <div className="seekbar" role="group" aria-label={label}>
-        <label className="seekbar-field">
-          <span className="seekbar-label">Read from</span>
-          <select
+        <div className="seekbar-field">
+          {/* The visible words ARE the group's accessible name (SC 2.5.3), so
+              this is `aria-labelledby` and not a second, longer `aria-label`
+              nobody can see. What the choice costs is in the note below,
+              wired up as the group's description. */}
+          <span className="seekbar-label" id={labelId}>
+            Start from
+          </span>
+          <SeekModeSeg
             value={state.mode}
             disabled={disabled}
-            onChange={(e) => onChange({ mode: e.target.value as SeekMode })}
-          >
-            <option value="latest">The newest messages</option>
-            <option value="earliest">The beginning of the topic</option>
-            <option value="offset">A specific offset</option>
-            <option value="timestamp">A point in time</option>
-          </select>
-        </label>
+            labelledBy={labelId}
+            describedBy={noteId}
+            onChange={(mode) => onChange({ mode })}
+          />
+        </div>
 
         {state.mode === "offset" && (
           <>
@@ -329,6 +484,17 @@ export default function SeekBar({
 
         {children}
       </div>
+
+      {/* The mockup's `#seekNote`, rewritten per mode. It is NOT a repeat of
+          the segment's word — it is what that word costs: which partitions get
+          read, what retention has already taken, and what a mode cannot see.
+          Plain text and not a live region: it changes because the user just
+          pressed the control it describes, and `aria-describedby` on the
+          radiogroup means the new sentence is read out with the new
+          selection. */}
+      <p className="seekbar-note" id={noteId}>
+        {noteFor(state.mode)}
+      </p>
 
       {message("count")}
       {message("offset")}

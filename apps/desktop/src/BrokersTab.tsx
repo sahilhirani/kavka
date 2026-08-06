@@ -283,6 +283,14 @@ export default function BrokersTab({
               </tbody>
             </table>
           </div>
+
+          {/* WHERE THIS LIST CAME FROM, which is not "now". It is the metadata
+              Kafka answered with when the connection was made, and a cluster
+              that has gained or lost a broker since then looks exactly the
+              same on this screen. */}
+          {brokers.length > 0 && (
+            <p className="panel-foot">{t("brokers.list.foot")}</p>
+          )}
         </section>
 
         {/* Quotas are cluster-wide rather than per-broker, but every broker
@@ -452,6 +460,11 @@ export default function BrokersTab({
                 </tbody>
               </table>
             </div>
+
+            {/* ONE BROKER'S VIEW. Kafka keeps most settings per broker, so the
+                cluster can be running with two different answers to the same
+                question and this table cannot tell you. */}
+            <p className="panel-foot">{t("broker.config.foot")}</p>
           </>
         )}
       </section>

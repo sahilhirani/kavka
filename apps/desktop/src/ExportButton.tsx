@@ -247,16 +247,19 @@ export default function ExportButton({
   return (
     <button
       type="button"
-      className="btn"
+      className="btn btn-swap"
       disabled={busy || nothing || disabledReason !== undefined}
       aria-busy={busy || undefined}
       title={reason}
       onClick={() => void run()}
     >
-      <span className="btn-busy-slot" aria-hidden="true">
-        {busy ? <span className="spinner" /> : null}
+      <span className="btn-swap-face">
+        Export…
       </span>
-      Export…
+      <span className="btn-swap-face btn-swap-busy">
+        <span className="spinner" aria-hidden="true" />
+        Export…
+      </span>
     </button>
   );
 }

@@ -39,10 +39,51 @@ const TABS: ReadonlyArray<readonly [InspectorTab, string]> = [
  */
 const MAX_LINES = 4000;
 
+/**
+ * HOW THESE BYTES WERE READ, SAID BEFORE THEY ARE SHOWN.
+ *
+ * The order is the whole claim. Kavka's pretty-printed object is Kavka's
+ * GUESS — the bytes on the broker are bytes — and a reader who meets the
+ * prettiness first has already believed it by the time a footnote under a
+ * button row tells them where it came from. The fidelity audit found this
+ * sentence rendered last, unstyled, below Copy value; the mockup opens every
+ * tabpanel with it, inset, on an `--info` edge, with an info circle.
+ *
+ * It is deliberately not dismissible and deliberately not a disclosure: a
+ * qualification one click away is a qualification that gets quoted without it.
+ */
+function Provenance({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="provenance" role="note">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5M12 7.6v.9" />
+      </svg>
+      <span>{children}</span>
+    </p>
+  );
+}
+
 interface MessageInspectorProps {
   record: MessageRecord;
   topic: string;
   onClose: () => void;
+  /**
+   * Walk to the previous (-1) or next (+1) row. Absent where the inspector has
+   * no list behind it. The caller hands this to the grid's own `step`, so the
+   * buttons and `j`/`k` are one code path.
+   */
+  onStep?: (delta: -1 | 1) => void;
+  /** False at the ends of the list — the buttons disable rather than vanish. */
+  canPrev?: boolean;
+  canNext?: boolean;
   /**
    * Open the topic this record originally failed on, at the exact record.
    * Absent where there is nowhere to navigate to (search results live inside
@@ -74,6 +115,9 @@ export default function MessageInspector({
   record,
   topic,
   onClose,
+  onStep,
+  canPrev = false,
+  canNext = false,
   onBrowseOriginal,
   onReproduce,
   reproduceBlocked,
@@ -209,6 +253,46 @@ export default function MessageInspector({
           Partition {record.partition} · Offset {groupDigits(record.offset)}
           {stamp !== null ? ` · ${stamp}` : ""}
         </span>
+        {/* Walking the list from the panel head, as the mockup has it. The
+            keycaps in the status line stay: they are the faster path and this
+            is the discoverable one, and both call the grid's `step` so they
+            cannot disagree about what "next" means. `.btn-sm` is the floor —
+            24px, SC 2.5.8 — and the arrow is captioned for anyone who cannot
+            see it. */}
+        {onStep !== undefined && (
+          <span className="inspector-step">
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!canPrev}
+              onClick={() => onStep(-1)}
+              // A disabled control always says why (§5.5), and at the top of
+              // the list "there is nothing above this" is the why.
+              title={
+                canPrev
+                  ? "The message above this one in the table"
+                  : "This is the first message in the table."
+              }
+            >
+              <span aria-hidden="true">↑</span>
+              <span className="sr-only">Previous message</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!canNext}
+              onClick={() => onStep(1)}
+              title={
+                canNext
+                  ? "The message below this one in the table"
+                  : "This is the last message in the table."
+              }
+            >
+              <span aria-hidden="true">↓</span>
+              <span className="sr-only">Next message</span>
+            </button>
+          </span>
+        )}
         <button
           type="button"
           className="btn btn-ghost inspector-close"
@@ -277,9 +361,17 @@ export default function MessageInspector({
             onClick={() => setTab(key)}
             onKeyDown={(e) => onTabKeyDown(e, index)}
           >
-            {key === "headers" && record.headers.length > 0
-              ? `${label} ${record.headers.length}`
-              : label}
+            {/* The count is muted and inside the label, as the mockup draws
+                it: it qualifies the word rather than competing with it. It is
+                still part of the tab's accessible name, which is what a screen
+                reader announces when the arrow keys land here. */}
+            {key === "headers" && record.headers.length > 0 ? (
+              <>
+                {label} <span className="tab-count">{record.headers.length}</span>
+              </>
+            ) : (
+              label
+            )}
           </button>
         ))}
       </div>
@@ -300,7 +392,14 @@ export default function MessageInspector({
               ids, content types and routing hints — this one sent none.
             </p>
           ) : (
-            <table className="data-table data-table-flush">
+            <>
+              <Provenance>
+                Headers are bytes too. Everything shown as text decoded as text
+                on its own; anything that did not is Kavka's hex rendering of
+                the bytes, tagged <code>bytes</code>, and a header with no value
+                at all shows ∅ rather than an empty string.
+              </Provenance>
+              <table className="data-table data-table-flush">
               <caption className="sr-only">Headers on this message</caption>
               <thead>
                 <tr>
@@ -329,7 +428,8 @@ export default function MessageInspector({
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </>
           )}
         </div>
       ) : payload === null ? (
@@ -350,8 +450,29 @@ export default function MessageInspector({
         </div>
       ) : (
         <>
-          {/* Body first, controls under it: the payload is the loudest thing
-              on this panel and nothing chrome-shaped goes above it. */}
+          {/* PROVENANCE FIRST, THEN THE PAYLOAD. The one thing that goes above
+              the body, and it is not chrome — it is the sentence that decides
+              what everything under it means. See `Provenance`. */}
+          <Provenance>
+            {tab === "raw" || raw ? (
+              <>
+                The text Kavka decoded, with no JSON layout applied — line
+                breaks and spacing are the producer's, not Kavka's. It is not a
+                byte dump: the core decoded these bytes to text before they
+                crossed into this window, so anything that was not valid UTF-8
+                was replaced on the way.
+              </>
+            ) : (
+              <>
+                {provenance(payload)}
+                {provenance(payload).endsWith(".") ? "" : "."}{" "}
+                {formatBytes(payload.raw_len)} on the broker.
+              </>
+            )}
+          </Provenance>
+
+          {/* Body next, controls under it: the payload is the loudest thing on
+              this panel and nothing else chrome-shaped goes above it. */}
           <div className="inspector-body">
             {tooBigToPretty && (
               <p className="inspector-note">
@@ -481,15 +602,22 @@ export default function MessageInspector({
               </p>
             )}
 
-            {/* Provenance, pinned at the bottom: what these bytes were read
-                as, and which schema said so — or plainly that none did. It
-                already carries subject · version · id, so there is no separate
-                schema chip here to say the same thing twice. */}
-            <p className="inspector-provenance">{provenance(payload)}</p>
           </div>
         </>
       )}
       </div>
+
+      {/* THE PANEL'S FOOT — the mockup's, and the one fact about reading that
+          nobody thinks to ask until they have already worried about it.
+          `enable.auto.commit` is false on every consumer the core builds
+          (crates/kavka-core/src/connection.rs) and nothing here ever commits,
+          so opening a message cannot move a group along. Stated on every tab
+          because it is true of the whole panel, not of one payload. */}
+      <p className="inspector-caveat">
+        <span className="status-dot status-connected" aria-hidden="true" />
+        Reading this committed nothing. Kavka never commits an offset, so this
+        message is still unread as far as every consumer group is concerned.
+      </p>
     </aside>
   );
 }

@@ -11,7 +11,7 @@ import {
 import { copyText } from "./clipboard";
 import { useDangerSignal, type DangerReport } from "./danger";
 import { ErrorBanner } from "./ProfileEditor";
-import { EnvChip } from "./Sidebar";
+import { EnvChip } from "./environments";
 
 /**
  * CONFIG DIFF — "why does it work in staging".
@@ -270,7 +270,7 @@ export default function ConfigDiffView({
             </span>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-swap"
               disabled={!ready || busy || sameTopic}
               aria-busy={busy || undefined}
               title={
@@ -284,10 +284,13 @@ export default function ConfigDiffView({
               }
               onClick={() => void compare()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {busy ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Compare
               </span>
-              Compare
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Compare
+              </span>
             </button>
           </div>
         </div>

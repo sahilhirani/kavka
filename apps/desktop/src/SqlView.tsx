@@ -29,11 +29,13 @@ import ResultGrid, { type ResultGridHandle } from "./ResultGrid";
 import SeekBar, {
   buildSeek,
   initialSeekState,
+  scanSeekNote,
   type SeekError,
   type SeekField,
   type SeekState,
 } from "./SeekBar";
 import type { ToastSpec } from "./Toast";
+import ViewTrail from "./ViewTrail";
 
 /**
  * SQL OVER A TOPIC — Phase 5a, and the same three honesty rules as search,
@@ -350,6 +352,9 @@ export default function SqlView({
 
       <section className="messages-view">
       <div className="messages-head">
+        {/* The rail still says "Topics" while this pane is open. See
+            ViewTrail. */}
+        <ViewTrail crumbs={["Topics", topic, "SQL"]} />
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
             <button
@@ -526,6 +531,10 @@ export default function SqlView({
           showCount={seek.mode === "latest"}
           countLabel="Newest per partition"
           disabled={running || stopping}
+          // A query reads the same way a scan does — forwards, to the end of
+          // the range — so it takes search's wording rather than the browser's
+          // "walks backwards".
+          noteFor={scanSeekNote}
         >
           <label className="seekbar-field">
             <span className="seekbar-label">Read at most</span>
@@ -552,7 +561,7 @@ export default function SqlView({
             {running || stopping ? (
               <button
                 type="button"
-                className="btn btn-latched"
+                className="btn btn-latched btn-swap"
                 onClick={stop}
                 disabled={stopping}
                 aria-busy={stopping || undefined}
@@ -562,10 +571,13 @@ export default function SqlView({
                     : "Stop reading and keep the rows already produced"
                 }
               >
-                <span className="btn-busy-slot" aria-hidden="true">
-                  {stopping ? <span className="spinner" /> : null}
+                <span className="btn-swap-face">
+                  Stop
                 </span>
-                Stop
+                <span className="btn-swap-face btn-swap-busy">
+                  <span className="spinner" aria-hidden="true" />
+                  Stop
+                </span>
               </button>
             ) : (
               <button
@@ -574,7 +586,10 @@ export default function SqlView({
                 title={busyWhy}
                 onClick={start}
               >
-                <span className="btn-busy-slot" aria-hidden="true" />
+                {/* No busy face — Run is swapped for Stop the moment the
+                    query starts, so it is never the button that spins. The
+                    empty slot it used to carry was a blank 16px box on an
+                    idle control; see the note on Search in SearchView. */}
                 Run
               </button>
             )}
@@ -754,6 +769,20 @@ export default function SqlView({
             </span>
           </>
         )}
+        {/* The panel's caveat, in the mockup's slot. NOT a repeat of the scope
+            note above the editor — that one says what the engine read; this
+            one says what the gutter beside the answer is. Every other ledger
+            gutter in Kavka carries an address in Kafka's own vocabulary (a
+            partition, a version, an offset), so a column of numbers here that
+            is merely a row count is exactly the sort of thing someone screen-
+            shots and quotes as offsets. */}
+        <span className="statusbar-sep" aria-hidden="true">
+          ·
+        </span>
+        <span className="statusbar-item statusline-caveat">
+          The numbers in the gutter count this result's rows. They are not
+          offsets, and sorting a column renumbers them.
+        </span>
         <span className="statusbar-right">
           <span className="statusbar-item">
             <span className="kbd">Ctrl</span>

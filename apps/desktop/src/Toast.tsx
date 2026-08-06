@@ -19,9 +19,27 @@ import { useI18n } from "./i18n";
 
 export type ToastKind = "ok" | "warn" | "danger" | "info";
 
+/**
+ * The one thing a toast can offer besides going away.
+ *
+ * A FIRING ALERT IS THE CASE THIS EXISTS FOR. "checkout falling behind" tells
+ * you what happened and leaves you to find it; the second button takes you to
+ * the thing the rule is watching — the group's own detail for a lag rule, the
+ * Alerts screen for a cluster-wide one. See `alertNav.ts`, which decides the
+ * label and the destination together so the two can never disagree.
+ *
+ * It sits BEFORE Dismiss in the DOM, which is both the reading order and the
+ * tab order: the action you might take, then the one that ends the toast.
+ */
 export interface ToastAction {
   label: string;
   run: () => void;
+  /**
+   * Carry the accent. For an action that is the point of the toast rather than
+   * a convenience — a firing alert's "View group orders-service". Off by
+   * default, because a toast full of primary buttons has none.
+   */
+  primary?: boolean;
 }
 
 export interface ToastSpec {
@@ -126,9 +144,13 @@ function ToastRow({
         {toast.action && (
           <button
             type="button"
-            className="btn btn-ghost"
+            className={`btn ${toast.action.primary === true ? "btn-primary" : "btn-ghost"}`}
             onClick={() => {
               toast.action?.run();
+              // Acting on a toast is also an answer to it. Leaving it up after
+              // the user has gone where it pointed would mean the corner of
+              // the screen still asking about something they are now looking
+              // at.
               onDismiss(toast.id);
             }}
           >

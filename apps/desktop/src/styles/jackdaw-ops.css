@@ -213,6 +213,114 @@
   line-height: var(--lh-prose);
 }
 
+/* THE VARIABLE SLOTS — the words that came out of the form.
+   Scoped to `.rule-sentence` deliberately: `.v` is one letter and would
+   otherwise be the most collidable class name in the stylesheet.
+
+   THREE CHANNELS, and the hue is the one that matters least. Weight and a
+   dashed rule both survive greyscale and forced colours, so a reader who
+   never sees the accent still sees four marked words in the sentence.
+
+   WHY THE ACCENT, given that this text is not clickable. The house rule is
+   that the accent means "clickable or selected", and a static sentence
+   spending it is a real cost — it is written down here because it was a
+   decision, not an oversight. It is spent because these ARE the rule's
+   selections: the four values somebody chose in the builder, and the only
+   parts of the sentence the Edit button can change. The DASH is what keeps
+   them apart from the two other underlines in Kavka — a link is solid and a
+   glossary term is dotted — so the shape says "parameter" before the colour
+   says anything at all. */
+.rule-sentence .v {
+  color: var(--accent);
+  font-weight: var(--w-semi);
+  border-bottom: 1px dashed var(--border-control);
+}
+
+/* ── The firing rule and what went out about it ───────────────────────
+   The panel is what Kavka knows; the card beside it is what the person away
+   from their desk was told. Drawing them next to each other is the only way
+   to be sure the two agree — and the card is 400px because a notification is,
+   near enough, and a preview at some other width would be a picture of a
+   notification rather than a copy of one. */
+.firing-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--stack);
+}
+
+.firing-row > .panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-preview {
+  flex: none;
+  width: 400px;
+}
+
+/* The notification, as the operating system draws it: raised, its own edge,
+   a shadow that says it is over everything else. */
+.toast-demo {
+  padding: var(--s-5) var(--s-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+}
+
+.td-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+}
+
+/* The one place in Kavka the bird appears at notification size. Decorative —
+   "Kavka" is spelled out beside it. */
+.td-bird {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.td-app {
+  font-weight: var(--w-semi);
+}
+
+.td-when {
+  margin-left: auto;
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* Title then body, the shape and the order the shell actually sends. */
+.td-title {
+  margin: var(--s-4) 0 0;
+  color: var(--text-primary);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+}
+
+.td-body {
+  margin: var(--s-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+/* What the card is and what it is not. Reads as a caption, not as a claim
+   the notification carried. */
+.toast-caption {
+  margin: var(--s-4) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
 /* What actually tripped it, in the core's own words. Outside the fold on
    purpose — it is the evidence for the verdict, not the mechanics. */
 .rule-tripped {
@@ -348,89 +456,6 @@
   background: var(--bg-sunken);
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
-}
-
-/* ── The teaching empty state ─────────────────────────────────────────
-   Not "no data": what you would get, how to switch it on, and what does
-   NOT depend on it. Kavka would rather show nothing than draw a line it
-   made up, and this is the shape that sentence takes on screen. */
-.teach {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s-7);
-}
-
-.teach-art {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 56px;
-  height: 56px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-md);
-  background: var(--bg-sunken);
-  color: var(--text-tertiary);
-}
-
-.teach-art svg { width: 26px; height: 26px; }
-
-.teach-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-4);
-}
-
-.teach-title {
-  margin: 0;
-  max-width: var(--measure);
-  color: var(--text-primary);
-  font-size: var(--t-md);
-  line-height: var(--lh-md);
-  font-weight: var(--w-semi);
-  letter-spacing: var(--track-tight);
-}
-
-.teach-text {
-  margin: 0;
-  max-width: var(--measure);
-  color: var(--text-secondary);
-  font-size: var(--t-base);
-  line-height: var(--lh-prose);
-}
-
-.teach-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-  max-width: var(--measure);
-  color: var(--text-secondary);
-  font-size: var(--t-base);
-  line-height: var(--lh-prose);
-}
-
-.teach-list li {
-  display: flex;
-  gap: var(--s-4);
-}
-
-/* An em dash, not a bullet glyph: the list is three sentences, not three
-   options. Decorative, so it is hidden from the accessibility tree. */
-.teach-list li::before {
-  content: "—";
-  flex: none;
-  color: var(--text-tertiary);
-}
-
-.teach-list code,
-.teach-text code {
-  color: var(--text-mono);
-  background: var(--bg-sunken);
-  padding: 1px 4px;
-  border-radius: var(--r-control);
 }
 
 /* ── Charts ───────────────────────────────────────────────────────────
@@ -577,9 +602,21 @@
     grid-template-columns: 1fr;
   }
 
-  .teach {
+  /* `.teach`'s own reflow moved to styles/jackdaw-shell.css with the rest of
+     the idiom — it is shell furniture, and a media rule left behind here
+     would be overridden by the base rule in the later sheet. */
+
+  /* The notification preview goes UNDER the rule rather than beside it, and
+     gives up its fixed width — a 400px column against a squeezed panel would
+     make the rule sentence, which is the thing being read, the narrower of
+     the two. */
+  .firing-row {
     flex-direction: column;
-    gap: var(--s-5);
+  }
+
+  .toast-preview {
+    width: 100%;
+    max-width: 400px;
   }
 
   .history-item {
@@ -603,10 +640,25 @@
   .stat-grid-tiles > .stat,
   .health-reading,
   .quota-entity,
-  .teach-art,
+  /* `.teach-art` is NOT in this list any more. Its base rule moved to
+     styles/jackdaw-shell.css, which loads after this file — a forced-colours
+     override here would have lost to it at equal specificity, which is the
+     one place a silent cascade change actually costs somebody something. It
+     is restated beside the rest of the idiom instead. */
   .disclose-inline,
-  .inferred-note {
+  .inferred-note,
+  /* Forced colours drops the shadow, so the card that was raised by light
+     has to be raised by an edge or it dissolves into the canvas beside the
+     panel it is explaining. */
+  .toast-demo {
     border: 1px solid CanvasText;
+  }
+
+  /* The slots keep their dash and their weight; the hue is gone, which is
+     exactly the greyscale case they were designed to survive. */
+  .rule-sentence .v {
+    color: CanvasText;
+    border-bottom-color: CanvasText;
   }
 
   /* Mark is what the wire and every other danger context uses, so a firing

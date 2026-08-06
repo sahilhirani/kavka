@@ -328,6 +328,13 @@ export default function MaskingTab({ profile, onDanger }: MaskingTabProps) {
             </table>
           </div>
         )}
+
+        {/* WHAT A LIST OF PATTERNS CANNOT PROMISE. A rule that does not match
+            fails silently — there is no such thing as a near miss — and that
+            is the failure mode somebody discovers in a screenshot. */}
+        {rules !== null && rules.length > 0 && (
+          <p className="panel-foot">{t("masking.rules.foot")}</p>
+        )}
       </section>
 
       <section className="panel">
@@ -788,15 +795,18 @@ function MaskRuleModal({
           </button>
           <button
             type="submit"
-            className="btn btn-primary"
+            className="btn btn-primary btn-swap"
             disabled={busy}
             aria-busy={busy}
             title={busy ? "Kavka is saving this rule" : undefined}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              {rule === null ? "Add rule" : "Save rule"}
             </span>
-            {rule === null ? "Add rule" : "Save rule"}
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              {rule === null ? "Add rule" : "Save rule"}
+            </span>
           </button>
         </div>
       </form>

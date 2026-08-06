@@ -39,6 +39,7 @@ import SeekBar, {
   type SeekState,
 } from "./SeekBar";
 import type { ToastSpec } from "./Toast";
+import ViewTrail from "./ViewTrail";
 
 /**
  * THE MESSAGE BROWSER.
@@ -170,9 +171,29 @@ export default function MessagesView({
 
   useDangerSignal(error !== null || tailError !== null, onDanger);
 
-  const selected = useMemo(
-    () => rows.find((r) => rowKey(r) === selectedKey) ?? null,
+  const selectedIndex = useMemo(
+    () =>
+      selectedKey === null
+        ? -1
+        : rows.findIndex((r) => rowKey(r) === selectedKey),
     [rows, selectedKey],
+  );
+  const selected = selectedIndex >= 0 ? rows[selectedIndex] : null;
+
+  /**
+   * The oldest offset Kafka still holds, across the partitions this topic has.
+   * Non-zero is the retention story: the table's first row is not the topic's
+   * first message, and nothing on screen says so unless this does.
+   */
+  const earliestOffset = useMemo(
+    () =>
+      partitions.length === 0
+        ? 0
+        : partitions.reduce(
+            (lowest, p) => Math.min(lowest, p.earliest_offset),
+            Number.POSITIVE_INFINITY,
+          ),
+    [partitions],
   );
 
   // ── Fetching ───────────────────────────────────────────────────────────
@@ -440,6 +461,13 @@ export default function MessagesView({
 
       <section className="messages-view">
       <div className="messages-head">
+        {/* WHERE YOU ARE. The rail says "Topics" the whole time you are reading
+            messages — the audit's own example of the drill-down confusion —
+            and this is the trail that answers it without moving the hierarchy
+            the owner chose to keep. Plain text, not links: the crumb button
+            below is the working way back, and a breadcrumb whose crumbs do
+            nothing should not pretend to be one. */}
+        <ViewTrail crumbs={["Topics", topic, "Messages"]} />
         <div className="panel-head messages-panel-head">
           <h2 className="panel-title">
             <button
@@ -532,16 +560,19 @@ export default function MessagesView({
             </span>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-swap"
               disabled={fetching || tailing}
               aria-busy={fetching || undefined}
               title={busyReason}
               onClick={() => void runFetch()}
             >
-              <span className="btn-busy-slot" aria-hidden="true">
-                {fetching ? <span className="spinner" /> : null}
+              <span className="btn-swap-face">
+                Fetch
               </span>
-              Fetch
+              <span className="btn-swap-face btn-swap-busy">
+                <span className="spinner" aria-hidden="true" />
+                Fetch
+              </span>
             </button>
           </div>
         </SeekBar>
@@ -666,6 +697,13 @@ export default function MessagesView({
             record={selected}
             topic={topic}
             onClose={() => setSelectedKey(null)}
+            // The head's ↑/↓ run the grid's own `step`, which is the same
+            // `moveTo` that `j`/`k` run — one clamp, one scroll-into-view, one
+            // re-window. Two implementations of "the next row" is how the
+            // pointer path and the keyboard path drift apart.
+            onStep={(delta) => gridRef.current?.step(delta)}
+            canPrev={selectedIndex > 0}
+            canNext={selectedIndex >= 0 && selectedIndex < rows.length - 1}
             onBrowseOriginal={onBrowseOriginal}
             onReproduce={onReproduce}
             // Read-only is a fact about the connection; masked is a fact about
@@ -721,6 +759,40 @@ export default function MessagesView({
               {maskingChipLabel(masking)}
             </span>
           </>
+        )}
+        {/* THE PANEL'S CAVEAT, in the mockup's own slot: its message table
+            ends on a foot that pairs the counts with one plain-English
+            statement of what the rows cannot tell you. This IS that foot (see
+            styles/jackdaw-data.css §3), so the sentence joins the counts here
+            rather than arriving as a second bar under them.
+
+            Only ever rendered when it has something specific to say. "Kavka
+            read a range, not the topic" is already the Perch's job above, and
+            a caveat repeated two inches apart is a caveat people learn to
+            skip. */}
+        {tailing ? (
+          <>
+            <span className="statusbar-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="statusbar-item statusline-caveat">
+              A tail starts at the live end. Nothing produced before you
+              switched it on is in this window.
+            </span>
+          </>
+        ) : (
+          earliestOffset > 0 && (
+            <>
+              <span className="statusbar-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="statusbar-item statusline-caveat">
+                Offsets here start at {groupDigits(earliestOffset)} — retention
+                or compaction has already removed everything older, so the
+                oldest row this topic can show is not its first message.
+              </span>
+            </>
+          )
         )}
         <span className="statusbar-right">
           <span className="statusbar-item">

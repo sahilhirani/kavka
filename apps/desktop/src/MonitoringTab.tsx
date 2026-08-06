@@ -802,6 +802,15 @@ export default function MonitoringTab({
             ))}
           </>
         )}
+
+        {/* WHAT LAG IS, AND THE ONE WAY IT OVERSTATES. Both numbers behind
+            every point came out of the same reading, so they agree with each
+            other — but a group that commits rarely is charted as behind on
+            work it has already done, and nothing on this screen can tell that
+            apart from a group that is genuinely behind. */}
+        {groups !== null && !historyFailed && groups.length > 0 && (
+          <p className="panel-foot">{t("monitoring.foot.lag")}</p>
+        )}
       </section>
 
       <MetricsSection
@@ -816,6 +825,7 @@ export default function MonitoringTab({
         onRange={setMetricRange}
         loading={loadingMetrics}
         onEditConnection={onEditConnection}
+        onRetry={refresh}
       />
     </>
   );
@@ -918,6 +928,13 @@ interface MetricsSectionProps {
   onRange: (range: HistoryRange) => void;
   loading: boolean;
   onEditConnection: () => void;
+  /**
+   * Ask the endpoint again. The mockup's empty state offers it first, and it
+   * is the right first move: "no metrics endpoint" and "the endpoint was down
+   * when Kavka last looked" produce the same empty panel, and only one of them
+   * is fixed by waiting.
+   */
+  onRetry: () => void;
 }
 
 function MetricsSection({
@@ -932,7 +949,9 @@ function MetricsSection({
   onRange,
   loading,
   onEditConnection,
+  onRetry,
 }: MetricsSectionProps) {
+  const { t } = useI18n();
   const have = useMemo(
     () => new Set(status?.series_available ?? []),
     [status],
@@ -1042,7 +1061,14 @@ function MetricsSection({
                 the brokers itself.
               </li>
             </ul>
-            <div className="empty-actions">
+            {/* The mockup's `.empty-acts`: the cheap retry first, the real fix
+                second, and a quiet third that only explains. Kavka reads this
+                endpoint on its own schedule, so "Try again" is a genuine
+                answer when the exporter was simply down a minute ago. */}
+            <div className="teach-acts">
+              <button type="button" className="btn" onClick={onRetry}>
+                Try again
+              </button>
               <button
                 type="button"
                 className="btn"
@@ -1054,6 +1080,10 @@ function MetricsSection({
             </div>
           </div>
         </div>
+
+        {/* What the absence itself cannot say: this is a fact about the
+            connection Kavka was given, not about the cluster. */}
+        <p className="panel-foot">{t("monitoring.foot.noEndpoint")}</p>
       </section>
     );
 
@@ -1111,20 +1141,73 @@ function MetricsSection({
         <div className="panel-head">
           <h2 className="panel-title">Throughput and storage</h2>
         </div>
-        <p className="table-note">
-          {endpointUrl ?? "The metrics endpoint"} answered, but Kavka didn't
-          recognise any Kafka broker metrics in what it published. That is an
-          exporter configuration, not a permission: a jmx_exporter running with
-          an empty or non-Kafka rule set answers happily and exposes nothing
-          Kavka can map.
-        </p>
-        <p className="table-note">
-          Kavka looks for {METRIC_SERIES.length} readings —{" "}
-          {METRIC_SERIES.map((s) => seriesLabel(s).toLowerCase()).join(", ")} —
-          and draws whichever of them it finds. Point it at the exporter that
-          fronts the brokers themselves rather than one in front of a client, and
-          check the rule set is the Kafka one.
-        </p>
+        {/* THE SAME IN-PANEL IDIOM AS "no endpoint", because it is the same
+            shape of problem: the panel has nothing to draw and the reader
+            needs the cause, the mechanism and what still works. The mark is a
+            page with nothing on it — decorative; every word beside it is the
+            signal. */}
+        <div className="teach">
+          <div className="teach-art" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              focusable="false"
+            >
+              <path d="M6 3h8l4 4v14H6z" />
+              <path d="M14 3v4h4" />
+              <path d="M9 12h6M9 16h4" />
+            </svg>
+          </div>
+          <div className="teach-body">
+            <h3 className="teach-title">
+              {endpointUrl ?? "The metrics endpoint"} answered, but nothing in
+              it was a Kafka broker metric
+            </h3>
+            <p className="teach-text">
+              That is an exporter configuration, not a permission — a
+              jmx_exporter running with an empty or non-Kafka rule set answers
+              happily and exposes nothing Kavka can map. Kavka would rather show
+              you nothing than draw a line it made up.
+            </p>
+            <ul className="teach-list">
+              <li>
+                What Kavka looks for: {METRIC_SERIES.length} readings —{" "}
+                {METRIC_SERIES.map((s) => seriesLabel(s).toLowerCase()).join(
+                  ", ",
+                )}{" "}
+                — and it draws whichever of them it finds.
+              </li>
+              <li>
+                How to fix it: point this connection at the exporter that fronts
+                the brokers themselves rather than one in front of a client, and
+                check its rule set is the Kafka one.
+              </li>
+              <li>
+                Nothing above depends on it: the lag charts are read from the
+                brokers over the ordinary Kafka protocol.
+              </li>
+            </ul>
+            <div className="teach-acts">
+              <button type="button" className="btn" onClick={onRetry}>
+                Try again
+              </button>
+              <button
+                type="button"
+                className="btn"
+                title="Kavka only edits a connection while it is disconnected, so this disconnects first"
+                onClick={onEditConnection}
+              >
+                Open connection settings
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p className="panel-foot">{t("monitoring.foot.noSeries")}</p>
       </section>
     );
 
@@ -1287,6 +1370,11 @@ function MetricsSection({
             />
           </div>
         )}
+
+        {/* Both readings are cluster-wide totals from the exporter. Neither can
+            name a partition, and neither is Kavka's own observation of the
+            cluster — it is the exporter's, scraped on the exporter's schedule. */}
+        <p className="panel-foot">{t("monitoring.foot.health")}</p>
       </section>
 
       <section className="panel">
@@ -1442,6 +1530,11 @@ function MetricsSection({
             )}
           </div>
         )}
+
+        {/* These are the exporter's counters, held in memory for this
+            connection only. The limitation nobody expects is the last one: a
+            flat line and a silent exporter look identical. */}
+        <p className="panel-foot">{t("monitoring.foot.throughput")}</p>
       </section>
     </>
   );

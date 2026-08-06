@@ -93,10 +93,20 @@
   --track-tight:  -0.018em;
   --nums-tabular: tabular-nums lining-nums;
 
-  /* Space (4px base). --s1…--s9 is the mockup's ladder; --s-1…--s-12 is
-     Ledger's, kept because every existing rule uses it. */
-  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px;
-  --s6:24px; --s7:32px; --s8:40px; --s9:56px;
+  /* Space (4px base). ONE LADDER.
+     There were two: the mockup's `--s1…--s9` and this one. The mockup's set
+     was declared and used exactly zero times while all 504 spacing
+     declarations in the app used this one — a second live name for the same
+     nine values, with nothing to say which was canonical. The audit called
+     that "maintenance debt that will silently generate drift in every future
+     component", and it was right, so the unused ladder is deleted.
+
+     READING A JACKDAW MEASUREMENT. The mockup's numbers map exactly:
+       --s1 4  → --s-2      --s4 16 → --s-6      --s7 32 → --s-9
+       --s2 8  → --s-4      --s5 20 → --s-7      --s8 40 → --s-10
+       --s3 12 → --s-5      --s6 24 → --s-8      --s9 56 → --s-11
+     `--s-1` (2px), `--s-3` (6px) and `--s-12` (72px) are this ladder's own —
+     the mockup had no rung there and the app needs all three. */
   --s-1:  2px;  --s-2:  4px;  --s-3:  6px;  --s-4:  8px;
   --s-5: 12px;  --s-6: 16px;  --s-7: 20px;  --s-8: 24px;
   --s-9: 32px;  --s-10:40px;  --s-11:56px;  --s-12:72px;
@@ -109,8 +119,12 @@
   --r-pill:     999px;
 
   /* Metrics */
-  --rail-w:        248px;   /* the connections sidebar                     */
-  --nav-w:         224px;   /* the cluster rail inside the workspace       */
+  /* ONE rail for the window (DESIGN.md §5.1). There used to be two tokens
+     here and they were a trap: `--rail-w` meant the 248px connections
+     sidebar while the mockup's `--rail-w` meant the 254px screen rail, and
+     `--nav-w` was the one that actually corresponded. The sidebar is gone,
+     so the name now means what the mockup means by it. */
+  --rail-w:        254px;   /* the app rail — brand, cluster, screens      */
   --topbar-h:       44px;
   --statusbar-h:    26px;
   /* INLINE tabs only — the modal's Export/Import pair, the inspector's
@@ -783,18 +797,27 @@ code {
   background: var(--env-wire);
 }
 
+/* THE SHELL — two columns, exactly as the mockup draws it: one rail and a
+   stage. It used to be four (248px sidebar + 224px rail + stage + a 480px
+   docked inspector), which cost a connected user 472px of chrome before any
+   content and forced the message table to scroll horizontally to show a key.
+   See DESIGN.md §5.1 for the whole argument. */
 .app-shell {
   flex: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
 
+/* A grid item now, not a flex child — so it needs `min-height: 0` as well as
+   `min-width: 0`, or the stage's own scrollport grows the row instead of
+   scrolling inside it. */
 .workspace {
-  flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -814,7 +837,11 @@ code {
   align-items: center;
   gap: var(--s-5);
   height: var(--statusbar-h);
-  padding: 0 var(--s-5) 0 var(--s-8);
+  /* It spans the whole window now. It used to stop at the sidebar's right
+     edge, which was already odd and is impossible since that column was
+     deleted — a strip that reports on the app cannot start two-thirds of the
+     way across it. */
+  padding: 0 var(--s-5) 0 var(--s-6);
   border-top: 1px solid var(--hairline);
   background: var(--bg-rail);
   font-size: var(--t-xs);
@@ -877,21 +904,26 @@ code {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   RAIL (sidebar)
+   THE RAIL — one navigator for the whole window, 254px.
+
+   Kavka shipped two: a permanent 248px "Clusters" sidebar plus a second
+   224px cluster rail inside the workspace. The Jackdaw mockup draws ONE, and
+   the fidelity audit called the second one inherited-structure drift — the
+   app had kept Ledger's shell and grafted Jackdaw's components onto it. This
+   region is the correction. DESIGN.md §5.1 describes what is here now.
+
+   It renders in two modes. ALWAYS: the brand lockup, the cluster card with
+   its switcher, "Set up → Connections", "Application → Settings" and the
+   read-only readout in the foot. PLUS, WHEN CONNECTED: the four cluster
+   groups. Nothing in the always half may depend on a connection.
    ══════════════════════════════════════════════════════════════════════ */
 
-.sidebar {
-  width: var(--rail-w);
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-rail);
-  border-right: 1px solid var(--hairline);
-}
-
-.sidebar-header { padding: var(--s-5) var(--s-5) var(--s-3); }
-
-.sidebar-title,
+/* THE SECTION EYEBROW — a general typographic utility, not shell furniture.
+   It was declared in one selector list with the sidebar's own `.sidebar-title`
+   and nearly went out with it; eight components render it (the connection
+   form's fieldset legends, the MCP and Diagnostics sections, the message
+   inspector, the transfer dialog). Micro-caps are allowed HERE, on table
+   column heads and on stat labels — nowhere else (DESIGN.md §5.3). */
 .eyebrow {
   display: block;
   font-size: var(--t-micro);
@@ -902,69 +934,285 @@ code {
   color: var(--text-tertiary);
 }
 
-.profile-list {
-  flex: 1;
-  overflow-y: auto;
-  /* 4px top so the first row's focus ring (2px + 2px offset) survives the
-     scroll well — same reason .table-scroll pads (DESIGN.md §5.3). */
-  padding: 4px var(--s-3) var(--s-3);
+.rail {
   display: flex;
   flex-direction: column;
-  gap: var(--s-1);
+  gap: var(--s-7);
+  min-height: 0;
+  /* The rail is a scrollport at small heights and large font sizes. The
+     switcher menu is `position: fixed` for exactly this reason — an
+     absolutely positioned popover in here would be clipped. */
+  overflow-y: auto;
+  padding: var(--s-6) var(--s-5) var(--s-5);
+  background: var(--bg-rail);
+  border-right: 1px solid var(--hairline);
 }
 
-.sidebar-note {
-  padding: var(--s-3) var(--s-4) var(--s-5);
+/* THE BRAND LOCKUP — the app's identity, top-left, above everything.
+   It did not exist: the top-left of the window was the micro-cap eyebrow
+   "CLUSTERS", the wordmark was a small grey word in the sidebar's footer,
+   and the bird survived only as decoration inside the Perch. That inverts
+   the identity hierarchy, and it is why the version had nowhere natural to
+   go. Both are fixed here, in one row. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex: none;
+  padding: 2px var(--s-4) 0;
+}
+
+.brand-bird {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  color: var(--accent);
+}
+
+.brand-name {
+  font-size: var(--f17);
+  font-weight: 680;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+}
+
+/* THE ONLY PLACE THE VERSION IS RENDERED outside the About dialog. It used
+   to sit in the far corner of the status bar, diagonally opposite here, on a
+   strip specced for live operational state — and a build number is not
+   operational state. As an annotation on the name it reads once and recedes. */
+.brand-ver {
+  margin-left: auto;
+  font-size: var(--f11);
+  font-variant-numeric: var(--nums-tabular);
+  color: var(--text-tertiary);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE CLUSTER CARD — which cluster you are on, and how to change it.
+
+   Prod guardrail layer 3 lives here: the name, the environment chip and the
+   bootstrap address are pinned beside every screen rather than above one of
+   them, because most production accidents are right-action-wrong-cluster.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.cluster-card {
+  flex: none;
+  padding: var(--s-5);
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+.cc-top {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cc-name {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-addr {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+/* Law 2: the dot is decoration, the sentence is the signal — and the
+   connected sentence carries the broker count, because "Connected" with no
+   number is a claim nobody can check. Tone is on the TEXT as well as the
+   dot, never on the dot alone. */
+.cc-state {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-secondary);
+}
+
+.cc-state-connected { color: var(--ok); }
+.cc-state-connecting { color: var(--warn); }
+.cc-state-disconnected { color: var(--text-tertiary); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   THE SWITCHER — trigger and menu.
+   A full-width trigger with a down-caret reads as a MENU, which is what let
+   the 248px permanent list go. The menu itself is our specification: the
+   mockup asserts the control and never draws it open.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.cc-switch {
+  margin-top: 11px;
+  width: 100%;
+  min-height: var(--hit-min);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  text-align: left;
+  font-size: var(--t-xs);
+  color: var(--text-secondary);
+  background: transparent;
+  /* Operable boundary → --border-control. SC 1.4.11 does not care that the
+     control looks quieter than the card it sits in. */
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+
+.cc-switch:hover {
+  background: var(--bg-panel-hi);
+  color: var(--text-primary);
+}
+
+.cc-caret {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.cc-switch[aria-expanded="true"] .cc-caret { transform: rotate(180deg); }
+
+/* Fixed, measured from the trigger — see ClusterSwitcher.tsx. It is a menu,
+   not a dialog: no scrim, so it takes the popover shadow and an edge strong
+   enough to separate it from a panel of the same colour underneath. */
+.cc-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-popover);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.cc-menu-scroll {
+  overflow-y: auto;
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.cc-menu-note {
+  margin: 0;
+  padding: var(--s-4) var(--s-4) var(--s-5);
   color: var(--text-secondary);
   font-size: var(--t-sm);
   line-height: var(--lh-prose);
 }
 
-.profile-row {
-  display: block;
-  width: 100%;
-  padding: var(--s-3) var(--s-4);
-  border: none;
+.cc-menu-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+/* The environment's own name, uppercased in CSS and never translated — it
+   is user data, the same string the chip, the wire label and the CLI use. */
+.cc-menu-label {
+  padding: var(--s-3) var(--s-4) var(--s-2);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* THE ROW. This is the sidebar's `.profile-row` treatment, moved rather than
+   rewritten: the tint, the 2px left border and the protected-danger ground
+   are hard-won and correct. What changed is that the row is now a CONTAINER
+   with two controls in it — the row selects, the trailing button connects —
+   because selecting a cold cluster used to swap the whole workspace for a
+   connection form. */
+.cc-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding-right: var(--s-3);
   border-left: 2px solid transparent;
   border-radius: var(--r-control);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease);
 }
 
-.profile-row:hover { background: var(--bg-row-hover); }
+.cc-menu-item:hover,
+.cc-menu-item:focus-within { background: var(--bg-row-hover); }
 
-.profile-row-selected,
-.profile-row-selected:hover {
+.cc-menu-item-selected,
+.cc-menu-item-selected:hover {
   background: var(--bg-row-selected);
   border-left-color: var(--accent);
 }
 
-/* Guardrail layer 6: a PROTECTED row stays tinted whether it is selected
-   or not, plus a 2px --danger left border. Warm-danger regardless of the
-   environment's own colour — the ground says "protected", the chip beside
-   it says which one. */
-.profile-row-protected {
+/* Guardrail layer 6: a PROTECTED row stays tinted whether it is selected or
+   not, plus a 2px --danger left border. Warm-danger regardless of the
+   environment's own colour — the ground says "protected", the chip beside it
+   says which one. */
+.cc-menu-item-protected {
   border-left-color: var(--danger);
   background: var(--danger-tint);
 }
 
-.profile-row-protected:hover { background: var(--bg-row-prod-hover); }
+.cc-menu-item-protected:hover { background: var(--bg-row-prod-hover); }
 
-.profile-row-protected.profile-row-selected {
+.cc-menu-item-protected.cc-menu-item-selected {
   background: var(--bg-row-prod-selected);
   border-left-color: var(--danger);
 }
 
-.profile-row-line {
+.cc-menu-row {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: var(--s-3) var(--s-4);
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cc-row-line {
   display: flex;
   align-items: center;
   gap: var(--s-3);
   min-width: 0;
 }
 
-.profile-name {
+/* The padlock inside a chip carries its own leading margin; on this line the
+   flex gap already separates the name, the chip and the glyph, so the margin
+   would double it. The glyph is the GLYPH channel of the protected signal
+   (§6) and it inherits the row's own text colour rather than --danger, so it
+   clears SC 1.4.11 on the warm ground without a second token to keep in
+   sync. */
+.cc-row-line > .env-lock { margin-left: 0; }
+
+.cc-row-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -974,14 +1222,9 @@ code {
   color: var(--text-primary);
 }
 
-.profile-name-draft {
-  color: var(--text-secondary);
-  font-style: italic;
-}
-
-/* Prod guardrail layer 3 — the bootstrap address is always on screen.
-   Most prod accidents are right-action-wrong-cluster. */
-.profile-meta {
+/* Prod guardrail layer 3 again, per row — and law 2: this line reads
+   "address · state" in every state, never just "address". */
+.cc-row-meta {
   display: block;
   margin-top: var(--s-1);
   overflow: hidden;
@@ -991,6 +1234,34 @@ code {
   font-size: var(--t-xs);
   line-height: var(--lh-xs);
   color: var(--text-tertiary);
+}
+
+.cc-menu-act { flex: none; }
+
+.cc-menu-foot {
+  flex: none;
+  padding: var(--s-3);
+  border-top: 1px solid var(--hairline);
+  background: var(--bg-rail);
+}
+
+.cc-menu-add {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.cc-menu-add:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
 }
 
 .status-dot {
@@ -1014,41 +1285,6 @@ code {
 .status-connected { background: var(--accent); }
 
 @keyframes pulse { 50% { opacity: 0.35; } }
-
-/* Operable boundary → --border-control, not --hairline-strong (1.18:1 on a
-   selected row). SC 1.4.11 does not care that the button looks quieter. */
-.new-connection-btn {
-  margin: 0 var(--s-3) var(--s-3);
-  padding: var(--s-3) var(--s-4);
-  min-height: var(--control-h);
-  border: 1px solid var(--border-control);
-  border-radius: var(--r-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--t-sm);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.new-connection-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-row-hover);
-}
-
-.sidebar-footer {
-  padding: var(--s-4) var(--s-5) var(--s-5);
-  border-top: 1px solid var(--hairline);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-
-.app-name {
-  font-weight: var(--w-semi);
-  font-size: var(--t-sm);
-  color: var(--text-secondary);
-}
 
 /* Operable, so it may not be smaller than --hit-min (SC 2.5.8). */
 .support-link {
@@ -1510,6 +1746,17 @@ code {
    control with no reason. */
 .btn:disabled { opacity: 0.45; cursor: default; }
 
+/* THE SAME LOOK FOR THE ARIA FORM OF THE STATE. A button that lives inside a
+   roving-focus widget — the switcher menu's Connect/Disconnect is the only one
+   today — cannot use the `disabled` attribute, because a disabled button is not
+   focusable and Arrow navigation would dead-end on it. It carries
+   `aria-disabled` instead, and this pair keeps the appearance honest: the same
+   dimming, and a hover that does not light up under a press that will do
+   nothing. Same specificity as `.btn:hover:not(:disabled)` above and later in
+   the file, so the hover reset wins. */
+.btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.btn[aria-disabled="true"]:hover { background: var(--bg-panel); }
+
 .btn-primary {
   background: var(--brass-fill);
   border-color: var(--brass-fill);
@@ -1575,13 +1822,26 @@ code {
 
 /* Loading keeps the label and reserves a fixed 16px leading slot, so the
    button never resizes mid-click and shifts everything after it. */
-.btn-busy-slot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  flex: 0 0 16px;
+/* THE SMALL BUTTON — the mockup's `.btn-sm`, for a control that sits INSIDE
+   a row rather than under a panel: the switcher menu's Connect/Disconnect,
+   and (Phase B/C) the attention list's "Open in Monitoring" and the message
+   inspector's ↑/↓. It shrinks the height to the SC 2.5.8 floor and no
+   further — 24px is the smallest anything operable is allowed to be, so
+   there is no `.btn-xs` and there must never be one. */
+.btn-sm {
+  height: var(--hit-min);
+  padding: 0 var(--s-4);
+  font-size: var(--t-sm);
 }
+
+/* `.btn-busy-slot` was here: a permanently rendered 16px box that reserved
+   room for a spinner so a button could not resize mid-click. It bought that
+   at the cost of an EMPTY box on every idle button — which is what the field
+   report saw as "an icon blending into the background", and what pushed every
+   busy-capable label off centre. `.btn-swap` in styles/jackdaw-shell.css does
+   the same job by construction (two faces, one grid cell, the wider one sizes
+   it) with nothing to show when idle. All 33 call sites are converted; the
+   rule is deleted so nobody can re-adopt it. */
 
 .spinner {
   width: 11px; height: 11px;
@@ -1693,43 +1953,13 @@ code {
   gap: var(--s-6);
 }
 
-.view-header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
-
-.view-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-5);
-}
-
-.view-title-id {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  min-width: 0;
-}
-
-.view-title {
-  margin: 0;
-  font-size: var(--t-lg);
-  line-height: var(--lh-lg);
-  font-weight: var(--w-semi);
-  letter-spacing: var(--track-tight);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.view-subtitle {
-  color: var(--text-secondary);
-  font-size: var(--t-sm);
-  line-height: var(--lh-prose);
-  max-width: var(--measure);
-}
+/* `.view-header` / `.view-title-row` / `.view-title-id` / `.view-title` /
+   `.view-subtitle` used to live here: the per-screen header each view drew
+   for itself. `StageHead` replaced all five in the shell alignment — one
+   head, drawn once, from a registry that makes a headless screen a compile
+   error — so they were deleted rather than left as a second way to draw the
+   same thing. `.view-address` survives because ConnectTab still renders a
+   worker address in that treatment. */
 
 .view-address {
   font-family: var(--font-mono);
@@ -2015,21 +2245,9 @@ select option:disabled { color: var(--text-disabled); }
   font-weight: var(--w-medium);
 }
 
-.editor-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-5);
-  padding-top: var(--s-6);
-  border-top: 1px solid var(--hairline);
-}
-
-.editor-actions-left,
-.editor-actions-right {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-}
+/* `.editor-actions` and its two halves used to sit here — the connection
+   editor's own action row. The `.panel-foot` action bar replaced it (audit
+   D3), so the old rule is gone rather than kept as a rival idiom. */
 
 .confirm-inline {
   display: flex;
@@ -2567,10 +2785,17 @@ select option:disabled { color: var(--text-disabled); }
 .ladder-skip   .ladder-step-glyph { color: var(--text-absent); }
 
 /* ══════════════════════════════════════════════════════════════════════
-   EMPTY STATES
+   EMPTY STATES — the WHOLE-VIEWPORT variant
    One sentence naming the situation, one naming the action, at most one
    primary action. Centred block, left-aligned text inside it. No
    illustrations, no shrug emoji.
+
+   THIS IS NOT THE ONLY ONE. `.teach` in styles/jackdaw-shell.css is the
+   IN-PANEL variant — left-aligned, horizontal, a 56px art tile and the
+   three-item what-you'd-get / how-to-switch-it-on / what-still-works list.
+   Use that one when a panel came back empty while the rest of the screen
+   is fine; use this one when the app genuinely has nothing to show (first
+   run, a failed profile read). DESIGN.md §7 has the table.
    ══════════════════════════════════════════════════════════════════════ */
 
 .empty-state {
@@ -2637,14 +2862,15 @@ select option:disabled { color: var(--text-disabled); }
    CLUSTER VIEW
    ══════════════════════════════════════════════════════════════════════ */
 
-/* The cluster workspace is a two-column grid: the grouped rail, then the
-   stage. See the JACKDAW CLUSTER RAIL section at the foot of this file
-   for the rail itself and for why the ten screens are grouped. */
+/* THE STAGE'S CONTENT COLUMN. It was a two-column grid holding a second
+   rail; the rail is shell now (DESIGN.md §5.1), so this collapses to one
+   column and inherits the width cap the grid used to carry. Settings uses
+   the same class for the same reason: it is a page of panels in the stage. */
 .cluster-view {
-  display: grid;
-  grid-template-columns: var(--nav-w) minmax(0, 1fr);
-  gap: var(--s-8);
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  min-width: 0;
   max-width: 1320px;
 }
 
@@ -2687,7 +2913,7 @@ select option:disabled { color: var(--text-disabled); }
      Forced-colors mode already preserves `transparent` and repaints every
      other border with a system colour, so the blanket rule did nothing for
      real borders and destroyed every indicator built on a transparent one:
-     it painted the idle state of the sidebar row, the tab strip, the banner
+     it painted the idle state of the switcher row, the tab strip, the banner
      shell and the ghost button in the SAME colour as their active state, so
      in Windows high contrast every row read as selected and every tab as
      current. Indicators are restated POSITIVELY below instead — a distinct
@@ -2695,8 +2921,8 @@ select option:disabled { color: var(--text-disabled); }
      stacked on one element (prod AND selected) stay tellable apart. */
 
   /* Selection — the same system colour the OS uses for selection. */
-  .profile-row-selected,
-  .profile-row-selected:hover { border-left-color: Highlight; }
+  .cc-menu-item-selected,
+  .cc-menu-item-selected:hover { border-left-color: Highlight; }
   .data-table tbody tr.row-selected .ledger-gutter { border-right-color: Highlight; }
   .palette-row-active { outline: 2px solid Highlight; outline-offset: -2px; }
   .tab-active { border-bottom-color: Highlight; }
@@ -2704,9 +2930,9 @@ select option:disabled { color: var(--text-disabled); }
   /* Protected — Mark, the same colour the wire above uses, so the guardrail
      reads as one signal. Wins over Highlight when a protected row is
      selected, because the environment matters more than the selection. */
-  .profile-row-protected,
-  .profile-row-protected:hover,
-  .profile-row-protected.profile-row-selected { border-left-color: Mark; }
+  .cc-menu-item-protected,
+  .cc-menu-item-protected:hover,
+  .cc-menu-item-protected.cc-menu-item-selected { border-left-color: Mark; }
 
   /* Severity — a banner is a condition you are in, so its shell must not
      vanish into the canvas. */
@@ -2721,6 +2947,12 @@ select option:disabled { color: var(--text-disabled); }
 
   /* The latched toggle is a switch: it has to read as ON across the room. */
   .btn-latched { outline: 2px solid Highlight; outline-offset: -3px; }
+
+  /* Forced colors greys a NATIVE :disabled control for us and knows nothing
+     about the aria form, so the one button that must stay focusable would be
+     the only dead control in the app that still looked live. GrayText is the
+     one colour this mode guarantees reads as "off". */
+  .btn[aria-disabled="true"] { color: GrayText; border-color: GrayText; }
 
   /* Forced colors flattens every fill, so the badge and the tag would be
      the same shape. The border restores the "this one is filled" reading
@@ -2883,16 +3115,9 @@ select option:disabled { color: var(--text-disabled); }
 
 .statusbar-hint:hover { color: var(--text-secondary); }
 
-/* ── Sidebar footer: About beside the support link ─────────────────── */
-
-.sidebar-footer-links {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-}
-
-/* The About control is a button (it opens a dialog, it is not a link), but
-   it has to read as the same quiet footer text as the link next to it. */
+/* A support control that is a BUTTON (it opens a dialog, it is not a link)
+   but has to read as the same quiet text as the links around it. Used by the
+   About dialog, Diagnostics, MCP, the Playground and the update banner. */
 button.support-link {
   border: 0;
   padding: 0;
@@ -2901,7 +3126,6 @@ button.support-link {
   cursor: pointer;
 }
 
-.footer-sep { color: var(--text-disabled); font-size: var(--t-sm); }
 
 /* ══════════════════════════════════════════════════════════════════════
    DIALOGS — About · Export/Import
@@ -3117,11 +3341,13 @@ select.input-invalid { border-color: var(--danger); }
 .cluster-view-full {
   height: 100%;
   max-width: none;
-  gap: var(--s-5);
-  align-items: stretch;
 }
 
 .cluster-view-full .tabpanel {
+  /* In the old grid shell the row stretched this; in a flex column the
+     height has to be claimed, or the browser's own scrollport collapses
+     to nothing while its status line reports the rows it cannot show. */
+  flex: 1;
   min-height: 0;
   gap: var(--s-5);
 }
@@ -3553,17 +3779,11 @@ select.input-invalid { border-color: var(--danger); }
   color: var(--text-tertiary);
 }
 
-/* Provenance, pinned at the bottom: what these bytes were read as, and
-   which schema said so — or plainly that none did. */
-.inspector-provenance {
-  margin: 0;
-  max-width: var(--measure);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  line-height: var(--lh-prose);
-  color: var(--text-tertiary);
-  user-select: text;
-}
+/* `.inspector-provenance` used to be here: the provenance line pinned under
+   the inspector's button row. The audit (item 19) moved it to the TOP of each
+   tabpanel with the mockup's inset treatment, and it renders as `.provenance`
+   now — so the old rule is deleted rather than left to be re-adopted by
+   accident. */
 
 /* No `.schema-chip` here. §5.6 specs a schema chip, and the inspector's
    provenance line already carries subject · version · id — the chip would
@@ -3651,10 +3871,8 @@ select.input-invalid { border-color: var(--danger); }
    under the title rather than running off the edge of the workspace. */
 .panel-head,
 .panel-tools,
-.view-title-row,
-.editor-actions,
-.editor-actions-left,
-.editor-actions-right,
+.panel-foot-row,
+.stage-actions,
 .modal-actions { flex-wrap: wrap; }
 
 /* §5.10 already says "resizable 320–60%". The dock was a flat 480px that
@@ -6153,16 +6371,125 @@ select.input-invalid { border-color: var(--danger); }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+   THE STAGE HEAD — how a screen introduces itself.
+
+   Three registers, in this order and above the Perch: WHERE YOU ARE
+   (`.whereami`), WHAT THIS IS (`.sh-title` + inline chips), WHAT YOU CAN DO
+   (`.stage-actions`, pushed right). The app had none of them — the 26px
+   title tier was absent from the entire product and screen-level buttons
+   were scattered into whichever panel head needed one.
+
+   IT SCROLLS WITH THE SCREEN, which is this file's one deliberate departure
+   from the mockup's version. There the head is a fixed band above a
+   `.stage-body` that scrolls under it; here the stage IS the scrollport
+   (`.workspace-body`), the head is the first child of `.cluster-view`, and
+   the horizontal padding is the stage's own rather than a second inset that
+   would have to agree with it. Every navigation puts the scrollport back at
+   the top (src/stage.ts), so the head is on screen on arrival — which is
+   what a fixed band buys, without a second scroll container.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.stage-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-9);
+  padding-bottom: var(--s-6);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.sh-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* The wayfinding trail. Tertiary, small, and never louder than the title it
+   introduces — it is the answer to a question the user has not asked yet. */
+.whereami {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-tertiary);
+}
+
+.wa-arrow {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+/* The 26px tier, and the only one in the app: `.empty-title` is the same
+   size for the same reason (it IS the screen when there is nothing else).
+   A flex row so an `<EnvChip>` or a LIVE badge sits on the title's baseline
+   instead of under it. */
+.sh-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  min-width: 0;
+  font-size: var(--t-xl);
+  line-height: var(--lh-xl);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+}
+
+/* One sentence. The cap is the mockup's 82ch and not `--measure` (74ch):
+   this line is a single sentence under a large title, not a paragraph. */
+.sh-sub {
+  margin: 0;
+  max-width: 82ch;
+  color: var(--text-secondary);
+  font-size: var(--t-md);
+  line-height: var(--lh-prose);
+}
+
+/* Screen-level actions. Where the tool buttons that ended up inside panel
+   heads come home; rightmost is usually the primary. */
+.stage-actions {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+/* Under about 900px the actions drop below the text rather than squeezing
+   the title into three words. Same breakpoint the rest of the stage uses. */
+@media (max-width: 900px) {
+  .stage-head {
+    flex-wrap: wrap;
+    gap: var(--s-5);
+  }
+
+  .stage-actions {
+    margin-left: 0;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
    THE PERCH — Jackdaw's signature element
    One warm note at the top of every screen. It answers two questions in
    the product's own voice: WHAT AM I LOOKING AT, and WHAT CAN KAFKA
    ACTUALLY TELL ME HERE.
 
-   It is where the honesty culture lives, so it has no dismiss control: a
-   verdict a user can switch off is a verdict the app stops being
-   accountable for. The tone token on the left edge is decoration — the
-   verdict itself is a SENTENCE and the kicker names the state in words,
-   so nothing here is carried by colour alone (Law 2).
+   The tone token on the left edge is decoration — the verdict itself is a
+   SENTENCE and the kicker names the state in words, so nothing here is
+   carried by colour alone (Law 2).
+
+   IT CAN BE HIDDEN, AND WHAT CANNOT BE HIDDEN IS THE POINT. `.perch-hide`
+   is the mockup's pill and `.perch-restore` is the button it leaves behind;
+   `.perch-oneline` is the durable middle setting (Settings → Appearance,
+   `appearance.perch`). None of the three touch a screen that is still
+   loading or holding an error — Perch.tsx forces the full form back in
+   every mode and takes the pill away while it does, because "do not tell me
+   the cluster is fine" never meant "do not tell me the numbers are
+   missing".
    See src/Perch.tsx and docs/DESIGN.md §5.12; the honesty rules that
    govern what a verdict may claim are §7.
    ══════════════════════════════════════════════════════════════════════ */
@@ -6240,72 +6567,104 @@ select.input-invalid { border-color: var(--danger); }
   gap: var(--s-4);
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   THE CLUSTER RAIL — the screen switcher
-   Ten screens, four named groups. The single biggest wayfinding change
-   from the ten equal tabs Ledger shipped: a group is NAMED AFTER THE
-   THING ITS SCREENS ARE ABOUT, so a user who does not yet know what an
-   ACL is can still find it under "Safety".
+/* THE HIDE PILL — "Hide" in the full form, "Show the whole note" in the
+   one-line one. The mockup's shape (999px, 12px, quiet) with the border
+   swapped to `--line-strong`: `--perch-line` is documented as decorative,
+   and this is something you operate, so 1.4.11 applies to its edge.
+   `min-height` is the SC 2.5.8 floor — the mockup's 4px padding on a 12px
+   line lands a pixel or two under it at the smallest font setting. */
+.perch-hide {
+  flex: none;
+  align-self: flex-start;
+  min-height: var(--hit-min);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--perch-ink);
+  font: inherit;
+  font-size: var(--t-sm);
+  line-height: var(--lh-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
 
-   FULL COVERAGE IS A CONTRACT. Every screen reachable before this
-   redesign is reachable here — the mockup's four-item rail left ACLs,
-   Connect, Masking and Streams homeless, and that was an execution gap
-   in a static drawing, not the bet.
+.perch-hide:hover {
+  /* A wash rather than a token: the perch ground is the one surface in the
+     app that is not on the neutral ladder, so `--bg-panel-hi` would read as
+     a different material sitting on it. */
+  background: color-mix(in srgb, var(--perch-ink) 12%, transparent);
+}
+
+/* What Hide leaves behind. Never full-width — it is a small door back into
+   something the user just closed, not a banner. */
+.perch-restore {
+  align-self: flex-start;
+  margin-right: auto;
+}
+
+/* ONE-LINE MODE. The kicker and the verdict on a single row, the caveat
+   dropped (Perch.tsx drops it, not this rule — a display:none caveat would
+   still be in the accessibility tree and would still be "shown" to the one
+   user least able to notice it was truncated). */
+.perch-oneline {
+  align-items: center;
+  padding: var(--s-4) var(--s-6);
+}
+
+.perch-oneline .perch-bird {
+  width: 20px;
+  height: 20px;
+  margin-top: 0;
+}
+
+.perch-oneline .perch-body {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--s-5);
+}
+
+.perch-oneline .perch-kicker {
+  flex: none;
+}
+
+/* The one place in the app that truncates a sentence. It is allowed here
+   because the control that restores it is in the same row, and because the
+   user asked for one line. */
+.perch-oneline .perch-verdict {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.perch-oneline .perch-hide,
+.perch-oneline .perch-actions {
+  align-self: center;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RAIL GROUPS AND ITEMS — the screens themselves.
+
+   Ten cluster screens in four named groups, plus the two app-level groups
+   the shell always draws (Set up, Application). A group is NAMED AFTER THE
+   THING ITS SCREENS ARE ABOUT, so a user who does not yet know what an ACL
+   is can still find it under "Safety". That is the single biggest wayfinding
+   change from the ten equal tabs Ledger shipped.
+
+   FULL COVERAGE IS A CONTRACT. Every screen reachable before this redesign
+   is reachable here — the mockup's four-item rail left ACLs, Connect,
+   Masking and Streams homeless, and that was an execution gap in a static
+   drawing, not the bet (DESIGN.md §11).
 
    NOT role="tablist": a tablist may not contain group headings, and the
    headings are the entire point. <nav> plus aria-current="page" says the
    same thing without inventing invalid ARIA.
+
+   The `crail-` prefix is historical — these rules were written when the
+   cluster rail was a second navigator inside the workspace. There is one
+   rail now (see THE RAIL above) and these are its groups.
    ══════════════════════════════════════════════════════════════════════ */
-
-.crail {
-  position: sticky;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-6);
-  min-width: 0;
-}
-
-/* Prod guardrail layer 3, moved into the rail: name, environment chip and
-   bootstrap address stay on screen whatever the stage is showing. */
-.crail-id {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-  padding: var(--s-5);
-  background: var(--bg-panel);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1);
-}
-
-.crail-id-line {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  flex-wrap: wrap;
-}
-
-.crail-name {
-  margin: 0;
-  font-size: var(--t-md);
-  line-height: var(--lh-md);
-  font-weight: var(--w-semi);
-  letter-spacing: var(--track-tight);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.crail-address {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  line-height: var(--lh-xs);
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  user-select: text;
-}
 
 .crail-group {
   display: flex;
@@ -6390,23 +6749,67 @@ select.input-invalid { border-color: var(--danger); }
   font-variant-numeric: var(--nums-tabular);
 }
 
+/* THE RAIL FOOT — the app's only always-visible safety state.
+
+   It used to hold a bare Disconnect button. Disconnect is now the trailing
+   action on the cluster's own row in the switcher menu, which frees the foot
+   for the thing the mockup put here: read-only, stated in BOTH directions,
+   with the consequence attached. The app only ever spoke in the safe
+   direction — a chip when read-only was ON and silence when it was off — so
+   a user who wanted to confirm that Kavka *cannot* delete here had nothing
+   to read. `margin-top: auto` pins it to the bottom of the rail. */
 .crail-foot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-4);
-  padding-top: var(--s-5);
+  margin-top: auto;
+  flex: none;
+  padding: var(--s-5) var(--s-4) 2px;
   border-top: 1px solid var(--hairline);
+  font-size: var(--t-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-tertiary);
+}
+
+.crail-foot .rf-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.rf-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+/* The state word, not a colour: this is the half of the sentence that
+   changes, so it carries the weight and the brighter ink. */
+.rf-state {
+  font-weight: var(--w-semi);
+  color: var(--text-secondary);
+}
+
+.rf-why {
+  margin: 5px 0 0;
+  line-height: var(--lh-prose);
 }
 
 /* Below this the rail stops being a column beside the stage and becomes a
-   band above it: 224px of rail plus a usable stage needs roughly 900px,
-   and a squeezed rail is worse than a wrapped one. */
+   band above it: 254px of rail plus a usable stage needs roughly 900px, and
+   a squeezed rail is worse than a wrapped one. It caps at 45vh so a window
+   short enough to trigger this still shows some stage. */
 @media (max-width: 900px) {
-  .cluster-view { grid-template-columns: minmax(0, 1fr); }
-  .crail { position: static; }
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .rail {
+    max-height: 45vh;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+  }
   .crail-group { flex-direction: row; flex-wrap: wrap; }
   .crail-label { width: 100%; margin-left: 0; }
   .crail-item { width: auto; }
+  .crail-foot { margin-top: var(--s-4); }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -6415,10 +6818,6 @@ select.input-invalid { border-color: var(--danger); }
    INSTANTLY and persists; there is no Save button, because a preference
    you have to commit is a preference you cannot preview.
    ══════════════════════════════════════════════════════════════════════ */
-
-/* Settings borrows the workspace grid and drops the rail column: it is an
-   app-level surface and no cluster rail sits beside it. */
-.cluster-view-solo { grid-template-columns: minmax(0, 1fr); }
 
 .settings {
   display: grid;
@@ -6674,7 +7073,8 @@ select.input-invalid { border-color: var(--danger); }
      hairline becomes the whole of the grouping, so it has to be a real
      system colour rather than an inherited one. */
   .panel,
-  .crail-id { border-color: CanvasText; }
+  .cluster-card,
+  .cc-menu { border-color: CanvasText; }
 
   /* Segmented controls and the accent picker: the checked arm was a fill.
      Same treatment, same reason — and the swatch's accessible name already

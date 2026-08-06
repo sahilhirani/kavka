@@ -406,15 +406,18 @@ export default function CreateTopicModal({
           </button>
           <button
             type="submit"
-            className={`btn ${isProtected ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${isProtected ? "btn-danger" : "btn-primary"} btn-swap`}
             disabled={busy}
             aria-busy={busy || undefined}
             title={busy ? "Kavka is creating the topic" : undefined}
           >
-            <span className="btn-busy-slot" aria-hidden="true">
-              {busy ? <span className="spinner" /> : null}
+            <span className="btn-swap-face">
+              Create topic
             </span>
-            Create topic
+            <span className="btn-swap-face btn-swap-busy">
+              <span className="spinner" aria-hidden="true" />
+              Create topic
+            </span>
           </button>
         </div>
       </form>

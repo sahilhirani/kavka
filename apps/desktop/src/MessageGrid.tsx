@@ -92,6 +92,13 @@ export interface MessageGridHandle {
   scrollToTop(): void;
   /** Catch up with a stream, and re-pin to it. */
   scrollToNewest(): void;
+  /**
+   * Move the selection by `delta` rows and scroll it into view — the pointer's
+   * way of doing what `j`/`k` do. It runs the SAME `moveTo` those keys run, so
+   * the inspector's ↑/↓ buttons cannot drift from the keyboard contract: one
+   * clamp, one scroll-into-view, one re-window, one `aria-activedescendant`.
+   */
+  step(delta: number): void;
   /** After a layout change the scrollport did not cause itself. */
   remeasure(): void;
 }
@@ -179,28 +186,6 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
     );
     const selected = selectedIndex >= 0 ? records[selectedIndex] : null;
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        scrollToTop() {
-          const el = scrollRef.current;
-          if (!el) return;
-          el.scrollTop = 0;
-          setPinned(false);
-          onScroll();
-        },
-        scrollToNewest() {
-          const el = scrollRef.current;
-          if (!el) return;
-          el.scrollTop = el.scrollHeight;
-          setPinned(true);
-          remeasure();
-        },
-        remeasure,
-      }),
-      [onScroll, remeasure, setPinned],
-    );
-
     // Pinned-to-bottom, and only while following: a fetched range must not
     // scroll itself away from the row the user is reading.
     useLayoutEffect(() => {
@@ -244,6 +229,49 @@ const MessageGrid = forwardRef<MessageGridHandle, MessageGridProps>(
         setPinned(isPinnedToBottom(scrollRef.current));
       },
       [records, win, onScroll, onSelect, setPinned],
+    );
+
+    /**
+     * Declared HERE and not at the top of the component because `step` has to
+     * close over `moveTo`, and a dependency array naming a `const` above its
+     * own declaration is a temporal-dead-zone throw on the first render rather
+     * than a lint complaint.
+     */
+    useImperativeHandle(
+      ref,
+      () => ({
+        scrollToTop() {
+          const el = scrollRef.current;
+          if (!el) return;
+          el.scrollTop = 0;
+          setPinned(false);
+          onScroll();
+        },
+        scrollToNewest() {
+          const el = scrollRef.current;
+          if (!el) return;
+          el.scrollTop = el.scrollHeight;
+          setPinned(true);
+          remeasure();
+        },
+        step(delta: number) {
+          if (records.length === 0) return;
+          // From nothing selected, a step lands on the first row in view
+          // rather than on row 0 — the same answer `j` gives, because the two
+          // controls have to agree about where "next" starts.
+          moveTo(selectedIndex < 0 ? win.start : selectedIndex + delta);
+        },
+        remeasure,
+      }),
+      [
+        onScroll,
+        remeasure,
+        setPinned,
+        moveTo,
+        records.length,
+        selectedIndex,
+        win.start,
+      ],
     );
 
     const onKeyDown = useCallback(

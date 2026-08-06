@@ -32,36 +32,187 @@
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ══════════════════════════════════════════════════════════════════════════
-   THE PROFILE EDITOR — the front door
+   THE CONNECTIONS SCREEN — list + editor, and a guided ladder
 
-   Ledger rendered this as one column: view header, then thirty controls,
-   then the buttons. Everything a user needed to *not* fill in looked
-   exactly like everything they did. Jackdaw's landmark 1 is the answer —
-   each section is a surface with an edge, and the three sections most
-   connections leave empty are folded.
+   PHASE D OF THE FIDELITY ALIGNMENT. What shipped after the Jackdaw sweep
+   was a lone 74ch form floating in a 1300px stage with ~400px of dead
+   canvas beside it, because the enumeration of saved clusters lived in a
+   permanent 248px sidebar that Phase A deleted. The mockup draws this
+   screen as a `.row-gap` split — a fixed 330px "Saved clusters" panel next
+   to a `flex:1` editor whose body is a SIX-STEP numbered ladder — and that
+   is what this region builds.
+
+   WHY THE LADDER AND NOT THE THREE FIELDSETS. The fieldsets kept every word
+   of help text and lost the thing the help text was for: a sense that this
+   is a short, ordered conversation with an end. Six numbered questions
+   phrased the way a person would ask them ("Where does it live?") is the
+   mockup's whole editorial bet on the front door, and the connector line
+   between the numerals is what makes it read as a sequence rather than as
+   six more boxes.
+
+   NOTHING WAS DELETED TO GET HERE. Every hint, every plain-English sign-in
+   option, the environment segment, the Schema Registry fold and the
+   read-only guardrail row are the same strings in the same order; what
+   changed is the container and the question above each one.
    ══════════════════════════════════════════════════════════════════════════ */
 
-/* --stack, not --s-6: the gap between panels is a density token, so
-   Comfortable and Compact change the form's rhythm and nothing else. */
-.editor {
+/* The screen's own column, so the head, the Perch and the split share one
+   left edge and one measure with every cluster screen (`.cluster-view`). */
+.conn-screen {
+  display: flex;
+  flex-direction: column;
   gap: var(--stack);
+  min-width: 0;
+  max-width: 1320px;
 }
 
-/* Every direct-child fieldset is a panel. Scoped to `>` on purpose: the
-   import dialog's strategy fieldset and the environment manager's live
-   inside modals, where a raised surface on a raised surface is a step
-   nobody can see.
+/* The mockup's `.row-gap`: two panels, top-aligned, one gap. `flex-start`
+   matters — a 330px list next to a form six screens tall must not stretch
+   to the form's height and hang a metre of empty panel under its last row. */
+.conn-split {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--stack);
+  min-width: 0;
+}
 
-   This rule is why WasmSerdesFields — which this sweep does not own and did
-   not edit — arrives dressed correctly: it renders `.fieldset` as a direct
-   child of `.editor`, so it inherits Jackdaw for free. */
-.editor > .fieldset,
-.editor > .fold {
-  padding: var(--pad-panel);
+/* 330px is the mockup's own figure and it is not arbitrary: it is the width
+   at which `broker-1.internal:9093` stops truncating beside a status word. */
+.plist-panel {
+  width: 330px;
+  flex: none;
+  /* `.panel`'s 12px inter-child gap is for stacked blocks; here the head's
+     hairline, the first row and the foot's hairline are meant to touch — the
+     mockup's `.panel-body.tight`. */
+  gap: 0;
+}
+
+/* THE EDITOR IS NOW A PANEL AND NO LONGER 74ch WIDE.
+   `--measure` capped it because it was alone on the canvas and a 1300px
+   form is unreadable. Sharing the row with the list is what repeals that:
+   the column is ~900px at full window, the steps cap their own prose at
+   74ch, and the inputs cap themselves. */
+.editor {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  gap: 0;
+  padding: 0;
   background: var(--bg-panel);
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-1);
+}
+
+/* Under ~1100px of stage the list stops being a column and becomes a band
+   above the editor. It keeps its rows and its foot; it just stops costing
+   a third of the width on a laptop. */
+@media (max-width: 1100px) {
+  .conn-split {
+    flex-direction: column;
+  }
+
+  .plist-panel {
+    width: 100%;
+  }
+
+  .editor {
+    width: 100%;
+  }
+}
+
+/* ── The saved-clusters list ────────────────────────────────────────────
+   THE ROWS ARE THE SWITCHER'S ROWS. `.cc-menu-item` / `.cc-menu-row` /
+   `.cc-row-*` are reused verbatim rather than reimplemented as the
+   mockup's `.plist button`, because the tint, the selected border and the
+   protected-danger ground are one hard-won treatment and this screen and
+   the switcher menu must never disagree about what protected looks like.
+   What changes here is only the CONTAINER: full-bleed rows with hairlines
+   between them, instead of floating pills in a popover.                  */
+
+.plist {
+  /* Full-bleed to the panel's edges — the mockup's `.panel-body.tight`. */
+  margin: 0 calc(var(--pad-panel) * -1);
+  display: flex;
+  flex-direction: column;
+}
+
+.plist .cc-menu-item {
+  border-radius: 0;
+  padding-right: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.plist .cc-menu-item:last-child {
+  border-bottom: 0;
+}
+
+.plist .cc-menu-row {
+  padding: var(--s-4) var(--pad-panel);
+}
+
+/* The row that is not a cluster yet: an unsaved draft, so the list still
+   answers "where am I" while the editor holds a blank form. */
+.plist .cc-menu-item-draft .cc-row-name {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+/* The draft row is not a control — it is already the row you are on, and
+   there is nowhere for a click to go. It borrows the row's layout and none
+   of its affordance. */
+.plist .cc-menu-item-draft .cc-menu-row {
+  cursor: default;
+}
+
+.plist-empty {
+  margin: 0;
+  padding: var(--s-5) 0;
+  color: var(--text-secondary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+/* ── The editor panel's head and foot ───────────────────────────────────  */
+
+/* `.panel-head` full-bleeds itself out of `--pad-panel`; this panel has no
+   padding of its own (the body supplies it), so the bleed is cancelled. */
+.editor > .panel-head {
+  margin: 0;
+  padding: var(--s-5) var(--pad-panel);
+}
+
+/* "Not saved yet" and friends: what the panel head can honestly say about
+   this record on the right. It is NOT the mockup's "Saved 4 August, 14:19"
+   — a connection profile carries no saved-at timestamp, and inventing one
+   is exactly the sort of drawn number this product does not print. */
+.ph-right {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+}
+
+.editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  padding: var(--pad-panel);
+}
+
+/* The three optional sections that are not steps — Connect, Monitoring and
+   the custom decoders — keep the fold dress they had, sunken against the
+   panel they now sit inside rather than raised on the canvas. */
+.editor-body > .fold,
+.editor-body > .fieldset {
+  padding: 0;
+  background: var(--bg-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+}
+
+.editor-body > .fieldset {
+  padding: var(--pad-panel);
 }
 
 /* THE FLOAT IS LOAD-BEARING, NOT A HACK.
@@ -70,28 +221,241 @@
    a notch out of the fieldset's top border and is positioned against the
    border box rather than the padding box. `.fieldset` shipped with
    `border: 0`, so neither mattered; the rule above gives it a border, and
-   without this the panel would have a gap punched through its top edge and
+   without this the block would have a gap punched through its top edge and
    a heading sitting outside its own padding.
    Setting `float: left` fails the rendered-legend test, so the legend is
    laid out as an ordinary child. Floats are ignored on flex items — and
    `.fieldset` is `display: flex` — so nothing actually floats. */
-.editor > .fieldset > legend {
+.editor-body > .fieldset > legend {
   float: left;
   width: 100%;
   padding: 0;
   margin: 0 0 var(--s-5);
 }
 
-/* The last panel before the actions still needs air under it; `.editor`'s
-   own gap handles the rest. */
-.editor > .fieldset:last-of-type {
-  margin-bottom: 0;
+/* Kafka Connect repeats its block N times inside a fold. One step further
+   down than the fold it sits in, so the rows read as items rather than as
+   more folds. */
+.editor .connect-cluster {
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  padding: var(--s-5);
 }
 
-/* Kafka Connect repeats its block N times inside a fold. Sunken, so the
-   rows read as items ON the panel rather than as more panels. */
-.editor .connect-cluster {
+/* THE ACTION BAR. Two rows, and the split is deliberate: Delete is on the
+   second one because a destructive button beside the primary is a
+   destructive button somebody eventually hits instead of it. */
+/* `.panel-foot` full-bleeds itself out of `--pad-panel` with a negative
+   margin, which is right on a `.panel` that has padding and WRONG here: this
+   panel's padding lives on `.editor-body`, so an uncancelled bleed would hang
+   the action bar 20px outside the form's own border. */
+.editor-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  margin: 0;
+  padding: var(--s-5) var(--pad-panel);
+  color: inherit;
+}
+
+.editor-foot-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+/* Where the mockup puts "● Last connected 2 minutes ago · 1 broker answered
+   in 41 ms". Kavka does not keep a last-connected time, so this says what it
+   actually knows — the live state of THIS session — and says it in a word
+   beside the dot, never in the dot alone (law 2). */
+.editor-state {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.editor-foot .editor-kbd-hint {
+  margin-left: auto;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE GUIDED STEP LADDER
+
+   34px numeral column, 15px gutter, a hairline connector running from each
+   numeral to the next. The numbers are decoration for assistive tech — the
+   question is the control's label, and an `<ol>` already says "1 of 6".
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 0 var(--s-5);
+}
+
+.step-n {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-control);
   background: var(--bg-sunken);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  font-size: var(--t-sm);
+  font-weight: var(--w-bold);
+  font-variant-numeric: var(--nums-tabular);
+}
+
+/* The connector. Column 1 of the row BELOW each numeral, so the line grows
+   with the step's content instead of being a fixed height that guesses. */
+.step-line {
+  grid-column: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.step-line::before {
+  content: "";
+  width: 1px;
+  min-height: 14px;
+  margin: var(--s-3) 0;
+  background: var(--hairline-strong);
+}
+
+/* The question, in the words a user would use. 17px/640 — one tier under
+   the panel title and one over the body, which is what makes six of them
+   scannable in a column. */
+.step-q {
+  display: block;
+  padding-top: 2px;
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+  color: var(--text-primary);
+}
+
+/* WHY YOU ARE BEING ASKED. This is the app's existing field hint, promoted
+   above the control instead of trailing under it — the rationale belongs
+   with the question, not with the answer. Capped at the prose measure. */
+.step-why {
+  display: block;
+  margin-top: var(--s-1);
+  max-width: var(--measure);
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.step-why code {
+  color: var(--text-secondary);
+}
+
+/* "(optional)" beside a question. It is part of the question — a step you
+   can skip has to say so where you read the question, not three lines down
+   in the rationale. */
+.step-q-optional {
+  font-weight: var(--w-normal);
+  font-size: var(--t-sm);
+  color: var(--text-tertiary);
+}
+
+.step-ctl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin-top: var(--s-5);
+  padding-bottom: var(--s-2);
+}
+
+.steps > .step:last-child .step-ctl {
+  padding-bottom: 0;
+}
+
+/* A fold used as a step's control is inline furniture, not a section of the
+   form: no shadow, and it takes the sunken ground so it reads as something
+   pressed into the step rather than another panel. */
+.step-ctl > .fold {
+  max-width: 62ch;
+}
+
+.step-ctl > .fold > .fold-summary {
+  padding: var(--s-4) var(--s-5);
+}
+
+.step-ctl > .fold .fold-body {
+  padding: 0 var(--s-5) var(--s-5);
+}
+
+/* A step whose control is a GROUP of fields keeps the grouping semantics the
+   old `<fieldset>` gave it; the legend is only visually redundant with the
+   question, so it is hidden rather than removed. */
+.step-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE BUSY BUTTON — the Connect-button glitch, fixed at the cause
+
+   WHAT THE OWNER SAW. `.btn-busy-slot` (styles.css) is a 16px flex box that
+   was rendered UNCONDITIONALLY inside the Connect button and left EMPTY
+   until a connection was in flight. `.btn` adds its own 6px gap after it, so
+   an idle Connect button was 22px wider than its label and carried a blank
+   square exactly where an icon would be, with the label pushed to 34px from
+   the left edge and 12px from the right. That lopsided void is the "weird UI
+   expansion" and the "icon blending into the background".
+
+   WHY NOT JUST HIDE IT. The slot exists to stop the button resizing under
+   the cursor mid-click, and `:empty { display: none }` reintroduces exactly
+   the jump it was written to prevent.
+
+   THE FIX. Both faces of the button — the label, and the spinner-plus-label
+   — occupy the SAME grid cell. The cell is sized by the wider of the two, so
+   the button's width is fixed by construction and cannot change when the
+   spinner appears; the inactive face is `visibility: hidden`, which keeps
+   its layout and removes it from the accessibility tree. Idle, there is no
+   empty box and the label is centred like every other button in the app.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.btn-swap {
+  display: inline-grid;
+  align-items: center;
+  justify-items: center;
+}
+
+.btn-swap-face {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  white-space: nowrap;
+}
+
+.btn-swap[aria-busy="true"] > .btn-swap-face:not(.btn-swap-busy),
+.btn-swap:not([aria-busy="true"]) > .btn-swap-busy {
+  visibility: hidden;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -123,7 +487,7 @@
 
 /* The panel dress adds its own padding, so the summary supplies the rest of
    the inset itself and the fold's own padding is zeroed. */
-.editor > .fold {
+.editor-body > .fold {
   padding: 0;
 }
 
@@ -414,5 +778,391 @@
   /* The gates' left edge is meaning, not decoration. */
   .mcp-gates {
     border-left-color: Mark;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FIDELITY ALIGNMENT — HOME, SETTINGS AND THE SHARED DIALOGS
+   Appended by the home/settings/dialogs alignment agent. Everything below
+   this line belongs to the fidelity-audit alignment pass rather than to the
+   original Jackdaw sweep; the two are kept apart so either can be read on
+   its own.
+
+   Three regions, in the order a reader meets them:
+     1. `.att` — the "Needs a look" row (audit item 15).
+     2. `.home-split` / `.home-clusterid` — Cluster home's body order.
+     3. Settings' environment row, and the shared panel furniture the
+        component sampler needed.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ══ THE ATTENTION ROW ════════════════════════════════════════════════════
+   The mockup's `.att`: a round tone icon, a two-line body, and the deep link
+   to where the fix is. It is a LIST, because it has a length that matters —
+   "1 thing" and "4 things" are different mornings — so a screen reader
+   announcing "list, 4 items" here is describing something the user can act
+   on rather than furniture.
+
+   Full-bleed, like every other row idiom in a panel: the dividers have to
+   reach the panel's own edge or the list reads as a box inside a box.     */
+.att-list {
+  margin: 0 calc(var(--pad-panel) * -1);
+  padding: 0;
+  list-style: none;
+}
+
+.att {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-5);
+  margin: 0 calc(var(--pad-panel) * -1);
+  padding: var(--s-5) var(--pad-panel);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Inside `.att-list` the rows are already bled by their parent. */
+.att-list > .att { margin: 0; }
+
+.att:last-child { border-bottom: 0; }
+
+/* The clear state is a row of the same shape, not a different component: the
+   panel keeps its rhythm whether there is one thing wrong or none, so
+   "nothing needs a look" reads as an ANSWER rather than as an absence. */
+.att-clear { border-bottom: 0; }
+
+/* 30px, matching the mockup. The tint is the tone; the row's own words are
+   the signal (Law 2), which is why the glyph is aria-hidden. */
+.att-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.att-icon svg { width: 16px; height: 16px; }
+
+.att-icon-warn   { background: var(--warn-tint);   color: var(--warn); }
+.att-icon-danger { background: var(--danger-tint); color: var(--danger); }
+.att-icon-ok     { background: var(--ok-tint);     color: var(--ok); }
+
+.att-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.att-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-base);
+  font-weight: var(--w-semi);
+  overflow-wrap: anywhere;
+}
+
+.att-sub {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+}
+
+.att-act {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--s-4);
+}
+
+/* The degraded form of the deep link — see HomeSections' `onOpenScreen`. A
+   sentence naming the screen, never a button that cannot navigate. */
+.att-where {
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  white-space: nowrap;
+}
+
+/* ══ CLUSTER HOME ═════════════════════════════════════════════════════════ */
+
+/* Brokers beside the quorum. `flex-wrap` and a real min-width rather than the
+   mockup's fixed 400px column: the quorum panel carries a replica table the
+   mockup never drew, and a hard 400px turns it into a horizontal scroll well
+   on the one screen you open when something is wrong. */
+.home-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--stack);
+  align-items: flex-start;
+}
+
+.home-split-main {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.home-split-side {
+  flex: 1 1 360px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+}
+
+/* The cluster's own identifier, under the tiles and outside them: a literal
+   Kafka handed over rather than a quantity Kavka counted, so it is mono and
+   it is not a card. Same reasoning as `.stat-value-mono`, one tier quieter. */
+.home-clusterid {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  margin: 0;
+}
+
+.home-clusterid-label {
+  color: var(--text-tertiary);
+  font-size: var(--t-micro);
+  line-height: var(--lh-micro);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.home-clusterid-value {
+  color: var(--text-mono);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ══ SHARED PANEL FURNITURE ═══════════════════════════════════════════════ */
+
+/* The mockup's `.ph-right` note — a provenance line in the panel head, at the
+   far end of its `space-between`. It is where a panel says what its rows are
+   a list OF, which is the sentence that makes a triage list safe to render. */
+.panel-head-note {
+  flex: none;
+  max-width: 42ch;
+  color: var(--text-tertiary);
+  font-size: var(--t-sm);
+  line-height: var(--lh-prose);
+  text-align: right;
+}
+
+/* A foot that carries CONTROLS rather than a sentence. The base `.panel-foot`
+   is a paragraph; this is the sampler / action-bar variant, and it is a
+   modifier rather than a change to the base so every caveat foot in the
+   product keeps its measure. */
+.panel-foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.panel-foot-tail { margin-left: auto; }
+
+/* ══ SETTINGS ═════════════════════════════════════════════════════════════ */
+
+/* Environment colours: the live chips, then the door to the manager. Wraps
+   rather than clipping — an organisation with eight environments is exactly
+   the one this row exists to reassure. */
+.settings-env-ctl {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+.settings-env-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+/* ══ THE PADLOCK ══════════════════════════════════════════════════════════ */
+
+/* Production is signalled three ways or it is signalled twice (DESIGN.md §6):
+   the warm ground, this glyph, and the word beside it. Sized to the chip's
+   own text and inheriting its colour, so it is legible on the filled
+   protected badge in both themes. */
+.env-lock {
+  width: 11px;
+  height: 11px;
+  margin-left: var(--s-2);
+  flex: none;
+  vertical-align: -1px;
+}
+
+/* ══ NARROW ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+  /* The deep link drops under the row's text rather than squeezing the
+     sentence it is about into two words per line. */
+  .att { flex-wrap: wrap; }
+
+  .att-act {
+    margin-left: 0;
+    padding-left: calc(30px + var(--s-5));
+  }
+
+  /* A right-aligned note in a narrow head reads as a second column that is
+     not there. */
+  .panel-head-note {
+    max-width: none;
+    text-align: left;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FORCED COLORS — the alignment pass's own indicators
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@media (forced-colors: active) {
+  /* Every tint above is discarded, so the attention icons would collapse to
+     one shape in one colour. The tone is restated positively — one system
+     colour per meaning — and the row's words carry it regardless. */
+  .att-icon-warn,
+  .att-icon-danger {
+    border: 1px solid Mark;
+    color: Mark;
+  }
+
+  .att-icon-ok {
+    border: 1px solid CanvasText;
+    color: CanvasText;
+  }
+
+  /* The row dividers are meaning here — they separate one problem from the
+     next — and a hairline built from a custom property does not survive. */
+  .att { border-bottom-color: CanvasText; }
+}
+
+/* ══ THE TEACHING EMPTY STATE — the mockup's in-panel `.empty` ═════════
+   Audit item 23 asked for the variant an empty state takes INSIDE a panel,
+   where the data would have been — left-aligned, horizontal, a 56px art
+   tile, the cause stated as a full sentence, the mechanism, and a
+   three-item list answering what-you'd-get / how-to-switch-it-on /
+   what-still-works-without-it. `.empty-state` in styles.css is the OTHER
+   variant and stays: centred, whole-viewport, for genuine first run.
+
+   IT LIVES IN THE SHELL SHEET, NOT IN A SCREEN'S. It was written in
+   styles/jackdaw-ops.css beside Monitoring, which is the screen that
+   needed it first; Connect adopted it immediately and every panel that can
+   come back empty wants it. An idiom two screens share is shell furniture,
+   and leaving it in a screen-scoped file is how the next screen forks it
+   instead of reusing it.                                               */
+/* ── The teaching empty state ─────────────────────────────────────────
+   Not "no data": what you would get, how to switch it on, and what does
+   NOT depend on it. Kavka would rather show nothing than draw a line it
+   made up, and this is the shape that sentence takes on screen. */
+.teach {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-7);
+}
+
+.teach-art {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+}
+
+.teach-art svg { width: 26px; height: 26px; }
+
+.teach-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.teach-title {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-primary);
+  font-size: var(--t-md);
+  line-height: var(--lh-md);
+  font-weight: var(--w-semi);
+  letter-spacing: var(--track-tight);
+}
+
+.teach-text {
+  margin: 0;
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.teach-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  max-width: var(--measure);
+  color: var(--text-secondary);
+  font-size: var(--t-base);
+  line-height: var(--lh-prose);
+}
+
+.teach-list li {
+  display: flex;
+  gap: var(--s-4);
+}
+
+/* An em dash, not a bullet glyph: the list is three sentences, not three
+   options. Decorative, so it is hidden from the accessibility tree. */
+.teach-list li::before {
+  content: "—";
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.teach-list code,
+.teach-text code {
+  color: var(--text-mono);
+  background: var(--bg-sunken);
+  padding: 1px 4px;
+  border-radius: var(--r-control);
+}
+
+/* The mockup's `.empty-acts`: the cheap retry, then the real fix. It sits
+   inside `.teach-body`'s own column gap, so it needs no top margin of its
+   own — one source of vertical rhythm per stack. */
+.teach-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+}
+
+/* Under the rail's own wrap point the art tile stops being a column beside
+   the words and becomes a mark above them: at that width a 56px gutter plus
+   a 32px gap costs the sentence a third of its measure. */
+@media (max-width: 900px) {
+  .teach {
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+}
+
+/* Forced colours drops every tint and every shadow, so the tile that was
+   telling itself apart by ground alone has to say so with an edge. Restated
+   here rather than in jackdaw-ops.css: that file loads BEFORE this one, and
+   an override there would lose to `.teach-art`'s base rule above. */
+@media (forced-colors: active) {
+  .teach-art {
+    border: 1px solid CanvasText;
   }
 }
