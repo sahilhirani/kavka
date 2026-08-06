@@ -20,6 +20,12 @@ permissions:
   pages: write
   id-token: write
 
+# FIELD LESSON (2026-08-06): Pages identifies a deployment by the COMMIT SHA
+# (pages_build_version). If a deployment for a SHA is ever cancelled — this
+# concurrency group's cancel-in-progress, or the deploy action's poll timeout
+# during backend congestion — every re-run and workflow_dispatch of that same
+# SHA is born cancelled. The fix is never "re-run"; it is any new commit that
+# touches the paths above.
 concurrency:
   group: pages
   cancel-in-progress: true
