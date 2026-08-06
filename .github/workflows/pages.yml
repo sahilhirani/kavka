@@ -20,12 +20,16 @@ permissions:
   pages: write
   id-token: write
 
-# FIELD LESSON (2026-08-06): Pages identifies a deployment by the COMMIT SHA
-# (pages_build_version). If a deployment for a SHA is ever cancelled — this
-# concurrency group's cancel-in-progress, or the deploy action's poll timeout
-# during backend congestion — every re-run and workflow_dispatch of that same
-# SHA is born cancelled. The fix is never "re-run"; it is any new commit that
-# touches the paths above.
+# FIELD LESSON (2026-08-06, corrected the same day): Pages runs ONE deployment
+# at a time. When the deploy action's poll times out during backend congestion,
+# its "cancel" can fail to take server-side — leaving a deployment stuck
+# in-progress that silently rejects every later attempt, on ANY commit, with
+# "due to in progress deployment". Re-runs, dispatches and new commits all
+# fail until the zombie dies. The fix:
+#   gh api -X POST repos/<owner>/<repo>/pages/deployments/<sha>/cancel
+# (the blocking sha is named in the failing run's error), then deploy again.
+# The first written version of this lesson blamed SHA dedup; a fresh commit
+# failing the same way disproved that.
 concurrency:
   group: pages
   cancel-in-progress: true
