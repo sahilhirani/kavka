@@ -265,6 +265,11 @@ const de: Catalog = {
   "editor.tls.hint":
     "Verwaltetes Kafka braucht das fast immer eingeschaltet. Wenn der Broker antwortet, der Handshake aber scheitert, ist das die erste Stellschraube.",
 
+  "editor.tls.hintPlainCleartext":
+    "Ist dies aus und SASL/PLAIN gewählt, geht Ihr Passwort unverschlüsselt an den Broker — alles auf dem Netzwerkweg kann es mitlesen. Verwaltetes Kafka braucht das fast immer eingeschaltet.",
+  "editor.tls.hintScramCleartext":
+    "Ist dies aus, sendet SCRAM zwar nicht das Passwort selbst, aber alles Gesendete lässt sich mitschneiden und offline angreifen — und der übrige Verkehr ist ebenfalls unverschlüsselt. Verwaltetes Kafka braucht das fast immer eingeschaltet.",
+
   "editor.mtls.hint":
     "Kavka liest PEM-Dateien genau so, wie sie sind — es gibt keinen JKS- oder PKCS#12-Keystore, den Sie vorher umwandeln müssten.",
   "editor.caPath.label": "CA-Zertifikat",

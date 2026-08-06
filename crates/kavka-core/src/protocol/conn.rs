@@ -41,6 +41,22 @@ const IO_TIMEOUT: Duration = Duration::from_secs(45);
 /// allocation.
 const MAX_FRAME: usize = 100 * 1024 * 1024;
 
+/// Ceiling on a declared array count before anything is allocated for it.
+///
+/// [`MAX_FRAME`] bounds the BYTES a broker may send; it does not bound what a
+/// count inside those bytes may claim. `Decoder::bounded` only refuses a length
+/// longer than the remaining buffer, so a 100 MB frame can legally declare
+/// ~1e8 entries — and `HashMap::with_capacity` believes it. For the ApiVersions
+/// reply that is ~940 MB for the version table and ~4.4 GB for the feature map,
+/// on a code path that runs BEFORE any authentication: a hostile or
+/// MITM'd broker gets a client-process kill for the cost of one reply, and on
+/// Windows an eager multi-GB commit is an abort rather than a slow allocation.
+///
+/// Kafka has on the order of a hundred APIs and a handful of finalized
+/// features, so 1024 is generous by an order of magnitude and costs a real
+/// broker nothing.
+const MAX_DECLARED_ENTRIES: usize = 1024;
+
 /// One Kafka API, with the version window THIS build can encode and decode.
 ///
 /// The windows are narrow on purpose. Every version listed here is exercised —
@@ -524,6 +540,11 @@ fn decode_api_versions(decoder: &mut Decoder<'_>, version: i16) -> Result<Broker
         decoder.legacy_array_len()?
     }
     .unwrap_or(0);
+    if count > MAX_DECLARED_ENTRIES {
+        return Err(malformed(format!(
+            "the broker declared {count} supported APIs, which is not a number of APIs"
+        )));
+    }
 
     let mut table = HashMap::with_capacity(count);
     for _ in 0..count {
@@ -594,6 +615,11 @@ fn decode_features_trailer(
     };
     let mut features = Decoder::new(payload);
     let count = features.compact_array_len()?.unwrap_or(0);
+    if count > MAX_DECLARED_ENTRIES {
+        return Err(malformed(format!(
+            "the broker declared {count} finalized features, which is not a number of features"
+        )));
+    }
     let mut out = HashMap::with_capacity(count);
     for _ in 0..count {
         let name = features.compact_string()?;
@@ -875,6 +901,116 @@ mod tests {
         let (table, features) = decode_api_versions(&mut decoder, 3).expect("the table survives");
         assert_eq!(table.get(&SHARE_GROUP_DESCRIBE.key), Some(&(1, 1)));
         assert!(features.is_empty(), "unparseable is unknown, not zero");
+    }
+
+    /// An ApiVersions v3 reply that GENUINELY carries `count` entries — the
+    /// declared number and the encoded number agree — so what the ceiling
+    /// refuses below is the count itself and not a truncation.
+    fn api_versions_v3_with_api_count(count: usize) -> Vec<u8> {
+        let mut enc = Encoder::new();
+        enc.int16(0).compact_array_len(Some(count));
+        for key in 0..count {
+            let key = i16::try_from(key).expect("the fixture stays inside i16");
+            enc.int16(key).int16(0).int16(1).tagged_fields();
+        }
+        enc.int32(0).tagged_fields();
+        enc.finish()
+    }
+
+    /// The same, for the finalized-feature list that rides in the trailer's
+    /// tagged fields. Only the trailer — `decode_features_trailer` starts at
+    /// `throttle_time_ms`.
+    fn feature_trailer_with_count(count: usize) -> Vec<u8> {
+        let mut list = Encoder::new();
+        list.compact_array_len(Some(count));
+        for i in 0..count {
+            list.compact_string(&format!("f{i}"))
+                .int16(1)
+                .int16(0)
+                .tagged_fields();
+        }
+        let list = list.finish();
+
+        let mut enc = Encoder::new();
+        enc.int32(0) // throttle_time_ms
+            .uvarint(2)
+            .uvarint(TAG_FINALIZED_FEATURES_EPOCH)
+            .uvarint(8)
+            .int64(1)
+            .uvarint(TAG_FINALIZED_FEATURES)
+            .uvarint(list.len() as u32);
+        let mut body = enc.finish();
+        body.extend_from_slice(&list);
+        body
+    }
+
+    /// [`MAX_DECLARED_ENTRIES`], at both ends of it.
+    ///
+    /// [`MAX_FRAME`] bounds the BYTES; nothing bounded a count INSIDE them, and
+    /// `HashMap::with_capacity` believes that count before a single entry has
+    /// been read. This is the whole distance between a hostile ApiVersions
+    /// reply and a multi-gigabyte allocation on the path that runs BEFORE
+    /// authentication.
+    #[test]
+    fn a_broker_declaring_more_apis_than_kafka_has_is_refused() {
+        // At the limit: an absurd table, but a real one, decoded in full.
+        let body = api_versions_v3_with_api_count(MAX_DECLARED_ENTRIES);
+        let mut decoder = Decoder::new(&body);
+        assert_eq!(decoder.int16().unwrap(), 0, "error code");
+        let (table, _) = decode_api_versions(&mut decoder, 3).expect("the limit itself is legal");
+        assert_eq!(table.len(), MAX_DECLARED_ENTRIES);
+
+        // One past it, refused by the number rather than by anything it did.
+        let body = api_versions_v3_with_api_count(MAX_DECLARED_ENTRIES + 1);
+        let mut decoder = Decoder::new(&body);
+        assert_eq!(decoder.int16().unwrap(), 0, "error code");
+        let err = decode_api_versions(&mut decoder, 3)
+            .expect_err("a count past the ceiling")
+            .to_string();
+        assert!(
+            err.contains(&(MAX_DECLARED_ENTRIES + 1).to_string()),
+            "{err}"
+        );
+        assert!(err.contains("supported APIs"), "{err}");
+    }
+
+    /// The second site, and the more expensive one: the feature map was sized
+    /// from a count the same way, at ~4.4 GB for a 100 MB frame.
+    #[test]
+    fn a_broker_declaring_more_finalized_features_than_kafka_has_is_refused() {
+        let at_limit = feature_trailer_with_count(MAX_DECLARED_ENTRIES);
+        let features = decode_features_trailer(&mut Decoder::new(&at_limit), 3)
+            .expect("the limit itself is legal");
+        assert_eq!(features.len(), MAX_DECLARED_ENTRIES);
+
+        let over = feature_trailer_with_count(MAX_DECLARED_ENTRIES + 1);
+        let err = decode_features_trailer(&mut Decoder::new(&over), 3)
+            .expect_err("a count past the ceiling")
+            .to_string();
+        assert!(
+            err.contains(&(MAX_DECLARED_ENTRIES + 1).to_string()),
+            "{err}"
+        );
+        assert!(err.contains("finalized features"), "{err}");
+
+        // …and because the trailer is best effort, that refusal costs a
+        // feature gate rather than the connection: the version table in front
+        // of the same trailer still decodes.
+        let mut table_only = Encoder::new();
+        table_only
+            .int16(0) // error code
+            .compact_array_len(Some(1))
+            .int16(API_VERSIONS.key)
+            .int16(0)
+            .int16(3)
+            .tagged_fields();
+        let mut body = table_only.finish();
+        body.extend_from_slice(&over);
+        let mut decoder = Decoder::new(&body);
+        assert_eq!(decoder.int16().unwrap(), 0, "error code");
+        let (table, features) = decode_api_versions(&mut decoder, 3).expect("the table survives");
+        assert_eq!(table.len(), 1);
+        assert!(features.is_empty(), "got {features:?}");
     }
 
     fn negotiate_with(table: &[(i16, (i16, i16))], api: Api) -> Result<i16> {

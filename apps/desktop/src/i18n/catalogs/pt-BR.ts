@@ -270,6 +270,11 @@ const ptBR: Catalog = {
   "editor.tls.hint":
     "Kafka gerenciado quase sempre precisa disso ligado. Se o broker responde mas o handshake falha, é a primeira coisa a tentar.",
 
+  "editor.tls.hintPlainCleartext":
+    "Com isto desligado e SASL/PLAIN selecionado, sua senha vai sem criptografia até o broker — qualquer coisa no caminho de rede pode lê-la. Kafka gerenciado quase sempre precisa disso ligado.",
+  "editor.tls.hintScramCleartext":
+    "Com isto desligado, o SCRAM não envia a senha em si, mas tudo o que ele envia pode ser capturado e atacado offline — e o restante do tráfego também não é criptografado. Kafka gerenciado quase sempre precisa disso ligado.",
+
   "editor.mtls.hint":
     "O Kavka lê arquivos PEM exatamente como estão — não há keystore JKS ou PKCS#12 para converter antes.",
   "editor.caPath.label": "Certificado da AC",

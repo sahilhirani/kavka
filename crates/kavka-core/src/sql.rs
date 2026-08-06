@@ -128,6 +128,8 @@ use datafusion::datasource::MemTable;
 #[cfg(feature = "kafka")]
 use datafusion::error::DataFusionError;
 #[cfg(feature = "kafka")]
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+#[cfg(feature = "kafka")]
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 #[cfg(feature = "kafka")]
 use futures::StreamExt;
@@ -175,6 +177,20 @@ pub const MAX_ROWS: u32 = 10_000;
 /// "the first 3,100 records of this window" is an answer; an out-of-memory kill
 /// is not.
 pub const MAX_SCAN_BYTES: usize = 256 * 1024 * 1024;
+
+/// What the query ENGINE may allocate, as opposed to what the scan may hold.
+///
+/// The same order as [`MAX_SCAN_BYTES`], deliberately: a query is allowed to
+/// need about as much room to work in as its input occupies, which is generous
+/// for the joins, sorts and aggregations a person actually writes over a
+/// 100,000-record window. Past that, the query is not a question about a topic
+/// — it is a self-join, and answering it costs the app.
+///
+/// Without this the pool is unbounded and a permitted query can take the
+/// process, and the machine, down with it. With it, DataFusion spills to disk
+/// where it can and returns `Resources exhausted` where it cannot.
+#[cfg(feature = "kafka")]
+pub const SQL_MEMORY_BUDGET: usize = 256 * 1024 * 1024;
 
 /// The one table a query may read.
 pub const MESSAGES_TABLE: &str = "messages";
@@ -809,13 +825,32 @@ pub fn sql_options() -> SQLOptions {
 /// catalogue to walk. The dynamic file catalogue that would make
 /// `FROM 'somefile.parquet'` resolve is likewise never enabled — see the module
 /// docs.
+///
+/// THE MEMORY POOL IS BOUNDED, and that is the load-bearing part. The scan is
+/// capped three ways ([`MAX_SCANNED`], [`MAX_SCAN_CAP`], [`MAX_SCAN_BYTES`]),
+/// but the scan is the INPUT — nothing capped the WORK. `sql_options` blocks
+/// DDL, DML and statements; it does not block a self-join, and the one
+/// registered table is freely aliasable, so
+/// `FROM messages a, messages b` is a permitted query whose intermediate
+/// result is quadratic in the window. With DataFusion's default
+/// `UnboundedMemoryPool` that allocates until the allocator or the OS says no:
+/// measured at 7.3 GB of peak working set from 20,000 rows — well inside the
+/// caps — which is an app kill, or a machine one.
+///
+/// [`SQL_MEMORY_BUDGET`] turns that into DataFusion's own `ResourcesExhausted`
+/// error, which `plain_line` already renders as one honest sentence. Legitimate
+/// large sorts are not the casualty: spilling to disk is the default, so they
+/// slow down rather than fail.
 #[cfg(feature = "kafka")]
 fn session(batches: Vec<RecordBatch>) -> std::result::Result<SessionContext, DataFusionError> {
     let config = SessionConfig::new()
         .with_target_partitions(1)
         .with_batch_size(BATCH_ROWS)
         .with_information_schema(false);
-    let context = SessionContext::new_with_config(config);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(SQL_MEMORY_BUDGET, 1.0)
+        .build_arc()?;
+    let context = SessionContext::new_with_config_rt(config, runtime);
     let table = MemTable::try_new(messages_schema(), vec![batches])?;
     context.register_table(MESSAGES_TABLE, Arc::new(table))?;
     Ok(context)
@@ -2066,6 +2101,51 @@ mod engine {
                 "{absent} is registered, so the surface doc is wrong about it"
             );
         }
+    }
+
+    /// THE BUDGET HAS TO REACH THE ENGINE, and the constant alone does not say
+    /// that it does. `SessionContext::new_with_config` in place of
+    /// `new_with_config_rt` leaves [`SQL_MEMORY_BUDGET`] declared, documented,
+    /// and completely inert — the pool goes back to DataFusion's unbounded
+    /// default, every other test in this file still passes, and the only
+    /// difference is a self-join taking the process.
+    ///
+    /// So the assertion is against the pool the session actually carries: it
+    /// refuses one byte past the budget and grants the budget itself. An
+    /// unbounded pool grants both.
+    #[test]
+    fn the_memory_budget_is_the_sessions_own_pool() {
+        use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool};
+
+        let context = session(Vec::new()).expect("a session");
+        let pool: Arc<dyn MemoryPool> = Arc::clone(&context.runtime_env().memory_pool);
+        let reservation = MemoryConsumer::new("a query").register(&pool);
+
+        let refused = reservation
+            .try_grow(SQL_MEMORY_BUDGET + 1)
+            .expect_err("a pool that grants this is the unbounded default");
+        // …and it fails as the error the plain-language layer already turns
+        // into one honest sentence, rather than as an allocator abort.
+        assert!(
+            refused.to_string().contains("Resources exhausted"),
+            "{refused}"
+        );
+        assert_eq!(plain_line(&refused.to_string()), "This query couldn't run.");
+
+        reservation
+            .try_grow(SQL_MEMORY_BUDGET)
+            .expect("the whole budget is spendable");
+        assert_eq!(pool.reserved(), SQL_MEMORY_BUDGET);
+
+        // The pin is not vacuous: DataFusion's default pool grants that same
+        // request, and the default is exactly what `session` falls back to the
+        // moment the runtime stops being handed to it.
+        let default: Arc<dyn MemoryPool> =
+            Arc::clone(&SessionContext::new().runtime_env().memory_pool);
+        MemoryConsumer::new("a query")
+            .register(&default)
+            .try_grow(SQL_MEMORY_BUDGET + 1)
+            .expect("the default pool is unbounded — that is what this budget replaces");
     }
 
     // --- planning, and what it refuses ------------------------------------

@@ -551,6 +551,70 @@ fn leaked_secret_field(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Refuses a profile whose [`SecretRef`]s name keychain entries belonging to a
+/// DIFFERENT profile.
+///
+/// [`crate::secrets::entry_name`] defines an entry as `{profile_id}/{suffix}`,
+/// and everything that writes one honours that. Nothing enforced it on the way
+/// in, though, and [`crate::secrets::resolve`] looks an entry up by name alone
+/// under a single service — it has no idea which profile asked. So a profile
+/// could name any other profile's entry and be handed its secret, which the
+/// metrics collector, the Schema Registry client and the Connect client then
+/// send as an HTTP Basic credential to a URL carried in that same profile.
+/// A crafted profile file is enough: exports carry ids and entry names in
+/// plaintext by design (they carry no values), so the name an attacker needs is
+/// disclosed by the sharing feature itself.
+///
+/// This closes the door at the store, where every write passes. It checks the
+/// **id prefix only** — never the suffix. The suffixes in the wild are not the
+/// closed set [`crate::secrets::SECRET_SUFFIXES`] lists (a Schema Registry
+/// password is written as `schema_registry_password`, and each Connect
+/// cluster's is `connect_password/{cluster}`), so a suffix-strict check would
+/// reject profiles real installs already have on disk.
+///
+/// Reading is untouched: profiles already on disk load exactly as before. This
+/// only governs what may be written.
+fn validate_secret_refs(profile: &ConnectionProfile) -> Result<()> {
+    let prefix = format!("{}/", profile.id);
+
+    let check = |secret: Option<&SecretRef>, field: &str| -> Result<()> {
+        match secret {
+            Some(secret) if !secret.entry.starts_with(&prefix) => Err(Error::Other(format!(
+                "profile \"{}\" ({}) points its {field} at keychain entry \"{}\", which belongs \
+                 to another connection — a profile may only reference its own secrets. This \
+                 profile was not saved.",
+                profile.name, profile.id, secret.entry
+            ))),
+            _ => Ok(()),
+        }
+    };
+
+    match &profile.auth {
+        AuthConfig::Tls { client_key, .. } => check(client_key.as_ref(), "TLS client key")?,
+        AuthConfig::SaslPlain { password, .. } => check(Some(password), "SASL password")?,
+        AuthConfig::SaslScram { password, .. } => check(Some(password), "SASL password")?,
+        AuthConfig::OauthBearer { client_secret, .. } => {
+            check(Some(client_secret), "OAuth client secret")?
+        }
+        AuthConfig::Plaintext | AuthConfig::AwsMskIam { .. } | AuthConfig::Kerberos { .. } => {}
+    }
+
+    if let Some(sr) = &profile.schema_registry {
+        check(sr.password.as_ref(), "Schema Registry password")?;
+    }
+    if let Some(metrics) = &profile.metrics_endpoint {
+        check(metrics.password.as_ref(), "metrics endpoint password")?;
+    }
+    for cluster in &profile.connect_clusters {
+        check(
+            cluster.password.as_ref(),
+            &format!("Connect cluster \"{}\" password", cluster.name),
+        )?;
+    }
+
+    Ok(())
+}
+
 /// JSON-file-backed profile store in the app config dir. Writes are
 /// write-tmp-then-rename so a crash can't leave a truncated file, and
 /// read-modify-write sequences hold `write_lock` so concurrent IPC commands
@@ -584,6 +648,7 @@ impl ProfileStore {
     }
 
     pub fn upsert(&self, profile: ConnectionProfile) -> Result<()> {
+        validate_secret_refs(&profile)?;
         let _guard = self.write_lock.lock().unwrap();
         let mut all = self.list()?;
         match all.iter_mut().find(|p| p.id == profile.id) {
@@ -596,11 +661,21 @@ impl ProfileStore {
     /// Merges imported profiles into the store under `strategy`. Imported SASL
     /// profiles reference keychain entries that don't exist on this machine —
     /// that's expected; connecting reports it (see `secrets::resolve`).
+    ///
+    /// A profile that references ANOTHER profile's keychain entry fails the
+    /// whole import (see [`validate_secret_refs`]) rather than being dropped
+    /// from it. The alternative — importing the rest and saying nothing about
+    /// the one refused — would report "imported 4" for a file that had five
+    /// profiles in it, and the one silently missing would be the malicious one.
+    /// Nothing is written unless every profile in the file is clean.
     pub fn import(
         &self,
         profiles: Vec<ConnectionProfile>,
         strategy: ImportStrategy,
     ) -> Result<ImportReport> {
+        for profile in &profiles {
+            validate_secret_refs(profile)?;
+        }
         let _guard = self.write_lock.lock().unwrap();
         let mut all = self.list()?;
         let mut report = ImportReport::default();
@@ -753,20 +828,29 @@ mod tests {
 
     /// One of every auth variant, so the no-secret-values check covers every
     /// field that could ever hold one.
-    fn every_auth_variant() -> Vec<ConnectionProfile> {
-        let variants = [
+    /// Every auth variant, with its secret entries named under the id of the
+    /// profile that owns them.
+    ///
+    /// The entries used to be the literal `p/password`, `p/client_key` and
+    /// `p/client_secret` on profiles whose ids were `p0`..`p6` — harmless while
+    /// nothing checked, since these fixtures never touch a keychain, but not a
+    /// shape any real install writes: the editor names every entry
+    /// `{profile_id}/{suffix}` via `secrets::entry_name`, and
+    /// `validate_secret_refs` now holds writers to that.
+    fn auth_variants(id: &str) -> Vec<AuthConfig> {
+        vec![
             AuthConfig::Plaintext,
             AuthConfig::Tls {
                 ca_pem_path: Some("/etc/ssl/ca.pem".into()),
                 client_cert_pem_path: Some("/etc/ssl/client.pem".into()),
                 client_key: Some(SecretRef {
-                    entry: "p/client_key".into(),
+                    entry: crate::secrets::entry_name(id, "client_key"),
                 }),
             },
             AuthConfig::SaslPlain {
                 username: "svc".into(),
                 password: SecretRef {
-                    entry: "p/password".into(),
+                    entry: crate::secrets::entry_name(id, "password"),
                 },
                 tls: true,
             },
@@ -774,7 +858,7 @@ mod tests {
                 mechanism: ScramMechanism::Sha256,
                 username: "svc".into(),
                 password: SecretRef {
-                    entry: "p/password".into(),
+                    entry: crate::secrets::entry_name(id, "password"),
                 },
                 tls: false,
             },
@@ -786,20 +870,24 @@ mod tests {
                 token_endpoint: "https://idp.example/oauth2/token".into(),
                 client_id: "kavka".into(),
                 client_secret: SecretRef {
-                    entry: "p/client_secret".into(),
+                    entry: crate::secrets::entry_name(id, "client_secret"),
                 },
             },
             AuthConfig::Kerberos {
                 service_name: "kafka".into(),
                 principal: "kavka@EXAMPLE".into(),
             },
-        ];
-        variants
-            .into_iter()
-            .enumerate()
-            .map(|(i, auth)| ConnectionProfile {
-                auth,
-                ..profile(&format!("p{i}"), "variant")
+        ]
+    }
+
+    fn every_auth_variant() -> Vec<ConnectionProfile> {
+        (0..auth_variants("p").len())
+            .map(|i| {
+                let id = format!("p{i}");
+                ConnectionProfile {
+                    auth: auth_variants(&id).remove(i),
+                    ..profile(&id, "variant")
+                }
             })
             .collect()
     }
@@ -834,7 +922,11 @@ mod tests {
         // Every secret-shaped field holds a SecretRef (or nothing), never a value.
         assert_eq!(leaked_secret_field(&doc), None);
         // Entry names are refs, not values — the keychain is the only holder.
-        assert!(json.contains("p/password"));
+        // Each is named under the id of the profile that owns it (index 2 is
+        // the SASL/PLAIN variant, index 5 the OAuth one), which is the
+        // invariant `validate_secret_refs` enforces on the way back in.
+        assert!(json.contains("p2/password"), "{json}");
+        assert!(json.contains("p5/client_secret"), "{json}");
 
         // The detector isn't vacuous: a planted value is caught.
         let mut leaked = doc.clone();
@@ -1269,6 +1361,126 @@ mod tests {
         ] {
             let err = imported(raw).unwrap_err().to_string();
             assert!(err.contains(expected), "{raw} -> {err}");
+        }
+    }
+
+    /// The fixture profile uses every entry shape a real install writes —
+    /// `{id}/password`, `{id}/schema_registry_password`,
+    /// `{id}/connect_password/{cluster}`, `{id}/metrics_password` — and every
+    /// auth variant that carries a secret. If the check were strict on the
+    /// suffix as well as the id, this is the test that would catch it.
+    #[test]
+    fn a_profiles_own_secret_entries_are_accepted() {
+        let dir = TempDir::new();
+        let store = dir.store();
+        for p in every_auth_variant() {
+            store.upsert(p).unwrap();
+        }
+        store.upsert(profile("a", "A")).unwrap();
+        assert!(store
+            .import(vec![profile("b", "B")], ImportStrategy::Skip)
+            .is_ok());
+    }
+
+    /// The exfiltration primitive: a profile that names ANOTHER profile's
+    /// keychain entry. `secrets::resolve` would hand over the victim's secret,
+    /// and the metrics collector would then post it as Basic auth to the URL in
+    /// the attacker's own profile.
+    #[test]
+    fn a_profile_naming_another_profiles_secret_entry_is_refused() {
+        let dir = TempDir::new();
+        let store = dir.store();
+        store.upsert(profile("victim", "victim")).unwrap();
+
+        let mut attacker = profile("attacker", "attacker");
+        attacker.metrics_endpoint = Some(MetricsEndpointConfig {
+            url: "https://attacker.example/collect".into(),
+            username: Some("throwaway".into()),
+            password: Some(SecretRef {
+                entry: "victim/password".into(),
+            }),
+        });
+
+        let err = store.upsert(attacker.clone()).unwrap_err().to_string();
+        assert!(err.contains("victim/password"), "{err}");
+        assert!(err.contains("another connection"), "{err}");
+
+        // The import path is the one an attacker actually reaches, and it must
+        // refuse the whole file rather than quietly importing the rest.
+        let err = store
+            .import(
+                vec![profile("clean", "clean"), attacker],
+                ImportStrategy::Skip,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("victim/password"), "{err}");
+        assert_eq!(
+            store.list().unwrap().len(),
+            1,
+            "a refused import must write nothing"
+        );
+    }
+
+    /// Every secret-bearing field, not just the one the exploit used — a
+    /// check that covers four of five fields is a check an attacker reads as a
+    /// map to the fifth.
+    #[test]
+    fn every_secret_bearing_field_is_checked() {
+        let dir = TempDir::new();
+        let store = dir.store();
+        let foreign = || {
+            Some(SecretRef {
+                entry: "someone-else/password".into(),
+            })
+        };
+
+        let mut auth = profile("p", "p");
+        auth.auth = AuthConfig::SaslPlain {
+            username: "u".into(),
+            password: SecretRef {
+                entry: "someone-else/password".into(),
+            },
+            tls: true,
+        };
+
+        let mut tls_key = profile("p", "p");
+        tls_key.auth = AuthConfig::Tls {
+            ca_pem_path: None,
+            client_cert_pem_path: None,
+            client_key: foreign(),
+        };
+
+        let mut oauth = profile("p", "p");
+        oauth.auth = AuthConfig::OauthBearer {
+            token_endpoint: "https://idp.example/token".into(),
+            client_id: "id".into(),
+            client_secret: SecretRef {
+                entry: "someone-else/client_secret".into(),
+            },
+        };
+
+        let mut sr = profile("p", "p");
+        sr.schema_registry.as_mut().unwrap().password = foreign();
+
+        let mut connect = profile("p", "p");
+        connect.connect_clusters[0].password = foreign();
+
+        let mut metrics = profile("p", "p");
+        metrics.metrics_endpoint.as_mut().unwrap().password = foreign();
+
+        for (case, p) in [
+            ("sasl password", auth),
+            ("tls client key", tls_key),
+            ("oauth client secret", oauth),
+            ("schema registry password", sr),
+            ("connect cluster password", connect),
+            ("metrics password", metrics),
+        ] {
+            assert!(
+                store.upsert(p).is_err(),
+                "{case} was accepted with a foreign keychain entry"
+            );
         }
     }
 

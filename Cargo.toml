@@ -19,6 +19,13 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 repository = "https://github.com/sahilhirani/kavka"
+# None of the four members is published to crates.io — the desktop shell never
+# could be, and the other three are distributed as the app, the MCP server and
+# the CLI, not as libraries. Saying so makes `cargo publish` refuse by accident
+# rather than by nobody having tried, and it lets the dependency gate treat
+# these as private crates (deny.toml's `[licenses.private] ignore = true`)
+# instead of needing a hand-maintained AGPL exception per crate.
+publish = false
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

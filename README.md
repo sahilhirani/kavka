@@ -195,7 +195,7 @@ packaging/              winget / Chocolatey / Homebrew manifest templates
 Prerequisites:
 
 1. **Rust** stable via rustup (`winget install Rustlang.Rustup`)
-2. **Node.js ≥ 20** and npm
+2. **Node.js 24 LTS** (≥ 24.15.0) and npm — what CI builds on, and the floor `engines` states. Older lines are not all excluded on their own (Vite runs on 20.19+, `jsdom` accepts 22.22.2+), but 24 LTS is the only one CI exercises and the only one the release runners use.
 3. **CMake + Visual Studio Build Tools** (required when the `kafka` feature flag is enabled — rust-rdkafka builds librdkafka via cmake)
 4. Tauri 2 prerequisites: WebView2 (preinstalled on Win 11); on macOS, Xcode CLT
 

@@ -265,6 +265,11 @@ const es: Catalog = {
   "editor.tls.hint":
     "Un Kafka gestionado casi siempre lo necesita activado. Si el broker responde pero falla el saludo TLS, esto es lo primero que hay que probar.",
 
+  "editor.tls.hintPlainCleartext":
+    "Con esto desactivado y SASL/PLAIN seleccionado, su contraseña viaja sin cifrar hasta el broker — cualquier cosa en la ruta de red puede leerla. Un Kafka gestionado casi siempre lo necesita activado.",
+  "editor.tls.hintScramCleartext":
+    "Con esto desactivado, SCRAM no envía la contraseña en sí, pero todo lo que envía puede capturarse y atacarse sin conexión — y el resto del tráfico tampoco va cifrado. Un Kafka gestionado casi siempre lo necesita activado.",
+
   "editor.mtls.hint":
     "Kavka lee los archivos PEM tal cual — no hay ningún almacén JKS o PKCS#12 que convertir antes.",
   "editor.caPath.label": "Certificado de la CA",

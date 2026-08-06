@@ -270,6 +270,11 @@ const fr: Catalog = {
   "editor.tls.hint":
     "Un Kafka managé en a presque toujours besoin. Si le broker répond mais que la poignée de main échoue, c'est la première chose à essayer.",
 
+  "editor.tls.hintPlainCleartext":
+    "Si cette case est décochée et SASL/PLAIN sélectionné, votre mot de passe part en clair vers le broker — tout ce qui se trouve sur le chemin réseau peut le lire. Un Kafka managé en a presque toujours besoin.",
+  "editor.tls.hintScramCleartext":
+    "Si cette case est décochée, SCRAM n'envoie pas le mot de passe lui-même, mais tout ce qu'il envoie peut être capturé puis attaqué hors ligne — et le reste du trafic n'est pas chiffré non plus. Un Kafka managé en a presque toujours besoin.",
+
   "editor.mtls.hint":
     "Kavka lit les fichiers PEM tels quels — il n'y a aucun keystore JKS ou PKCS#12 à convertir au préalable.",
   "editor.caPath.label": "Certificat de l'AC",
