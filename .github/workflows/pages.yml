@@ -46,7 +46,7 @@ jobs:
           rm -f _site/README.md
           cp docs/screenshots/*.png docs/screenshots/*.gif _site/screenshots/
 
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
           # v5 of this action flips include-hidden-files to false, which would
