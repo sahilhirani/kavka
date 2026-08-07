@@ -28,9 +28,11 @@ verification approved them as correct, minimal, and safe.
 independently). **19 fixed on this branch, 18 recorded and left open with a
 reason, 1 refuted.**
 
-No **high**-severity finding is left open. Four **medium**s are: RS-01 (no
-`--locked` in CI), B2 (CEL evaluation has no budget), CI-02 (the signing secret
-is not environment-gated) and CI-03 (secret scanning is off). Two of those four
+No **high**-severity finding is left open. Of the four **medium**s this
+document originally left open, three have since been closed outside this
+branch — RS-01 (`--locked`, PR #32 with a follow-up shell fix), CI-02 (the
+signing key now lives in the `release` environment) and CI-03 (secret scanning
+and push protection are on). One remains: B2 (CEL evaluation has no budget). Two of those four
 are repository settings that no commit can change (§4); the other two are open
 because the proposed fixes were verified **wrong** — applying them as written
 would have broken CI in one case and the macOS Intel release leg in the other.
@@ -103,7 +105,10 @@ loop), `sql.rs` (options, session, execute, caps), `connection.rs`, `auth/oidc.r
 - **Runtime behaviour of any workflow.** Every CI finding comes from reading
   YAML and from the GitHub API, not from observing a run. No workflow was
   dispatched or re-run. Where that matters — the `--locked` passthrough in
-  RS-01 — the finding says so and remains unfixed for that reason.
+  RS-01 — the finding said so and stayed open until the passthrough-free
+  fix landed in PR #32; its first real release run then exposed a Windows
+  shell bug in the preflight, fixed the same day. Both are recorded in the
+  RS-01 entry below.
 - **The vendored C sources of librdkafka and OpenSSL.** Version numbers were
   compared against crates.io and against upstream release notes; not one byte of
   the vendored trees was inspected or diffed.
@@ -222,7 +227,17 @@ open findings are repository settings and are in §4.
 
 ### Dependencies
 
-**RS-01 — no `--locked` in any cargo invocation (medium).** A manifest change
+**RS-01 — no `--locked` in any cargo invocation (medium). CLOSED by PR #32
+plus a same-day follow-up.** The ten resolving invocations carry `--locked`,
+`release.yml` runs a fail-closed `cargo metadata --locked` preflight before
+tauri-action, and `cargo deny` audits under `--locked` too. History, kept
+because process lessons rot fastest: the first merged preflight omitted
+`shell: bash`, so the Windows leg ran it under pwsh, read the /dev/null
+redirect as a literal path, and failed every release unconditionally —
+fail-closed harder than intended, caught by independent re-verification
+before any tag was pushed. The original finding text follows unchanged.
+
+**Original finding:** A manifest change
 without a regenerated lockfile causes CI *and* the release build to silently
 re-resolve dependencies, including transitive ones nobody reviewed, and the
 result is signed and auto-installed. Verified: no `--locked` or `--frozen`
