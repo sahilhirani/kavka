@@ -72,15 +72,15 @@ jobs:
       # The crate must lint clean BOTH without the kafka feature (the
       # no-CMake tooling build) and with it.
       - name: Clippy (no default features)
-        run: cargo clippy -p kavka-core -- -D warnings
+        run: cargo clippy --locked -p kavka-core -- -D warnings
 
       - name: Clippy (kafka)
-        run: cargo clippy -p kavka-core --features kafka -- -D warnings
+        run: cargo clippy --locked -p kavka-core --features kafka -- -D warnings
 
       # The WASM serde tier stands alone (a decoder needs no cluster), so it
       # lints on its own.
       - name: Clippy (wasm serdes)
-        run: cargo clippy -p kavka-core --features wasm-serdes --all-targets -- -D warnings
+        run: cargo clippy --locked -p kavka-core --features wasm-serdes --all-targets -- -D warnings
 
       # And at the tier the desktop app ships, which is the only one where the
       # plugin actually meets the read paths: `ClusterConnection::decoder_for`
@@ -90,18 +90,18 @@ jobs:
       # (plain `kafka` leaves the ssl-gated test helpers in `connection.rs`
       # unreferenced, which is why the step above it has no `--all-targets`).
       - name: Clippy (kafka-ssl, all targets)
-        run: cargo clippy -p kavka-core --features kafka-ssl --all-targets -- -D warnings
+        run: cargo clippy --locked -p kavka-core --features kafka-ssl --all-targets -- -D warnings
 
       # The MCP server (crates/kavka-mcp). It builds kavka-core at the
       # kafka-ssl tier — the same one the desktop app ships — because it opens
       # the same connections from the same profiles.json.
       - name: Clippy (MCP server)
-        run: cargo clippy -p kavka-mcp --all-targets -- -D warnings
+        run: cargo clippy --locked -p kavka-mcp --all-targets -- -D warnings
 
       # The companion CLI (crates/kavka-cli), at the same tier and for the same
       # reason: it opens the same connections from the same profiles.json.
       - name: Clippy (CLI)
-        run: cargo clippy -p kavka-cli --all-targets -- -D warnings
+        run: cargo clippy --locked -p kavka-cli --all-targets -- -D warnings
 
       - name: Start local Kafka (KRaft)
         run: docker compose -f dev/docker-compose.yml up -d --wait
@@ -109,7 +109,7 @@ jobs:
       # kafka-ssl is what the desktop app ships; it also unlocks the
       # ssl-asserting unit tests (vendored OpenSSL needs the runner's perl).
       - name: Unit + integration tests
-        run: cargo test -p kavka-core --features kafka-ssl
+        run: cargo test --locked -p kavka-core --features kafka-ssl
         env:
           KAVKA_IT: "1"
 
@@ -117,7 +117,7 @@ jobs:
       # against the cluster started above, so it runs here rather than beside
       # the core's own tests.
       - name: MCP server tests
-        run: cargo test -p kavka-mcp
+        run: cargo test --locked -p kavka-mcp
         env:
           KAVKA_IT: "1"
 
@@ -125,7 +125,7 @@ jobs:
       # cluster. Its unit half (the flag surface, the output modes, the write
       # gate, the §7 error table) needs no broker and runs here either way.
       - name: CLI tests
-        run: cargo test -p kavka-cli
+        run: cargo test --locked -p kavka-cli
         env:
           KAVKA_IT: "1"
 
@@ -186,4 +186,4 @@ jobs:
           npm run build
 
       - name: Check workspace (builds librdkafka via CMake)
-        run: cargo check --workspace
+        run: cargo check --locked --workspace
