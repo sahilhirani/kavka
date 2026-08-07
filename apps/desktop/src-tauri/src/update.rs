@@ -386,10 +386,18 @@ fn http_client() -> Result<reqwest::Client, String> {
 /// Asks a channel whether there is anything newer. Never fails: a failure is
 /// [`UpdateCheck::Error`] carrying a sentence.
 pub async fn check(app: &AppHandle, channel: Channel) -> UpdateCheck {
-    match channel {
+    let outcome = match channel {
         Channel::Stable => check_stable(app).await,
         Channel::Builds => check_builds(app).await,
+    };
+    // The one line this module writes anywhere. The UI already shows this
+    // sentence, but a check that failed three days ago is not on screen any
+    // more, and the macOS field run had no record of the updater's own
+    // opinions at all. The message is `plain_*`-shaped and carries no URL.
+    if let UpdateCheck::Error { message } = &outcome {
+        tracing::warn!("update check on the {channel:?} channel: {message}");
     }
+    outcome
 }
 
 async fn check_stable(app: &AppHandle) -> UpdateCheck {
@@ -544,7 +552,15 @@ pub async fn install(app: &AppHandle, channel: Channel) -> Result<(), String> {
     update
         .download_and_install(|_chunk, _total| {}, || {})
         .await
-        .map_err(|error| plain_updater_error(&error))
+        .map_err(|error| {
+            let message = plain_updater_error(&error);
+            // An install that failed is the one updater outcome worth having a
+            // record of after the fact: it is rare, it is the step that
+            // replaces the binary, and on macOS it is the step nobody had ever
+            // watched until docs/MACOS-TESTING-RESULTS.md.
+            tracing::warn!("update install on the {channel:?} channel: {message}");
+            message
+        })
 }
 
 /// The message for an Install click on a channel that has nothing published.

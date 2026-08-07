@@ -1,0 +1,11 @@
+# Deliberately narrow. There is no `* text=auto` here: this repository has
+# always let each checkout do whatever its `core.autocrlf` wants, and changing
+# that would renormalise every file in the tree for the sake of one.
+#
+# The build stamp is the exception because it is not source. It ships inside
+# the bundle (tauri.conf.json `bundle.resources`) and is read by scripts and by
+# support on three platforms, so it has to be exactly one line ending in one
+# LF — not whatever a Windows checkout would otherwise hand it. The release
+# workflow writes it with `printf` and gets LF anyway; this is what makes a
+# developer's own build match.
+apps/desktop/build-stamp text eol=lf

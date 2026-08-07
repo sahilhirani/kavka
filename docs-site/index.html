@@ -511,10 +511,15 @@
             </div>
 
             <p class="download-note">
-              <strong>The binaries are not code-signed yet.</strong> macOS will
-              tell you the app <em>"is damaged and can't be opened"</em> — it
-              is not damaged; that is Gatekeeper's wording for an un-notarized
-              download. After dragging Kavka to Applications, run
+              <strong>The binaries are not code-signed yet.</strong> The first
+              time you open Kavka, macOS says
+              <em>&quot;Kavka&quot; is damaged and can&rsquo;t be opened. You
+              should move it to the Trash.</em> It is not damaged; that is
+              Gatekeeper&rsquo;s wording for an un-notarized download. Read the
+              buttons before you touch one — <em>Move to Trash</em> is the
+              default and the only affirmative button, so doing what the dialog
+              says deletes the app. Press <em>Cancel</em>, then, after dragging
+              Kavka to Applications, run
               <code>xattr -cr /Applications/Kavka.app</code> once and it opens
               normally. On Windows, SmartScreen will warn you and you will need
               <em>More info → Run anyway</em>. That is what an unsigned build
@@ -522,6 +527,19 @@
               better than letting the operating system say it first. Every
               release ships a <code>SHA256SUMS.txt</code> so you can check what
               you downloaded against what CI built.
+            </p>
+
+            <p class="download-note">
+              <strong>The first launch of a new build can stall for
+              minutes.</strong> With quarantine already cleared, the first time
+              you ever open a particular build, macOS checks the un-notarized
+              binary against its servers before letting it start — and on a
+              slow, filtered or captive-portal network that check has been
+              measured hanging for over four minutes, with a bouncing icon, no
+              window and no error. Nothing is broken and there is nothing to
+              fix; it starts when the check finishes. It happens once per
+              build, not once per launch. Notarizing the bundle removes this
+              stall and the &ldquo;damaged&rdquo; dialog together.
             </p>
 
             <h3 class="sr-only">Package managers</h3>

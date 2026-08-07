@@ -969,7 +969,11 @@ const es: Catalog = {
   "alerts.rules.foot":
     "«En silencio» significa que nada ha disparado la regla, no que Kavka haya comprobado el número y le haya parecido bien — una regla cuya lectura no está disponible también está en silencio. El estado viene del registro de abajo, así que solo es tan completo como lo sea ese registro.",
   "alerts.channels.foot":
-    "Kavka pregunta a cada uno de ellos una vez por disparo y nunca reintenta. No se le informa de si su sistema operativo mostró realmente la notificación, y un webhook que rechaza queda escrito en el registro de Kavka en vez de aquí — así que «activado» significa que Kavka preguntará, no que se haya alcanzado a alguien.",
+    "Kavka pregunta a cada uno de ellos una vez por disparo y nunca reintenta. No se le informa de si su sistema operativo mostró realmente la notificación, y un webhook que rechaza queda escrito en el registro de diagnóstico —si lo ha activado en «Acerca de»— en vez de mostrarse aquí, así que «activado» significa que Kavka preguntará, no que se haya alcanzado a alguien.",
+  "alerts.channels.os.denied":
+    "Su sistema operativo está rechazando las notificaciones de Kavka, así que este interruptor no puede entregar nada mientras eso no cambie. En macOS: Ajustes del Sistema → Notificaciones → Kavka. En Windows: Configuración → Sistema → Notificaciones → Kavka. Kavka no puede cambiar ese ajuste por usted.",
+  "alerts.channels.os.confirmed":
+    "Kavka acaba de enviar una notificación para confirmar este canal. Si en su lugar su sistema operativo pidió permiso, respóndalo ahora: ese aviso es lo que de otro modo se tragaría su primera alerta real. Si no apareció ninguna de las dos, todavía no llega nada a este escritorio.",
   "groups.list.foot":
     "Los recuentos de miembros y los estados son del momento en que Kavka preguntó. Un grupo que está rebalanceando está repartiendo sus particiones mientras usted lee esto, así que su recuento ya está desactualizado — pulse Actualizar para obtener uno nuevo.",
   "group.members.foot":

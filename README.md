@@ -61,13 +61,21 @@ Prebuilt installers are attached to every [GitHub Release](https://github.com/sa
 
 Every release also carries `SHA256SUMS.txt`, so you can check what you downloaded against what CI built.
 
-**The binaries are not code-signed yet.** On macOS, Gatekeeper says the app *"is damaged and can't be opened"* — that sentence is false, and the file's `SHA256SUMS.txt` entry proves it; it is macOS's wording for "downloaded and not notarized". After dragging Kavka to Applications, clear the quarantine flag once:
+**The binaries are not code-signed yet.** On macOS, double-clicking Kavka the first time gets you this dialog, word for word:
+
+> **"Kavka" is damaged and can't be opened. You should move it to the Trash.**
+
+That sentence is false, and the file's `SHA256SUMS.txt` entry proves it; it is macOS's wording for "downloaded and not notarized". **Read the buttons before you touch one.** *Move to Trash* is the default, and it is the only affirmative button — there is no *Open anyway* — so doing what the dialog tells you deletes the app you just installed. Press *Cancel*. Then, after dragging Kavka to Applications, clear the quarantine flag once:
 
 ```sh
 xattr -cr /Applications/Kavka.app
 ```
 
-(Right-click → *Open* used to be enough; recent macOS no longer offers it for un-notarized apps.) **That is a first-install step only.** Quarantine is applied by whatever downloaded the file, so an update Kavka installs itself — fetched by Kavka, verified by Kavka, written by Kavka — arrives without the flag, and the command is not needed again. On Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
+(Right-click → *Open* used to be enough; recent macOS no longer offers it for un-notarized apps.) **That is a first-install step only.** Quarantine is applied by whatever downloaded the file, so an update Kavka installs itself — fetched by Kavka, verified by Kavka, written by Kavka — arrives without the flag, and the command is not needed again.
+
+**The first launch of a new build can stall for several minutes.** With quarantine already cleared, the first time you ever open a particular build, macOS checks the unnotarized binary against its servers before letting it start — and on a slow, filtered or captive-portal network that check has been measured hanging for over four minutes, showing a bouncing icon, no window and no error. The app is not stuck and there is nothing to fix; it starts once the check times out or completes. It happens **once per build, not once per launch** — every launch after the first is immediate. Notarizing the bundle removes this stall and the "damaged" dialog together.
+
+On Windows, SmartScreen shows a warning and you need *More info → Run anyway*. That is what an unsigned build from an independent developer looks like — signing certificates cost money and identity verification, and both are on the list. Saying so here is better than letting the OS say it first.
 
 ### Package managers
 
@@ -91,6 +99,8 @@ Two channels, chosen in *Settings → Updates*:
 | **Every build** | The newest `v<version>-build.<n>` pre-release from `main`. Opt-in, and it is what it sounds like: the latest code, which no human has blessed. |
 
 Installing is the same act it always was, just started from inside the app: on Windows Kavka closes so the installer can replace it, and on macOS the app replaces itself and restarts.
+
+**Which build is installed, without opening Kavka.** Every bundle carries a one-line `build-stamp` file — `Kavka.app/Contents/Resources/build-stamp` on macOS, and `build-stamp` in the install folder beside `Kavka.exe` on Windows. It holds the run number for an automated build, the tag for a stable release, or `local` for one somebody built themselves. *Settings → About* says the same thing on screen; this is the copy a script can read, and it exists because nothing else in the bundle could answer the question — every build ships the same `0.1.0` version string, and an update Kavka installed itself leaves no download metadata behind.
 
 The check is on by default, and the switch that turns it off sits beside the channel picker. What it sends is one request to github.com asking what the newest release is — the same question the [Releases page](https://github.com/sahilhirani/kavka/releases) answers for anybody, carrying nothing that identifies you and nothing about your clusters.
 
@@ -270,6 +280,6 @@ Distribution is prepared but not executed — everything below needs a human, mo
 
 - **The site** — live at [sahilhirani.github.io/kavka](https://sahilhirani.github.io/kavka/), deployed from [`docs-site/`](docs-site/) by [`.github/workflows/pages.yml`](.github/workflows/pages.yml). The one thing still missing is a 1200×630 Open Graph card of its own.
 - **A domain** — `kavka.io` was verified unregistered on 2026-08-02. Registering it and adding a `CNAME` to `docs-site/` is a human action.
-- **macOS** — Apple Developer Program membership, a Developer ID Application certificate, and `notarytool` credentials in the release workflow. Until then the `.dmg` is unsigned and Gatekeeper says the app is "damaged", which is the wrong message for the truth.
+- **macOS** — Apple Developer Program membership, a Developer ID Application certificate, and `notarytool` credentials in the release workflow. Until then the `.dmg` is unsigned, Gatekeeper says the app is "damaged" — the wrong message for the truth, and its only affirmative button deletes the app — and the first launch of each new build can stall for minutes on an online check. Notarization removes both.
 - **Windows** — an OV or EV code-signing certificate. Until then SmartScreen warns on every first run.
 - **Package managers** — a fork and a pull request each for winget-pkgs and homebrew-cask, a chocolatey.org account and API key. Manifests are rendered onto every release; see [`packaging/README.md`](packaging/README.md).

@@ -57,7 +57,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 
 /// How long a tail's reader waits for records before looking at the world
@@ -935,6 +935,51 @@ fn notify(app: &AppHandle, event: &AlertEvent) {
         .show()
     {
         tracing::warn!("OS notification for alert {}: {e}", event.rule_id);
+    }
+}
+
+/// What happened when Kavka asked to be allowed to notify, in the two terms the
+/// channel panel can act on.
+#[derive(Serialize)]
+struct NotificationAuthorization {
+    /// `granted`, `denied` or `undecided`. `undecided` means the operating
+    /// system has not answered yet — a prompt may be on screen.
+    state: String,
+    /// Whether the confirmation notification below was actually posted. False
+    /// when the answer was already `denied`, because posting into a refusal
+    /// only produces a second silent failure.
+    confirmation_sent: bool,
+}
+
+/// The word the channel panel switches on. One place, so the Rust and the
+/// TypeScript cannot drift apart on the spelling.
+fn permission_word(state: PermissionState) -> &'static str {
+    match state {
+        PermissionState::Granted => "granted",
+        PermissionState::Denied => "denied",
+        // `Prompt` and `PromptWithRationale` are both "the OS has not said yet".
+        // The rationale variant is an Android affordance and there is nothing
+        // for a desktop panel to do differently with it.
+        _ => "undecided",
+    }
+}
+
+/// One notification confirming the channel the user just switched on.
+///
+/// **This is the call that actually asks macOS for permission.** See
+/// [`alerts_notifications_authorize`] for why the permission API alone cannot.
+/// It is also the only proof this channel can offer: the plugin's `show()`
+/// hands the notification to the OS on a spawned task and is never told what
+/// became of it, so "delivered" is not a thing Kavka is in a position to claim.
+fn confirm_notifications(app: &AppHandle) {
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("Kavka notifications are on")
+        .body("An alert will arrive looking like this — one when a rule fires, one more when it clears.")
+        .show()
+    {
+        tracing::warn!("confirmation notification: {e}");
     }
 }
 
@@ -2219,7 +2264,19 @@ fn docker_on_path() -> bool {
 fn docker_binary() -> Option<&'static Path> {
     static DOCKER: OnceLock<Option<PathBuf>> = OnceLock::new();
     DOCKER
-        .get_or_init(|| resolve_docker(docker_candidates(), docker_on_path, |path| path.exists()))
+        .get_or_init(|| {
+            let found = resolve_docker(docker_candidates(), docker_on_path, |path| path.exists());
+            // Once per process, and only when the answer is "nowhere". This is
+            // the outcome that produced a support question on macOS — a GUI
+            // launch gets launchd's four-entry PATH, so the probe misses and
+            // the candidate list is what has to work. The user is already told
+            // where Kavka looked; the log is for the copy of that answer that
+            // survives the dialog being dismissed.
+            if found.is_none() {
+                tracing::warn!("{}", docker_search_detail());
+            }
+            found
+        })
         .as_deref()
 }
 
@@ -2815,9 +2872,11 @@ impl Drop for PlaygroundGuard {
 
 // ── Diagnostics — opt-in, local, and nothing else ──────────────────────────
 //
-// WHAT THIS IS: a panic hook and a webview error handler that append lines to
-// rotating files in the app's data directory, so that "Kavka closed itself and
-// I don't know why" can become a GitHub issue with something attached to it.
+// WHAT THIS IS: a panic hook, a webview error handler and a `tracing`
+// subscriber that append lines to rotating files in the app's data directory,
+// so that "Kavka closed itself and I don't know why" — or "it says it can't
+// find Docker and I can't tell you what it said" — can become a GitHub issue
+// with something attached to it.
 //
 // WHAT THIS IS NOT, and the reason every sentence in the About section is
 // written the way it is: **there is no telemetry endpoint.** Not a disabled
@@ -3154,16 +3213,172 @@ fn install_panic_hook() {
 
 /// The one line every log starts with, so a file that then records a crash also
 /// records what was running when it happened.
+///
+/// The build number is here because it is the only thing that tells one
+/// automated build from another: every one of them ships `0.1.0`, so a version
+/// alone cannot answer "which Kavka wrote this file?". `unknown` is the honest
+/// word for a stable release or a local `cargo build`, both of which are built
+/// without `KAVKA_BUILD` — see [`update::build_number`].
 fn log_session_header() {
     diagnostics_write(
         "session",
         &format!(
-            "Kavka {} · {} {} · webview session started",
+            "Kavka {} · build {} · {} {} · webview session started",
             env!("CARGO_PKG_VERSION"),
+            update::build_number().map_or_else(|| "unknown".to_string(), |run| run.to_string()),
             std::env::consts::OS,
             std::env::consts::ARCH
         ),
     );
+}
+
+// ── The warnings that used to go nowhere ───────────────────────────────────
+//
+// `tracing` was a dependency with no subscriber. Every `tracing::warn!` in this
+// crate — the webhook that refused, the desktop notification the OS would not
+// show, the masking rules that would not parse — was formatted and dropped on
+// the floor, while two user-facing sentences said those failures were "written
+// to Kavka's log". The macOS field run found this the hard way: nothing Kavka
+// knew about its own failures was anywhere on disk, so every finding in
+// docs/MACOS-TESTING-RESULTS.md came from `log show` and `sample` instead.
+//
+// This is the smallest thing that makes those sentences true. It is not a
+// logging framework: no `tracing-subscriber`, no new dependency in the shipped
+// binary, no format string a user has to learn.
+
+/// The target prefix this subscriber records. `module_path!()` at crate root is
+/// the lib name, so renaming the crate cannot silently switch the filter off.
+const TRACING_ROOT: &str = module_path!();
+
+/// Whether an event came from Kavka's own shell rather than a dependency.
+///
+/// A dependency's warnings are not Kavka's to publish into a user's file: the
+/// person reading it opted into Kavka's diagnostics, and librdkafka or hyper
+/// deciding to be chatty is not a thing they agreed to store.
+fn is_kavka_target(target: &str) -> bool {
+    // `strip_prefix` rather than an index, for the reason `redact` avoids one:
+    // this runs on a path that must not panic, and a byte offset into a target
+    // string is an assumption about somebody else's data.
+    target
+        .strip_prefix(TRACING_ROOT)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+}
+
+/// Flattens one `tracing` event into the single line the log stores.
+///
+/// The message field carries `format_args!`, whose `Debug` is its `Display` —
+/// so `{:?}` here is the sentence the `warn!` was written with, not a quoted
+/// copy of it. Structured fields (`profile = …`) follow in brackets.
+#[derive(Default)]
+struct TracingLine {
+    message: String,
+    fields: String,
+}
+
+impl TracingLine {
+    /// Takes the field's NAME rather than the field, so this and `finish` are
+    /// testable without a `tracing` callsite to hang a `Field` off.
+    fn note(&mut self, name: &str, value: &str) {
+        if name == "message" {
+            self.message = value.to_string();
+            return;
+        }
+        self.fields
+            .push_str(if self.fields.is_empty() { " [" } else { ", " });
+        self.fields.push_str(name);
+        self.fields.push('=');
+        self.fields.push_str(value);
+    }
+
+    fn finish(mut self, target: &str) -> String {
+        if !self.fields.is_empty() {
+            self.fields.push(']');
+        }
+        // A `tracing` event may legally carry fields and no message. It must
+        // not come out with a doubled space where the message would have been.
+        if self.message.is_empty() {
+            return format!("{target}:{}", self.fields);
+        }
+        format!("{target}: {}{}", self.message, self.fields)
+    }
+}
+
+impl tracing::field::Visit for TracingLine {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.note(field.name(), &format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.note(field.name(), value);
+    }
+}
+
+/// The whole subscriber: WARN and ERROR from this crate, into the diagnostics
+/// writer, and nothing else.
+///
+/// **There is exactly one path to the log file and this is not a second one.**
+/// Every line goes through [`diagnostics_write`], which returns without writing
+/// unless the user has opted in, and which redacts before it appends — so the
+/// credential backstop covers a `tracing::warn!` exactly as it covers a panic.
+/// Turning diagnostics off turns this into a discard: the subscriber stays
+/// installed, because a global subscriber cannot be replaced, and stops writing
+/// on the same atomic every other caller reads.
+///
+/// Spans are not kept. Kavka's `tracing` use is events only — there is no
+/// `#[instrument]` and no `span!` anywhere in this workspace — so a real span
+/// registry would be storage for something nothing produces.
+struct DiagnosticsTracing;
+
+impl tracing::Subscriber for DiagnosticsTracing {
+    /// Consulted once per callsite and then cached by `tracing`, which is safe
+    /// because this answer is static: it reads level and target, never the
+    /// user's toggle. The toggle is checked per event, in `diagnostics_write`.
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        matches!(
+            *metadata.level(),
+            tracing::Level::WARN | tracing::Level::ERROR
+        ) && is_kavka_target(metadata.target())
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        // Never dereferenced by anything here; `Id` refuses zero.
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let metadata = event.metadata();
+        let kind = if *metadata.level() == tracing::Level::ERROR {
+            "error"
+        } else {
+            "warn"
+        };
+        let mut line = TracingLine::default();
+        event.record(&mut line);
+        diagnostics_write(kind, &line.finish(metadata.target()));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// Installs [`DiagnosticsTracing`] process-wide.
+///
+/// Called from [`run`] beside the panic hook, and before the builder for the
+/// same reason: a warning during start-up is one somebody would want. It is
+/// safe that early because the writer does nothing until `LOG_DIR` is set and
+/// the user has opted in.
+///
+/// The result is dropped deliberately. `set_global_default` fails only when a
+/// subscriber is already installed, and there is nothing useful for a shell to
+/// do about that at start-up — least of all panic in the code whose job is to
+/// record panics.
+fn install_tracing() {
+    let _ = tracing::subscriber::set_global_default(DiagnosticsTracing);
 }
 
 #[tauri::command]
@@ -5344,6 +5559,58 @@ async fn alerts_channels_set(
     blocking(move || alerts.set_channels(&profile_id, channels)).await
 }
 
+/// Asks the operating system for permission to notify, at the moment the user
+/// switches the channel on.
+///
+/// WHY THIS EXISTS. macOS asks for notification authorization the first time an
+/// app posts one, and the prompt takes long enough to answer that the
+/// notification which triggered it is gone by the time you say yes. The macOS
+/// field run watched that happen: the first real alert on a fresh install was
+/// swallowed by the permission prompt it had caused
+/// (docs/MACOS-TESTING-RESULTS.md, Test 5). Whatever gets swallowed should be
+/// something nobody needed.
+///
+/// **What the permission API can and cannot do here, verified against
+/// tauri-plugin-notification 2.3.3's source rather than its docs.** On desktop,
+/// `permission_state()` and `request_permission()` are both `Ok(Granted)`,
+/// unconditionally — the real implementation is the mobile one. They are called
+/// anyway, because they are the plugin's contract and the day desktop grows a
+/// real answer this reads it; but on macOS today they ask nothing, and code
+/// that stopped here would move no prompt and fix nothing.
+///
+/// So the ask is [`confirm_notifications`]: one notification, posted now, which
+/// is what makes macOS put its prompt up while the user is still looking at the
+/// switch they just flipped. It doubles as the only honest evidence this
+/// channel can produce — if it never appears, notifications are not reaching
+/// this desktop, whatever any API said.
+///
+/// **Windows and Linux stay a granted, no-op path.** Neither has an
+/// authorization gate, the plugin says `granted`, and the confirmation is a
+/// single toast at the moment somebody asked for toasts. Nothing is
+/// `cfg`-gated: the UI sentence this returns to has to be true on every
+/// platform, and one that only compiles on macOS could not be.
+#[tauri::command]
+async fn alerts_notifications_authorize(app: AppHandle) -> CmdResult<NotificationAuthorization> {
+    let mut state = app
+        .notification()
+        .permission_state()
+        .map_err(|e| e.to_string())?;
+    if !matches!(state, PermissionState::Granted) {
+        state = app
+            .notification()
+            .request_permission()
+            .map_err(|e| e.to_string())?;
+    }
+    let denied = matches!(state, PermissionState::Denied);
+    if !denied {
+        confirm_notifications(&app);
+    }
+    Ok(NotificationAuthorization {
+        state: permission_word(state).to_string(),
+        confirmation_sent: !denied,
+    })
+}
+
 /// Sends one test firing through whatever channels this profile has.
 ///
 /// **Not in the Phase 4 IPC contract — added deliberately rather than
@@ -5825,6 +6092,10 @@ pub fn run() {
     // on the second launch, which is exactly when somebody is trying to work
     // out why the first one died.
     install_panic_hook();
+    // And the subscriber that stops this crate's `tracing::warn!` calls going
+    // nowhere. Same reasoning, same guard: it writes nothing until `setup`
+    // names the log directory and the user has opted in.
+    install_tracing();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -5832,13 +6103,14 @@ pub fn run() {
         // granted (capabilities/default.json): the shell writes files the user
         // named, and nothing in Kavka opens one.
         .plugin(tauri_plugin_dialog::init())
-        // The Rust half of the notification plugin, for one job: an alert that
+        // The Rust half of the notification plugin, for two jobs: an alert that
         // fires while Kavka is behind another window still has to reach the
-        // person. Registering the plugin is all this needs: `notify()` calls
-        // the Rust `NotificationExt` API, which does not traverse the webview
-        // ACL. It is deliberately NOT granted in capabilities/default.json —
-        // the webview cannot raise a notification, and nothing in the frontend
-        // asks to.
+        // person (`notify()`), and switching that channel on has to be the
+        // moment macOS asks whether it may (`alerts_notifications_authorize`).
+        // Registering the plugin is all either needs: both call the Rust
+        // `NotificationExt` API, which does not traverse the webview ACL. It is
+        // deliberately NOT granted in capabilities/default.json — the webview
+        // cannot raise a notification, and nothing in the frontend asks to.
         .plugin(tauri_plugin_notification::init())
         // The updater. Driven entirely from Rust (src/update.rs) and not
         // granted to the webview either — see the note in
@@ -6005,6 +6277,7 @@ pub fn run() {
             alerts_history,
             alerts_channels_get,
             alerts_channels_set,
+            alerts_notifications_authorize,
             alerts_channels_test,
             share_groups_list,
             share_group_detail,
@@ -7691,5 +7964,64 @@ mod tests {
         assert_eq!(iso8601(1_709_208_000_123), "2024-02-29T12:00:00.123Z");
         // Past the 32-bit second, which is the other one.
         assert_eq!(iso8601(2_500_000_000_000), "2049-03-22T04:26:40.000Z");
+    }
+
+    // ── The tracing subscriber ─────────────────────────────────────────────
+    //
+    // The filter and the formatter are pure, so they are tested directly.
+    // Installing the subscriber is not: `set_global_default` is once per
+    // process and `diagnostics_write` reads a process-wide toggle, so a test
+    // that turned either on would be a test that changed what every other test
+    // in this binary does.
+
+    #[test]
+    fn only_this_crate_reaches_the_diagnostics_log() {
+        assert!(is_kavka_target(TRACING_ROOT));
+        assert!(is_kavka_target(&format!("{TRACING_ROOT}::update")));
+        // A dependency that happens to start with the same letters is not this
+        // crate — the separator is what makes it a submodule.
+        assert!(!is_kavka_target(&format!("{TRACING_ROOT}_extra")));
+        assert!(!is_kavka_target("kavka_core::consume"));
+        assert!(!is_kavka_target("rdkafka"));
+        assert!(!is_kavka_target(""));
+    }
+
+    #[test]
+    fn an_event_becomes_one_line_naming_where_it_came_from() {
+        let mut line = TracingLine::default();
+        line.note("message", "OS notification for alert r-1: refused");
+        assert_eq!(
+            line.finish("kavka_desktop_lib"),
+            "kavka_desktop_lib: OS notification for alert r-1: refused"
+        );
+    }
+
+    #[test]
+    fn structured_fields_follow_the_message_rather_than_replacing_it() {
+        let mut line = TracingLine::default();
+        // Recorded in the order `tracing` hands them over, which puts the
+        // named fields before the message.
+        line.note("profile", "p-1");
+        line.note("topic", "payments");
+        line.note("message", "masking rules unreadable");
+        assert_eq!(
+            line.finish("kavka_desktop_lib"),
+            "kavka_desktop_lib: masking rules unreadable [profile=p-1, topic=payments]"
+        );
+    }
+
+    /// The words the channel panel switches on. Rust and TypeScript agree on
+    /// exactly three, and `PromptWithRationale` — an Android affordance — is
+    /// deliberately folded into the same "not answered yet" as `Prompt` rather
+    /// than reaching the UI as a fourth case nothing handles.
+    #[test]
+    fn every_permission_state_has_one_of_three_words() {
+        assert_eq!(permission_word(PermissionState::Granted), "granted");
+        assert_eq!(permission_word(PermissionState::Denied), "denied");
+        assert_eq!(permission_word(PermissionState::Prompt), "undecided");
+        assert_eq!(
+            permission_word(PermissionState::PromptWithRationale),
+            "undecided"
+        );
     }
 }

@@ -200,7 +200,19 @@ headers, the librdkafka `*.password=` config keys, bare `password=`/`secret:`
 assignments, and long high-entropy runs that look like base64. It is hand-rolled
 rather than regex-based for two reasons: it runs inside the panic hook, where it
 must not panic, and a regex engine would be a new dependency in the shipped
-binary. The base64 rule is deliberately narrow — 40+ characters, mixing case and
+binary.
+
+**It now covers a third caller, by construction rather than by promise.** The
+shell installs a `tracing` subscriber that routes its own WARN and ERROR events
+into the same log — the change that made "a webhook that refuses is written to
+Kavka's log" true, having been false since that sentence shipped. It reaches the
+file through `diagnostics_write`, the one function that both checks the user's
+opt-in and redacts, so there is still exactly one writer and one redaction pass;
+routing them past it would have opened a second, unsanitised path into a file
+the About panel makes promises about. The subscriber's filter is level and
+target only — WARN and ERROR, from this crate's targets — so no dependency's
+logging is published into a user's file, and it stays a discard while the
+toggle is off. The base64 rule is deliberately narrow — 40+ characters, mixing case and
 digits — so that it cannot eat the backtraces the log exists to capture. It will
 not catch every encoding of every secret. Three tests hold both halves: nothing
 credential-shaped reaches the file, ordinary diagnostics survive intact, and a

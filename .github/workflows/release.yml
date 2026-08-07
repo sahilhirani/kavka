@@ -11,8 +11,10 @@
 # Produces: Windows .exe (NSIS) + .msi, macOS .dmg for Apple Silicon and
 # Intel. Users download from the Releases page and install — no toolchain
 # needed. Binaries are UNSIGNED until code-signing certs exist (Phase 6);
-# macOS calls un-notarized downloads "damaged" — the release body carries
-# the honest xattr instruction.
+# macOS calls un-notarized downloads "damaged" and offers Move to Trash as the
+# only affirmative button, so the release body quotes the dialog verbatim, says
+# not to follow it, and carries the honest xattr instruction plus the
+# first-launch stall (docs/MACOS-TESTING-RESULTS.md measured both).
 #
 # Every release ALSO carries updater artifacts and a `latest.json` manifest,
 # minisign-signed with TAURI_SIGNING_PRIVATE_KEY, which is what lets the app
@@ -162,6 +164,38 @@ jobs:
             echo "note=$NOTE"
           } >> "$GITHUB_OUTPUT"
 
+      # The same number KAVKA_BUILD compiles in, written where somebody who
+      # cannot open the app can still read it. `bundle.resources` is a MAP here
+      # rather than a list, which is what pins the name: a bare `../build-stamp`
+      # in the list form would ship as `_up_/build-stamp`, because Tauri turns a
+      # parent-directory component into that literal folder. The map's value is
+      # the path under the resource root, so the file lands at
+      # Contents/Resources/build-stamp inside Kavka.app, and — Windows resolves
+      # its resource root to the executable's own folder — beside Kavka.exe.
+      #
+      # It exists because the macOS field run could not answer "which build is
+      # actually installed?" from outside the app: CFBundleVersion and
+      # CFBundleShortVersionString are 0.1.0 on every build, and an update the
+      # app installed itself leaves no download metadata either
+      # (docs/MACOS-TESTING-RESULTS.md, "Also observed").
+      #
+      # MUST run before tauri-action, on all three matrix legs — the file is a
+      # declared resource, so a build without it fails in tauri_build::build()
+      # rather than shipping a bundle that quietly lacks it. A committed
+      # placeholder reading `local` is what keeps a developer's own
+      # `tauri build` working; this step overwrites it.
+      #
+      # STAMP comes through `env:` rather than into the `run:` body. A tag name
+      # may legally contain `$(…)` and this workflow's trigger is `v*`
+      # (docs/SECURITY-AUDIT.md, CI-06); an env var is not re-parsed by the
+      # shell. The `&& || ''`-shaped expression is safe here for the reason the
+      # KAVKA_BUILD note below spells out: run_number is never falsy.
+      - name: Stamp the build number into the bundle
+        shell: bash
+        env:
+          STAMP: ${{ github.ref_type == 'branch' && github.run_number || steps.meta.outputs.tag }}
+        run: printf '%s\n' "$STAMP" > apps/desktop/build-stamp
+
       # The signing key is what turns `bundle.createUpdaterArtifacts` into
       # something the app will accept: Tauri writes a .sig beside each updater
       # bundle and tauri-action inlines those signatures into latest.json. The
@@ -203,10 +237,27 @@ jobs:
             - **Windows:** `.exe` (NSIS installer) or `.msi`
             - **macOS:** `.dmg` — Apple Silicon (`aarch64`) or Intel (`x64`)
 
-            Binaries are not yet code-signed. macOS will say the app "is
-            damaged" — it isn't (check `SHA256SUMS.txt`); that is Gatekeeper's
-            wording for un-notarized downloads. After installing, run
-            `xattr -cr /Applications/Kavka.app` once. Alongside the installers,
+            Binaries are not yet code-signed. On macOS the first launch gets
+            you this dialog, word for word:
+
+            > **"Kavka" is damaged and can't be opened. You should move it to
+            > the Trash.**
+
+            It isn't damaged (check `SHA256SUMS.txt`); that is Gatekeeper's
+            wording for un-notarized downloads. **Read the buttons before you
+            touch one** — *Move to Trash* is the default and the only
+            affirmative button, so doing what the dialog says deletes the app.
+            Press *Cancel*, then run `xattr -cr /Applications/Kavka.app` once.
+
+            The first launch of each new build can then stall for several
+            minutes: macOS checks the un-notarized binary against its servers
+            before starting it, and on a slow or filtered network that check
+            has been measured hanging for over four minutes with a bouncing
+            icon, no window and no error. Nothing is broken — it starts when
+            the check finishes, and it happens once per build, not once per
+            launch. Notarization removes both this and the dialog above.
+
+            Alongside the installers,
             ${{ steps.meta.outputs.note }}
 
             Kavka is free and open source (AGPL-3.0). If it saves you time:

@@ -981,7 +981,11 @@ const fr: Catalog = {
   "alerts.rules.foot":
     "« Silencieuse » signifie que rien n'a déclenché la règle, pas que Kavka a vérifié le chiffre et l'a jugé correct — une règle dont la mesure est indisponible est silencieuse elle aussi. L'état vient du journal ci-dessous : il n'est donc complet que dans la mesure où ce journal l'est.",
   "alerts.channels.foot":
-    "Kavka sollicite chacun d'eux une fois par déclenchement et ne réessaie jamais. Il n'est pas informé de savoir si votre système d'exploitation a réellement affiché la notification, et un webhook qui refuse est consigné dans le journal de Kavka plutôt qu'ici — « activé » signifie donc que Kavka sollicitera, pas que quelqu'un a été joint.",
+    "Kavka sollicite chacun d'eux une fois par déclenchement et ne réessaie jamais. Il n'est pas informé de savoir si votre système d'exploitation a réellement affiché la notification, et un webhook qui refuse est consigné dans le journal de diagnostic — si vous l'avez activé dans « À propos » — plutôt qu'ici : « activé » signifie donc que Kavka sollicitera, pas que quelqu'un a été joint.",
+  "alerts.channels.os.denied":
+    "Votre système d'exploitation refuse les notifications de Kavka : cet interrupteur ne peut donc rien délivrer tant que cela n'aura pas changé. Sur macOS : Réglages Système → Notifications → Kavka. Sur Windows : Paramètres → Système → Notifications → Kavka. Kavka ne peut pas modifier ce réglage à votre place.",
+  "alerts.channels.os.confirmed":
+    "Kavka vient d'envoyer une notification pour confirmer ce canal. Si votre système d'exploitation a demandé l'autorisation à la place, répondez-y maintenant : c'est cette invite qui engloutirait sinon votre première vraie alerte. Si ni l'une ni l'autre n'est apparue, rien n'atteint encore ce bureau.",
   "groups.list.foot":
     "Les nombres de membres et les états datent du moment où Kavka a interrogé le cluster. Un groupe en cours de rééquilibrage redistribue ses partitions pendant que vous lisez ceci : son décompte est donc déjà périmé — appuyez sur Actualiser pour en obtenir un nouveau.",
   "group.members.foot":

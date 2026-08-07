@@ -182,7 +182,7 @@ export default function DiagnosticsSection() {
       </div>
 
       {/* THE ONLY FOLD IN THIS SECTION, and the asymmetry is the point.
-          "What goes in the file" is a specification — four record kinds a
+          "What goes in the file" is a specification — five record kinds a
           reader checks once and then never again — so it earns a disclosure.
           "What never goes in it" is the honest LIMIT of the no-telemetry
           claim, and a limit behind a fold is a limit that gets quoted
@@ -211,6 +211,19 @@ export default function DiagnosticsSection() {
             <code>error</code>
             <span className="mcp-tool-what">
               An uncaught error in the window: its message and JavaScript stack.
+              A line that starts <code>kavka_desktop_lib</code> came from
+              Kavka's Rust side instead — same severity, different half of the
+              app.
+            </span>
+          </li>
+          <li className="mcp-tool">
+            <code>warn</code>
+            <span className="mcp-tool-what">
+              Something Kavka did that did not work and carried on anyway: an
+              update check that failed, a Docker it could not find, a webhook
+              that refused, a desktop notification your system would not show.
+              These are the failures the app already tells you about on screen;
+              this is the copy that outlives the dialog.
             </span>
           </li>
           <li className="mcp-tool">
@@ -223,8 +236,8 @@ export default function DiagnosticsSection() {
           <li className="mcp-tool">
             <code>session</code>
             <span className="mcp-tool-what">
-              One line per launch: Kavka's version, the operating system and the
-              processor architecture.
+              One line per launch: Kavka's version and build number, the
+              operating system and the processor architecture.
             </span>
           </li>
         </ul>
@@ -235,9 +248,11 @@ export default function DiagnosticsSection() {
         Kavka does not log message payloads, keys, headers, passwords, tokens or
         anything read out of your keychain, and it does not write a line per
         action — there is no record of what you browsed, searched or produced.
-        An error message can quote a broker's own reply, so an address or a
-        topic name can appear in one when that is what failed. That is the
-        honest limit of the claim: <strong>read the file before you attach it</strong>,
+        Only failures are recorded: a search that worked leaves nothing, a
+        search that failed leaves its error. An error message can quote a
+        broker's own reply, so an address or a topic name can appear in one when
+        that is what failed. That is the honest limit of the claim:{" "}
+        <strong>read the file before you attach it</strong>,
         which is the button below and the reason the file is plain text.
       </p>
 
