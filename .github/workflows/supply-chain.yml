@@ -76,4 +76,6 @@ jobs:
       # fails on any crate not from crates.io; `licenses` fails on terms an
       # AGPL-3.0 distribution cannot satisfy; `bans` reports duplicates.
       - name: cargo deny
-        run: cargo deny check advisories bans licenses sources
+        # --locked so deny audits the reviewed lock, not a silent re-resolution
+        # of drifted manifests (cargo-deny runs cargo metadata internally).
+        run: cargo deny --locked check advisories bans licenses sources

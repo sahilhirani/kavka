@@ -128,6 +128,12 @@ jobs:
       # purpose: it does not depend on any flag reaching cargo through
       # tauri-action.
       - name: Refuse an unreviewed dependency resolution
+        # shell: bash is load-bearing: without it, windows-latest runs this
+        # under pwsh, where the /dev/null redirect is read as a literal file
+        # path that cannot exist, and the step fails unconditionally — which
+        # killed the Windows leg of the first release after this step landed.
+        # Found by independent verification, not by the author.
+        shell: bash
         run: cargo metadata --locked --format-version 1 > /dev/null
 
       # One rule for both triggers. A tag push releases as itself; a main
