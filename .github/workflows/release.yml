@@ -121,6 +121,15 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # RS-01 (docs/SECURITY-AUDIT.md): the release must build exactly the
+      # reviewed lockfile. This fails when Cargo.toml and Cargo.lock disagree,
+      # so a manifest change that forgot its lockfile stops HERE instead of
+      # being silently re-resolved, signed, and auto-installed. Fail-closed on
+      # purpose: it does not depend on any flag reaching cargo through
+      # tauri-action.
+      - name: Refuse an unreviewed dependency resolution
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       # One rule for both triggers. A tag push releases as itself; a main
       # push mints v<version>-build.<run> (run number is identical across the
       # three matrix legs, so they all attach to one release).
