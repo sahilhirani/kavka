@@ -975,7 +975,11 @@ const ptBR: Catalog = {
   "alerts.rules.foot":
     "“Quieta” significa que nada disparou a regra, não que o Kavka verificou o número e o achou bom — uma regra cuja leitura está indisponível também fica quieta. O estado vem do log abaixo, então ele só é tão completo quanto aquele log.",
   "alerts.channels.foot":
-    "O Kavka pede a cada um deles uma vez por disparo e nunca tenta de novo. Ele não é informado se o seu sistema operacional realmente exibiu a notificação, e um webhook que recusa vai para o log do Kavka em vez de aparecer aqui — então “ligado” significa que o Kavka vai pedir, não que alguém foi alcançado.",
+    "O Kavka pede a cada um deles uma vez por disparo e nunca tenta de novo. Ele não é informado se o seu sistema operacional realmente exibiu a notificação, e um webhook que recusa vai para o log de diagnóstico — se você tiver ligado isso em “Sobre” — em vez de aparecer aqui, então “ligado” significa que o Kavka vai pedir, não que alguém foi alcançado.",
+  "alerts.channels.os.denied":
+    "O seu sistema operacional está recusando as notificações do Kavka, então esta chave não consegue entregar nada enquanto isso não mudar. No macOS: Ajustes do Sistema → Notificações → Kavka. No Windows: Configurações → Sistema → Notificações → Kavka. O Kavka não pode mudar esse ajuste por você.",
+  "alerts.channels.os.confirmed":
+    "O Kavka acabou de enviar uma notificação para confirmar este canal. Se em vez disso o seu sistema operacional pediu permissão, responda agora — é esse aviso que, de outro modo, engoliria o seu primeiro alerta de verdade. Se nenhuma das duas apareceu, ainda não chega nada a esta área de trabalho.",
   "groups.list.foot":
     "As contagens de membros e os estados são do instante em que o Kavka perguntou. Um grupo que está rebalanceando está repassando suas partições enquanto você lê isto, então a contagem dele já está desatualizada — pressione Atualizar para obter uma nova.",
   "group.members.foot":

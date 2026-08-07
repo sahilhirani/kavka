@@ -1002,7 +1002,11 @@ const en = {
   "alerts.rules.foot":
     "“Quiet” means nothing has tripped the rule, not that Kavka checked and liked the number — a rule whose reading is unavailable is quiet too. The state comes from the log below, so it is only as complete as that log is.",
   "alerts.channels.foot":
-    "Kavka asks each of these once per firing and never retries. It is not told whether your operating system actually showed the notification, and a webhook that refuses is written to Kavka's log rather than shown here — so “on” means Kavka will ask, not that somebody was reached.",
+    "Kavka asks each of these once per firing and never retries. It is not told whether your operating system actually showed the notification, and a webhook that refuses goes to the diagnostics log — if you switched that on in About — rather than being shown here, so “on” means Kavka will ask, not that somebody was reached.",
+  "alerts.channels.os.denied":
+    "Your operating system is refusing notifications for Kavka, so this switch cannot deliver anything until that changes. On macOS: System Settings → Notifications → Kavka. On Windows: Settings → System → Notifications → Kavka. Kavka cannot change that setting for you.",
+  "alerts.channels.os.confirmed":
+    "Kavka just sent one notification to confirm this channel. If your operating system asked for permission instead, answer it now — that prompt is what would otherwise swallow your first real alert. If neither appeared, nothing is reaching this desktop yet.",
   "groups.list.foot":
     "Member counts and states are from the moment Kavka asked. A group that is rebalancing is handing its partitions around while you read this, so its count is already out of date — press Refresh for a new one.",
   "group.members.foot":

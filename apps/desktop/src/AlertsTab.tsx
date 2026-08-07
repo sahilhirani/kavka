@@ -13,6 +13,7 @@ import {
   alertsDelete,
   alertsHistory,
   alertsList,
+  alertsNotificationsAuthorize,
   alertsSave,
   errorMessage,
   groupsList,
@@ -23,6 +24,7 @@ import {
   type AlertKind,
   type AlertRule,
   type ConnectionProfile,
+  type NotificationAuthorization,
 } from "./api";
 import {
   alertTarget,
@@ -1178,6 +1180,12 @@ function ChannelsPanel({
   const [testing, setTesting] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const urlRef = useRef<HTMLInputElement | null>(null);
+  // What the OS said last time this switch was turned on, or null if it has
+  // not been turned on in this sitting. Deliberately NOT persisted: a
+  // permission can be revoked in System Settings between two launches, so a
+  // remembered "granted" would be a claim Kavka cannot stand behind.
+  const [osPermission, setOsPermission] =
+    useState<NotificationAuthorization | null>(null);
 
   if (channels === null)
     return (
@@ -1225,6 +1233,35 @@ function ChannelsPanel({
     }
   };
 
+  /**
+   * Save the switch, then — when it went ON — ask the operating system for
+   * permission straight away.
+   *
+   * The order matters and is the same one `runTest` uses: the setting is
+   * written first, so the permission Kavka asks for belongs to a channel that
+   * is really on. Asking here rather than at the first firing is the whole
+   * point — macOS shows its authorization prompt when an app first posts a
+   * notification, and on a fresh install that first post is a real alert
+   * somebody needed (docs/MACOS-TESTING-RESULTS.md, Test 5).
+   */
+  const toggleOsNotification = async (on: boolean) => {
+    const saved = await persist({ ...channels, os_notification: on });
+    if (!saved) return;
+    if (!on) {
+      setOsPermission(null);
+      return;
+    }
+    try {
+      setOsPermission(await alertsNotificationsAuthorize());
+    } catch (err) {
+      // The switch is saved either way; what failed is the early ask. Say so
+      // rather than leave a channel that looks armed and is not — and rather
+      // than invent a permission state nobody reported.
+      setOsPermission(null);
+      onError(errorMessage(err));
+    }
+  };
+
   const runTest = async () => {
     // Saved first, deliberately: a test that ran against the stored settings
     // while the form shows different ones proves nothing about what is on
@@ -1255,6 +1292,23 @@ function ChannelsPanel({
 
   const nothingConfigured = !channels.os_notification && !hasUrl;
 
+  // AT MOST ONE LINE, so the id it carries is never duplicated and never
+  // dangles. Denial is the only state Kavka cannot work around, so it is the
+  // only one that speaks with an error's voice; everything else reports what
+  // just happened and stops. Null means the switch has not been turned on in
+  // this sitting, and Kavka has nothing to say.
+  const osNote =
+    osPermission === null
+      ? null
+      : osPermission.state === "denied"
+        ? { className: "field-error", key: "alerts.channels.os.denied" as const }
+        : osPermission.confirmation_sent
+          ? {
+              className: "field-hint",
+              key: "alerts.channels.os.confirmed" as const,
+            }
+          : null;
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -1272,10 +1326,10 @@ function ChannelsPanel({
           type="checkbox"
           checked={channels.os_notification}
           disabled={busy}
-          aria-describedby="al-os-hint"
-          onChange={(e) =>
-            void persist({ ...channels, os_notification: e.target.checked })
+          aria-describedby={
+            osNote === null ? "al-os-hint" : "al-os-permission al-os-hint"
           }
+          onChange={(e) => void toggleOsNotification(e.target.checked)}
         />
         <label className="check-label" htmlFor="al-os">
           Show a desktop notification
@@ -1284,6 +1338,13 @@ function ChannelsPanel({
           Your operating system's own notification, with the same words as the
           toast — so the two never say different things about the same firing.
         </span>
+        {/* WHAT THE OS SAID, and only ever what it said — never a guess about
+            whether the notification arrived, which nothing here is told. */}
+        {osNote !== null && (
+          <span className={osNote.className} id="al-os-permission">
+            {t(osNote.key)}
+          </span>
+        )}
       </div>
 
       <div className="field">

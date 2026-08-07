@@ -2043,6 +2043,35 @@ export function alertsChannelsSet(
 }
 
 /**
+ * What the operating system said when Kavka asked to be allowed to notify.
+ *
+ * `state` is `granted`, `denied` or `undecided` — the last meaning the OS has
+ * not answered, which usually means its prompt is on screen right now.
+ */
+export interface NotificationAuthorization {
+  state: string;
+  confirmation_sent: boolean;
+}
+
+/**
+ * Ask for notification permission at the moment the channel is switched on.
+ *
+ * WHY IT IS A CALL AND NOT A SIDE EFFECT OF SAVING. macOS puts its
+ * authorization prompt up the first time an app posts a notification, and the
+ * prompt outlives the notification that caused it — so on a fresh install the
+ * FIRST REAL ALERT is the one that gets swallowed. That was watched happening
+ * on a Mac (docs/MACOS-TESTING-RESULTS.md, Test 5). Calling this when the
+ * switch goes on means the thing the prompt eats is a confirmation nobody
+ * needed.
+ *
+ * It is not per profile: notification permission belongs to the application,
+ * not to one connection.
+ */
+export function alertsNotificationsAuthorize(): Promise<NotificationAuthorization> {
+  return invoke<NotificationAuthorization>("alerts_notifications_authorize");
+}
+
+/**
  * Send one test firing through the configured channels.
  *
  * NOT IN THE PHASE 4 CONTRACT — flagged, not smuggled. The UI is specified to

@@ -974,7 +974,11 @@ const de: Catalog = {
   "alerts.rules.foot":
     "„Ruhig“ heißt, dass nichts die Regel ausgelöst hat, nicht, dass Kavka nachgesehen und die Zahl in Ordnung gefunden hat — eine Regel, deren Messwert nicht verfügbar ist, ist ebenfalls ruhig. Der Zustand stammt aus dem Protokoll unten und ist damit nur so vollständig wie dieses Protokoll.",
   "alerts.channels.foot":
-    "Kavka fragt jeden davon einmal pro Auslösung und versucht es nie erneut. Es erfährt nicht, ob Ihr Betriebssystem die Benachrichtigung tatsächlich angezeigt hat, und ein Webhook, der ablehnt, landet in Kavkas Protokoll statt hier — „ein“ heißt also, dass Kavka fragen wird, nicht, dass jemand erreicht wurde.",
+    "Kavka fragt jeden davon einmal pro Auslösung und versucht es nie erneut. Es erfährt nicht, ob Ihr Betriebssystem die Benachrichtigung tatsächlich angezeigt hat, und ein Webhook, der ablehnt, landet im Diagnoseprotokoll — sofern Sie es unter „Über“ eingeschaltet haben — statt hier; „ein“ heißt also, dass Kavka fragen wird, nicht, dass jemand erreicht wurde.",
+  "alerts.channels.os.denied":
+    "Ihr Betriebssystem verweigert Kavka Benachrichtigungen, deshalb kann dieser Schalter nichts zustellen, solange sich das nicht ändert. Unter macOS: Systemeinstellungen → Mitteilungen → Kavka. Unter Windows: Einstellungen → System → Benachrichtigungen → Kavka. Kavka kann diese Einstellung nicht für Sie ändern.",
+  "alerts.channels.os.confirmed":
+    "Kavka hat gerade eine Benachrichtigung gesendet, um diesen Kanal zu bestätigen. Falls Ihr Betriebssystem stattdessen nach der Erlaubnis gefragt hat, beantworten Sie das jetzt — genau diese Abfrage würde sonst Ihre erste echte Warnung verschlucken. Ist beides ausgeblieben, erreicht bislang nichts diesen Desktop.",
   "groups.list.foot":
     "Mitgliederzahlen und Zustände stammen aus dem Moment, in dem Kavka gefragt hat. Eine Gruppe, die gerade rebalanciert, verteilt ihre Partitionen um, während Sie das lesen — ihre Zahl ist also bereits veraltet. Drücken Sie Aktualisieren für eine neue.",
   "group.members.foot":
