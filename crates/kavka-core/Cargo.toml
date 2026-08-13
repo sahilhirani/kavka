@@ -106,7 +106,7 @@ base64 = "0.23"
 # codecs (bzip/snappy/xz/zstd): Kafka payloads are single Avro datums framed by
 # the registry's magic byte, never container files, and every one of those
 # codecs is a C dependency this crate does not otherwise have.
-apache-avro = { version = "0.21", default-features = false }
+apache-avro = { version = "0.22", default-features = false }
 # MessagePack and CBOR as dynamic values, not typed deserialization: the decoder
 # has no target type, it has bytes off a topic. `rmpv`/`ciborium::value` are the
 # minimal "parse to a self-describing tree" halves of their ecosystems —
