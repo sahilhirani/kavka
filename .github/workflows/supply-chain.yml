@@ -58,7 +58,7 @@ jobs:
       # (0.18.4 cannot parse the CVSS 4.0 vector in RUSTSEC-2026-0146 and exits
       # non-zero before checking anything). A gate that breaks on new data is
       # worse than no gate, because it trains people to ignore it.
-      - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2
         with:
           tool: cargo-audit,cargo-deny
 
