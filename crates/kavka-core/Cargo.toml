@@ -180,7 +180,7 @@ regex-syntax = { version = "0.8", default-features = false, features = ["std", "
 #   a small, honest bonus rather than the reason it is on.
 #
 # OPTIONAL, and NOT on the `kafka` list: see the `wasm-serdes` feature above.
-wasmtime = { version = "47", default-features = false, features = [
+wasmtime = { version = "48", default-features = false, features = [
     "cranelift",
     "runtime",
     "std",
